@@ -108,30 +108,80 @@ check_long_mode:
 
 ; -----------------------------------------------------------------------------
 ; setup_page_tables:
-; Initializes the paging structures for long mode with 2MiB pages
-; Sets up PML4, PDPT, and PD entries with appropriate flags
+; Initializes the paging structures for long mode to map the first 1GB
+; of physical memory using 4KiB pages.
 ; -----------------------------------------------------------------------------
 setup_page_tables:
-	mov eax, page_table_l3
-	or eax, 0b11 ; present, writable
-	mov [page_table_l4], eax
-	
-	mov eax, page_table_l2
-	or eax, 0b11 ; present, writable
-	mov [page_table_l3], eax
+    ; PML4[0] entry points to the base address of our PDPT table.
+    ; Flags: Present (P=1), Read/Write (R/W=1)
+    mov eax, PDPT
+    or eax, 0b11 ; Set P and R/W bits
+    mov [PML4], eax
 
-	mov ecx, 0 ; counter
-.loop:
-	mov eax, 0x200000 ; 2MiB page size
-	mul ecx
-	or eax, 0b10000011 ; present, writable, huge page
-	mov [page_table_l2 + ecx * 8], eax
+    ; PDPT[0] entry points to the base address of our PD table.
+    ; Flags: Present (P=1), Read/Write (R/W=1)
+    mov eax, PD
+    or eax, 0b11 ; Set P and R/W bits
+    mov [PDPT], eax
 
-	inc ecx
-	cmp ecx, 512 ; fill all 512 entries
-	jne .loop
+    ; We need to map 1GB using 4KB pages.
+    ; Each Page Table (PT) covers 2MB (512 * 4KB pages).
+    ; To cover 1GB, we need 1GB / 2MB = 512 PT tables.
+    ; So, we will use the first 512 entries of our single PD table (PD[0] to PD[511]).
+    mov ecx, 0 ; Loop counter for PD entries (0 to 511)
+.PD_loop:
+    ; Calculate the base physical address for the current Page Table (PT)
+    ; This PT will be at PT_BASE + (current_PD_index * size_of_one_PT)
+    ; Size of one PT = 4096 bytes (4KB)
+    ; So, address = PT + (ecx * 4096)
+    mov eax, ecx
+    shl eax, 12                ; eax = ecx * 4096 (calculate byte offset for the PT)
+    add eax, PT                ; eax = physical address of current PT table
 
-	ret
+    ; Add flags for the PD entry: Present (P=1), Read/Write (R/W=1)
+    or eax, 0b11
+    
+    ; Store the calculated PT address into the PD table
+    ; Each PD entry is 8 bytes (64-bit).
+    ; Offset in PD table = current_PD_index * 8
+    mov ebx, ecx
+    shl ebx, 3                 ; ebx = ecx * 8 (calculate byte offset within PD table)
+    mov [PD + ebx], eax        ; Write the entry to PD[ecx]
+
+    inc ecx
+    cmp ecx, 512               ; Loop 512 times (for PD[0] to PD[511])
+    jne .PD_loop
+
+    ; We have 512 PT tables, each containing 512 entries.
+    ; Total 4KB pages to map in 1GB = 1GB / 4KB = 262144 pages.
+    ; So, we will fill 512 * 512 = 262144 PT entries sequentially.
+    mov ecx, 0 ; Loop counter for all PT entries (0 to 262143)
+.PT_loop:
+    ; Calculate the physical address that this Page Table Entry (PTE) will map.
+    ; Each PTE maps a 4KB page.
+    ; physical_address = current_PTE_index * size_of_one_page
+    ; Size of one page = 4096 bytes (4KB)
+    ; So, address = ecx * 4096
+    mov eax, ecx
+    shl eax, 12                ; eax = ecx * 4096 (calculate physical page address)
+
+    ; Add flags for the PT entry: Present (P=1), Read/Write (R/W=1)
+    or eax, 0b11
+
+    ; Store the calculated physical page address into the current PT entry.
+    ; Each PT entry is 8 bytes (64-bit).
+    ; Offset in contiguous PT memory = current_PTE_index * 8
+    mov ebx, ecx
+    shl ebx, 3                 ; ebx = ecx * 8 (calculate byte offset within the PT memory block)
+    mov [PT + ebx], eax        ; Write the entry to PT[ecx] (conceptually)
+
+    inc ecx
+    cmp ecx, 512 * 512         ; Loop 512 * 512 = 262144 times
+    jne .PT_loop
+
+    ret
+
+
 
 ; -----------------------------------------------------------------------------
 ; enable_paging:
@@ -139,7 +189,7 @@ setup_page_tables:
 ; enabling long mode in IA32_EFER MSR, and enabling paging in CR0
 ; -----------------------------------------------------------------------------
 enable_paging:
-	mov eax, page_table_l4
+	mov eax, PML4
 	mov cr3, eax
 
 	mov eax, cr4
@@ -174,12 +224,14 @@ error:
 ; -----------------------------------------------------------------------------
 section .bss
 align 4096
-page_table_l4:
+PML4:
 	resb 4096
-page_table_l3:
+PDPT:
 	resb 4096
-page_table_l2:
+PD:
 	resb 4096
+PT:
+	resb 4096 * 512
 
 ; Uncomment the following to reserve stack here (instead of linker)
 ;stack_bottom:
@@ -197,3 +249,55 @@ gdt64:
 .pointer:
 	dw $ - gdt64 - 1 ; limit (size of GDT - 1)
 	dq gdt64          ; base address of GDT
+
+
+;; Notes:
+
+;; Notes on x86-64 Paging Structure for 4KB Pages:
+;
+; In 64-bit Long Mode, memory addresses are translated through a 4-level paging hierarchy.
+; Each table (PML4, PDPT, PD, PT) is 4096 bytes (4KB) in size and contains 512 entries.
+; Each entry is 8 bytes (64-bit).
+;
+; The hierarchy and what each level covers:
+;
+; 1.  PML4 (Page Map Level 4 Table):
+;     - Highest level table.
+;     - An entry in PML4 points to a PDPT.
+;     - One PML4 entry can address up to 512 GB of physical memory.
+;
+; 2.  PDPT (Page Directory Pointer Table):
+;     - An entry in PDPT points to a PD table.
+;     - One PDPT entry can address up to 1 GB of physical memory.
+;
+; 3.  PD (Page Directory Table):
+;     - An entry in PD points to a PT table (for 4KB pages).
+;     - One PD entry (pointing to a PT) can address up to 2 MB of physical memory (512 * 4KB pages).
+;
+; 4.  PT (Page Table):
+;     - Lowest level table.
+;     - An entry in PT points directly to a 4KB physical memory block (page frame).
+;     - One PT table (512 entries) can address up to 2 MB of physical memory.
+;
+;
+; To map the first 1 GB of physical memory using 4KB pages, we need:
+;
+; -   1 PML4 Table:
+;     - We use PML4 entry 0 to point to our single PDPT table.
+;
+; -   1 PDPT Table:
+;     - We use PDPT entry 0 to point to our single PD table.
+;
+; -   1 PD (Page Directory) Table:
+;     - This single PD table will contain 512 entries (PD[0] through PD[511]).
+;     - Each of these 512 entries will point to a *separate* Page Table (PT).
+;     - Since each PD entry (via its PT) covers 2MB, 512 PD entries cover:
+;       512 entries * 2MB/entry = 1 GB total.
+;
+; -   512 PT (Page Table) Tables:
+;     - To cover the full 1GB, we need 512 individual PT tables.
+;     - Each of these 512 PT tables will contain 512 entries.
+;     - Each of these 512*512 = 262,144 total PT entries will point to a unique 4KB physical page.
+;     - The total memory required for these 512 PT tables is 512 * 4KB = 2 MB.
+;
+; This setup allows us to linearly map the first 1GB of physical memory using 4KB pages.
