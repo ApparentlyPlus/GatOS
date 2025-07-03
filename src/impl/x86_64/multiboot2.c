@@ -10,31 +10,9 @@
  */
 
 #include "multiboot2.h"
+#include "print.h"
 #include <stdint.h>
 #include <stddef.h>
-
-typedef struct {
-	uint32_t type;
-	uint32_t size;
-} multiboot_tag;
-
-typedef struct {
-	uint32_t type;
-	uint32_t size;
-	uint32_t entry_size;
-	uint32_t entry_version;
-} mem_map_tag;
-
-typedef struct {
-	uint64_t addr;
-	uint64_t len;
-	uint32_t type;
-	uint32_t reserved;
-} mem_map_entry;
-
-#define MULTIBOOT_TAG_TYPE_END            0
-#define MULTIBOOT_TAG_TYPE_MMAP           6
-#define MULTIBOOT_MEMORY_AVAILABLE        1
 
 /*
  * multiboot_detect_heap - Determines available heap memory size from Multiboot2 info
@@ -92,4 +70,89 @@ uint64_t multiboot_detect_heap(void* mb_info) {
 	}
 
 	return heap_top;
+}
+
+void multiboot_print_memory_map(void* mb_info) {
+	uintptr_t addr = (uintptr_t)mb_info;
+	addr += 8; // skip total size and reserved
+
+	mem_map_tag* mmap_tag = NULL;
+
+	while (1) {
+		multiboot_tag* tag = (multiboot_tag*)addr;
+		if (tag->type == MULTIBOOT_TAG_TYPE_END)
+			break;
+
+		if (tag->type == MULTIBOOT_TAG_TYPE_MMAP)
+			mmap_tag = (mem_map_tag*)tag;
+
+		addr += (tag->size + 7) & ~7;
+	}
+
+	if (!mmap_tag) {
+		print_str("[!] No memory map found\n");
+		return;
+	}
+
+	uintptr_t mmap_end = (uintptr_t)mmap_tag + mmap_tag->size;
+
+	print_str("Memory Map:\n");
+
+	for (uintptr_t ptr = (uintptr_t)mmap_tag + sizeof(mem_map_tag); ptr < mmap_end; ptr += mmap_tag->entry_size) {
+		mem_map_entry* entry = (mem_map_entry*)ptr;
+
+		print_str(" - Region: ");
+		print_hex64(entry->addr);
+		print_str(" - ");
+		print_hex64(entry->addr + entry->len);
+		print_str(" | Size: ");
+		print_int(entry->len / 1024);
+		print_str(" KiB | Type: ");
+
+		switch (entry->type) {
+			case 1: print_str("Available\n"); break;
+			case 2: print_str("Reserved\n"); break;
+			case 3: print_str("ACPI Reclaimable\n"); break;
+			case 4: print_str("ACPI NVS\n"); break;
+			case 5: print_str("Bad RAM\n"); break;
+			default: print_str("Unknown\n"); break;
+		}
+	}
+}
+
+mem_summary multiboot_get_memory_summary(void* mb_info) {
+	uintptr_t addr = (uintptr_t)mb_info;
+	addr += 8;
+
+	mem_map_tag* mmap_tag = NULL;
+	mem_summary summary = {0};
+
+	while (1) {
+		multiboot_tag* tag = (multiboot_tag*)addr;
+		if (tag->type == MULTIBOOT_TAG_TYPE_END)
+			break;
+
+		if (tag->type == MULTIBOOT_TAG_TYPE_MMAP)
+			mmap_tag = (mem_map_tag*)tag;
+
+		addr += (tag->size + 7) & ~7;
+	}
+
+	if (!mmap_tag)
+		return summary;
+
+	uintptr_t mmap_end = (uintptr_t)mmap_tag + mmap_tag->size;
+
+	for (uintptr_t ptr = (uintptr_t)mmap_tag + sizeof(mem_map_tag); ptr < mmap_end; ptr += mmap_tag->entry_size) {
+		mem_map_entry* entry = (mem_map_entry*)ptr;
+		switch (entry->type) {
+			case 1: summary.available += entry->len; break;
+			case 2: summary.reserved += entry->len; break;
+			case 3: summary.acpi_reclaimable += entry->len; break;
+			case 4: summary.acpi_nvs += entry->len; break;
+			case 5: summary.bad_ram += entry->len; break;
+		}
+	}
+
+	return summary;
 }
