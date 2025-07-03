@@ -8,7 +8,6 @@
  */
 
 #include "print.h"
-#include "mem.h"
 #include "multiboot2.h"
 
 void print_banner();
@@ -23,15 +22,15 @@ void kernel_main(void* mb_info) {
 
 	print_clear();
 	print_banner();
-
-	uint64_t heap_size = multiboot_detect_heap(mb_info);
-	heap_init(heap_size);
 	
-	print_set_color(PRINT_COLOR_LIGHT_GREEN, PRINT_COLOR_BLACK);
-	print_str("[+] 32 KiB of memory reserved for the kernel stack\n");
-	print_str("[+] Heap initialized with size: ");
-	print_int(heap_size / (1024 * 1024));
-	print_str(" MB\n");
+	//print_set_color(PRINT_COLOR_LIGHT_GREEN, PRINT_COLOR_BLACK);
+	//print_str("[+] 32 KiB of memory reserved for the kernel stack\n");
+
+	multiboot2_parser_t mb2;
+	multiboot2_parser_init(&mb2, mb_info);
+
+	mb2_dump(&mb2);
+	mb2_dump_memory_map(&mb2);
 }
 
 /*

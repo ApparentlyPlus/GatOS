@@ -11,148 +11,164 @@
 
 #include "multiboot2.h"
 #include "print.h"
-#include <stdint.h>
 #include <stddef.h>
 
-/*
- * multiboot_detect_heap - Determines available heap memory size from Multiboot2 info
- * @mb_info: Pointer to the Multiboot2 info structure passed by the bootloader
- *
- * Parses the Multiboot2 tags to find the memory map and calculates the largest
- * available memory region after the kernel's BSS end, suitable for use as heap.
- *
- * Returns the size in bytes of the detected heap memory, or 0 if none found.
- */
-uint64_t multiboot_detect_heap(void* mb_info) {
-	uintptr_t addr = (uintptr_t)mb_info;
-	addr += 8; // Skip total size and reserved fields at start
-
-	mem_map_tag* mmap_tag = NULL;
-
-	// Iterate over all tags until the end tag is reached
-	while (1) {
-		multiboot_tag* tag = (multiboot_tag*)addr;
-
-		if (tag->type == MULTIBOOT_TAG_TYPE_END)
-			break;
-
-		if (tag->type == MULTIBOOT_TAG_TYPE_MMAP)
-			mmap_tag = (mem_map_tag*)tag;
-
-		// Advance to next tag, aligned to 8 bytes
-		addr += (tag->size + 7) & ~7;
-	}
-
-	// No memory map found
-	if (!mmap_tag)
-		return 0;
-
-	uint64_t heap_top = 0;
-
-	// Calculate end address of memory map entries
-	uintptr_t mmap_end = (uintptr_t)mmap_tag + mmap_tag->size;
-
-	// Iterate each memory map entry
-	for (uintptr_t ptr = (uintptr_t)mmap_tag + sizeof(mem_map_tag); ptr < mmap_end; ptr += mmap_tag->entry_size) {
-		mem_map_entry* entry = (mem_map_entry*)ptr;
-
-		if (entry->type == MULTIBOOT_MEMORY_AVAILABLE) {
-			uint64_t region_end = entry->addr + entry->len;
-
-			// Check if the region contains or extends beyond kernel BSS end
-			if (entry->addr <= (uintptr_t)&__bss_end && region_end > (uintptr_t)&__bss_end) {
-				uint64_t available = region_end - (uintptr_t)&__bss_end;
-
-				if (available > heap_top)
-					heap_top = available;
-			}
-		}
-	}
-
-	return heap_top;
+static uintptr_t align_up(uintptr_t val, uintptr_t align) {
+	return (val + align - 1) & ~(align - 1);
 }
 
-void multiboot_print_memory_map(void* mb_info) {
-	uintptr_t addr = (uintptr_t)mb_info;
-	addr += 8; // skip total size and reserved
+void multiboot2_parser_init(multiboot2_parser_t* parser, void* mb_info) {
+	parser->mb_info = mb_info;
+}
 
-	mem_map_tag* mmap_tag = NULL;
+static multiboot_tag_t* find_tag(multiboot2_parser_t* parser, uint32_t wanted_type) {
+	uintptr_t addr = (uintptr_t)parser->mb_info + 8;
 
 	while (1) {
-		multiboot_tag* tag = (multiboot_tag*)addr;
+		multiboot_tag_t* tag = (multiboot_tag_t*)addr;
 		if (tag->type == MULTIBOOT_TAG_TYPE_END)
 			break;
 
-		if (tag->type == MULTIBOOT_TAG_TYPE_MMAP)
-			mmap_tag = (mem_map_tag*)tag;
+		if (tag->type == wanted_type)
+			return tag;
 
-		addr += (tag->size + 7) & ~7;
+		addr = align_up(addr + tag->size, 8);
+	}
+	return NULL;
+}
+
+const char* mb2_get_cmdline(multiboot2_parser_t* p) {
+	multiboot_tag_string_t* tag = (multiboot_tag_string_t*)find_tag(p, MULTIBOOT_TAG_TYPE_CMDLINE);
+	return tag ? tag->cmdline : NULL;
+}
+
+const char* mb2_get_bootloader_name(multiboot2_parser_t* p) {
+	multiboot_tag_string_t* tag = (multiboot_tag_string_t*)find_tag(p, MULTIBOOT_TAG_TYPE_BOOT_LOADER_NAME);
+	return tag ? tag->cmdline : NULL;
+}
+
+int mb2_get_module_count(multiboot2_parser_t* p) {
+	int count = 0;
+	uintptr_t addr = (uintptr_t)p->mb_info + 8;
+
+	while (1) {
+		multiboot_tag_t* tag = (multiboot_tag_t*)addr;
+		if (tag->type == MULTIBOOT_TAG_TYPE_END)
+			break;
+		if (tag->type == MULTIBOOT_TAG_TYPE_MODULE)
+			count++;
+		addr = align_up(addr + tag->size, 8);
+	}
+	return count;
+}
+
+multiboot_module_t* mb2_get_module(multiboot2_parser_t* p, int index) {
+	int count = 0;
+	uintptr_t addr = (uintptr_t)p->mb_info + 8;
+
+	while (1) {
+		multiboot_tag_t* tag = (multiboot_tag_t*)addr;
+		if (tag->type == MULTIBOOT_TAG_TYPE_END)
+			break;
+		if (tag->type == MULTIBOOT_TAG_TYPE_MODULE) {
+			if (count == index)
+				return (multiboot_module_t*)(tag + 1);
+			count++;
+		}
+		addr = align_up(addr + tag->size, 8);
+	}
+	return NULL;
+}
+
+multiboot_tag_mmap_t* mb2_get_memory_map(multiboot2_parser_t* p) {
+	return (multiboot_tag_mmap_t*)find_tag(p, MULTIBOOT_TAG_TYPE_MMAP);
+}
+
+multiboot_tag_framebuffer_t* mb2_get_framebuffer_info(multiboot2_parser_t* p) {
+	return (multiboot_tag_framebuffer_t*)find_tag(p, MULTIBOOT_TAG_TYPE_FRAMEBUFFER);
+}
+
+multiboot_tag_elf_sections_t* mb2_get_elf_sections(multiboot2_parser_t* p) {
+	return (multiboot_tag_elf_sections_t*)find_tag(p, MULTIBOOT_TAG_TYPE_ELF_SECTIONS);
+}
+
+void* mb2_get_acpi_rsdp(multiboot2_parser_t* p) {
+	multiboot_tag_t* tag = find_tag(p, MULTIBOOT_TAG_TYPE_ACPI_NEW);
+	if (!tag)
+		tag = find_tag(p, MULTIBOOT_TAG_TYPE_ACPI_OLD);
+	return tag ? ((uint8_t*)tag + sizeof(multiboot_tag_t)) : NULL;
+}
+
+void mb2_dump(multiboot2_parser_t* p) {
+	const char* cmdline = mb2_get_cmdline(p);
+	const char* bootloader = mb2_get_bootloader_name(p);
+	print_str("[MB2] Command line: "); print_str(cmdline ? cmdline : "(none)"); print_str("\n");
+	print_str("[MB2] Bootloader: "); print_str(bootloader ? bootloader : "(unknown)"); print_str("\n");
+
+	int mods = mb2_get_module_count(p);
+	for (int i = 0; i < mods; i++) {
+		multiboot_module_t* mod = mb2_get_module(p, i);
+		print_str("[MB2] Module: 0x"); print_hex32(mod->mod_start);
+		print_str(" - 0x"); print_hex32(mod->mod_end);
+		print_str(" | String: "); print_str((char*)(uintptr_t)mod->string); print_str("\n");
 	}
 
+	// Framebuffer
+	multiboot_tag_framebuffer_t* fb = mb2_get_framebuffer_info(p);
+	if (fb) {
+		print_str("[MB2] Framebuffer: ");
+		print_int(fb->width); print_str("x");
+		print_int(fb->height); print_str(" @ ");
+		print_int(fb->bpp); print_str("bpp\n");
+	}
+}
+
+void mb2_dump_memory_map(multiboot2_parser_t* p) {
+	multiboot_tag_mmap_t* mmap_tag = mb2_get_memory_map(p);
+
 	if (!mmap_tag) {
-		print_str("[!] No memory map found\n");
+		print_str("[MB2] No memory map found.\n");
 		return;
 	}
 
+	print_str("[MB2] Memory Map:\n");
+
 	uintptr_t mmap_end = (uintptr_t)mmap_tag + mmap_tag->size;
+	uintptr_t ptr = (uintptr_t)mmap_tag + sizeof(multiboot_tag_mmap_t);
 
-	print_str("Memory Map:\n");
+	while (ptr < mmap_end) {
+		multiboot_mmap_entry_t* entry = (multiboot_mmap_entry_t*)ptr;
 
-	for (uintptr_t ptr = (uintptr_t)mmap_tag + sizeof(mem_map_tag); ptr < mmap_end; ptr += mmap_tag->entry_size) {
-		mem_map_entry* entry = (mem_map_entry*)ptr;
-
-		print_str(" - Region: ");
+		print_str("  [Region] Start: ");
 		print_hex64(entry->addr);
-		print_str(" - ");
+		print_str(" | End: ");
 		print_hex64(entry->addr + entry->len);
 		print_str(" | Size: ");
-		print_int(entry->len / 1024);
+		print_int((int)(entry->len / 1024));
 		print_str(" KiB | Type: ");
 
 		switch (entry->type) {
-			case 1: print_str("Available\n"); break;
-			case 2: print_str("Reserved\n"); break;
-			case 3: print_str("ACPI Reclaimable\n"); break;
-			case 4: print_str("ACPI NVS\n"); break;
-			case 5: print_str("Bad RAM\n"); break;
-			default: print_str("Unknown\n"); break;
+			case MULTIBOOT_MEMORY_AVAILABLE:
+				print_str("Available\n");
+				break;
+			case MULTIBOOT_MEMORY_RESERVED:
+				print_str("Reserved\n");
+				break;
+			case MULTIBOOT_MEMORY_ACPI_RECLAIMABLE:
+				print_str("ACPI Reclaimable\n");
+				break;
+			case MULTIBOOT_MEMORY_NVS:
+				print_str("ACPI NVS\n");
+				break;
+			case MULTIBOOT_MEMORY_BADRAM:
+				print_str("Bad RAM\n");
+				break;
+			default:
+				print_str("Unknown\n");
+				break;
 		}
+
+		ptr += mmap_tag->entry_size;
 	}
 }
 
-mem_summary multiboot_get_memory_summary(void* mb_info) {
-	uintptr_t addr = (uintptr_t)mb_info;
-	addr += 8;
-
-	mem_map_tag* mmap_tag = NULL;
-	mem_summary summary = {0};
-
-	while (1) {
-		multiboot_tag* tag = (multiboot_tag*)addr;
-		if (tag->type == MULTIBOOT_TAG_TYPE_END)
-			break;
-
-		if (tag->type == MULTIBOOT_TAG_TYPE_MMAP)
-			mmap_tag = (mem_map_tag*)tag;
-
-		addr += (tag->size + 7) & ~7;
-	}
-
-	if (!mmap_tag)
-		return summary;
-
-	uintptr_t mmap_end = (uintptr_t)mmap_tag + mmap_tag->size;
-
-	for (uintptr_t ptr = (uintptr_t)mmap_tag + sizeof(mem_map_tag); ptr < mmap_end; ptr += mmap_tag->entry_size) {
-		mem_map_entry* entry = (mem_map_entry*)ptr;
-		switch (entry->type) {
-			case 1: summary.available += entry->len; break;
-			case 2: summary.reserved += entry->len; break;
-			case 3: summary.acpi_reclaimable += entry->len; break;
-			case 4: summary.acpi_nvs += entry->len; break;
-			case 5: summary.bad_ram += entry->len; break;
-		}
-	}
-
-	return summary;
-}
