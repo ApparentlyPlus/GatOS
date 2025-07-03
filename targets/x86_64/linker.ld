@@ -27,7 +27,6 @@ SECTIONS
 	.bss : ALIGN(4K)
 	{
 		*(.bss*)
-		__bss_end = .;
 	}
 
 	.stack : ALIGN(4K)

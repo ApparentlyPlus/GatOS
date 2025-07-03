@@ -21,7 +21,7 @@ static char* KERNEL_VERSION = "v1.0.0";
 void kernel_main(void* mb_info) {
 
 	print_clear();
-	print_banner();
+	//print_banner();
 	
 	//print_set_color(PRINT_COLOR_LIGHT_GREEN, PRINT_COLOR_BLACK);
 	//print_str("[+] 32 KiB of memory reserved for the kernel stack\n");
