@@ -1,41 +1,59 @@
-# Find all kernel C source files and map to build object files
-kernel_source_files := $(shell find src/impl/kernel -name *.c)
-kernel_object_files := $(patsubst src/impl/kernel/%.c, build/kernel/%.o, $(kernel_source_files))
+# Toolchain configuration
+CC := x86_64-elf-gcc
+AS := x86_64-elf-as
+LD := x86_64-elf-ld
 
-# Find all x86_64 C source files and map to build object files
-x86_64_c_source_files := $(shell find src/impl/x86_64 -name *.c)
-x86_64_c_object_files := $(patsubst src/impl/x86_64/%.c, build/x86_64/%.o, $(x86_64_c_source_files))
+# Compilation flags
+CFLAGS := -I src/headers -ffreestanding
+ASFLAGS := --64
+LDFLAGS := -n -T targets/x86_64/linker.ld
 
-# Find all x86_64 ASM source files and map to build object files
-x86_64_asm_source_files := $(shell find src/impl/x86_64 -name *.asm)
-x86_64_asm_object_files := $(patsubst src/impl/x86_64/%.asm, build/x86_64/%.o, $(x86_64_asm_source_files))
+# Build directories
+BUILD_DIR := build
+DIST_DIR := dist
+ISO_DIR := targets/x86_64/iso
 
-x86_64_object_files := $(x86_64_c_object_files) $(x86_64_asm_object_files)
+# Kernel source files
+KERNEL_SRC_DIR := src/impl/kernel
+KERNEL_SRC_FILES := $(shell find $(KERNEL_SRC_DIR) -name '*.c')
+KERNEL_OBJ_FILES := $(patsubst $(KERNEL_SRC_DIR)/%.c,$(BUILD_DIR)/kernel/%.o,$(KERNEL_SRC_FILES))
 
-# Compile kernel C source files to objects
-$(kernel_object_files): build/kernel/%.o : src/impl/kernel/%.c
-	mkdir -p $(dir $@) && \
-	x86_64-elf-gcc -c -I src/headers -ffreestanding $(patsubst build/kernel/%.o, src/impl/kernel/%.c, $@) -o $@
+# x86_64 source files
+X86_64_SRC_DIR := src/impl/x86_64
+X86_64_C_SRC_FILES := $(shell find $(X86_64_SRC_DIR) -name '*.c')
+X86_64_ASM_SRC_FILES := $(shell find $(X86_64_SRC_DIR) -name '*.S')
+X86_64_C_OBJ_FILES := $(patsubst $(X86_64_SRC_DIR)/%.c,$(BUILD_DIR)/x86_64/%.o,$(X86_64_C_SRC_FILES))
+X86_64_ASM_OBJ_FILES := $(patsubst $(X86_64_SRC_DIR)/%.S,$(BUILD_DIR)/x86_64/%.o,$(X86_64_ASM_SRC_FILES))
+X86_64_OBJ_FILES := $(X86_64_C_OBJ_FILES) $(X86_64_ASM_OBJ_FILES)
 
-# Compile x86_64 C source files to objects
-$(x86_64_c_object_files): build/x86_64/%.o : src/impl/x86_64/%.c
-	mkdir -p $(dir $@) && \
-	x86_64-elf-gcc -c -I src/headers -ffreestanding $(patsubst build/x86_64/%.o, src/impl/x86_64/%.c, $@) -o $@
+# Default target
+.PHONY: all
+all: build-x86_64
 
-# Assemble x86_64 ASM files to objects
-$(x86_64_asm_object_files): build/x86_64/%.o : src/impl/x86_64/%.asm
-	mkdir -p $(dir $@) && \
-	nasm -f elf64 $(patsubst build/x86_64/%.o, src/impl/x86_64/%.asm, $@) -o $@
+# Build kernel objects
+$(BUILD_DIR)/kernel/%.o: $(KERNEL_SRC_DIR)/%.c
+	@mkdir -p $(@D)
+	$(CC) -c $(CFLAGS) $< -o $@
 
-.PHONY: build-x86_64 clean
+# Build x86_64 C objects
+$(BUILD_DIR)/x86_64/%.o: $(X86_64_SRC_DIR)/%.c
+	@mkdir -p $(@D)
+	$(CC) -c $(CFLAGS) $< -o $@
 
-# Build all kernel and x86_64 objects, link kernel binary, prepare ISO
-build-x86_64: $(kernel_object_files) $(x86_64_object_files)
-	mkdir -p dist/x86_64 && \
-	x86_64-elf-ld -n -o dist/x86_64/kernel.bin -T targets/x86_64/linker.ld $(kernel_object_files) $(x86_64_object_files) && \
-	cp dist/x86_64/kernel.bin targets/x86_64/iso/boot/kernel.bin && \
-	grub-mkrescue /usr/lib/grub/i386-pc -o dist/x86_64/kernel.iso targets/x86_64/iso
+# Build x86_64 assembly objects
+$(BUILD_DIR)/x86_64/%.o: $(X86_64_SRC_DIR)/%.S
+	@mkdir -p $(@D)
+	$(AS) $(ASFLAGS) $< -o $@
 
-# Clean up build artifacts and generated files
+# Main build target
+.PHONY: build-x86_64
+build-x86_64: $(KERNEL_OBJ_FILES) $(X86_64_OBJ_FILES)
+	@mkdir -p $(DIST_DIR)/x86_64
+	$(LD) $(LDFLAGS) -o $(DIST_DIR)/x86_64/kernel.bin $^
+	@cp $(DIST_DIR)/x86_64/kernel.bin $(ISO_DIR)/boot/kernel.bin
+	grub-mkrescue /usr/lib/grub/i386-pc -o $(DIST_DIR)/x86_64/kernel.iso $(ISO_DIR)
+
+# Clean build artifacts
+.PHONY: clean
 clean:
-	rm -rf build dist targets/x86_64/iso/boot/kernel.bin
+	rm -rf $(BUILD_DIR) $(DIST_DIR) $(ISO_DIR)/boot/kernel.bin
