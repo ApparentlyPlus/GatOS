@@ -1,7 +1,5 @@
 ## Documentation
 
-GatOS is the low-level kernel and systems API backbone for a broader project called Gata, which is detailed in the main project README. While Gata focuses on building a complete user-facing environment, GatOS is focused purely on the kernel and core systems infrastructure required to support it.
-
 **GatOS** is a personal educational operating system project, developed as part of my undergraduate thesis at my [university](https://www.uom.gr/en/dai). Its primary goal is to serve as a learning platform — both for myself and for anyone interested in low-level systems programming, kernel development, and operating system internals.
 
 >[!WARNING]
