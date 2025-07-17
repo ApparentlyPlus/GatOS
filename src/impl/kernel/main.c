@@ -11,26 +11,22 @@
 #include "multiboot2.h"
 
 void print_banner();
+void check_kernel_position();
+uintptr_t get_rip();
 
-static char* KERNEL_VERSION = "v1.0.0";
+static char* KERNEL_VERSION = "v1.5.0";
 
 /*
  * kernel_main - Main entry point for the GatOS kernel
  * @mb_info: Pointer to the Multiboot2 information structure provided by the bootloader
  */
 void kernel_main(void* mb_info) {
-
 	print_clear();
-	//print_banner();
-	
-	//print_set_color(PRINT_COLOR_LIGHT_GREEN, PRINT_COLOR_BLACK);
-	//print_str("[+] 32 KiB of memory reserved for the kernel stack\n");
-
-	multiboot2_parser_t mb2;
-	multiboot2_parser_init(&mb2, mb_info);
-
-	mb2_dump(&mb2);
-	mb2_dump_memory_map(&mb2);
+	print_banner();
+	multiboot2_parser_t* p;
+	multiboot2_parser_init(p, mb_info);
+	mb2_dump(p);
+	check_kernel_position();
 }
 
 /*
@@ -58,4 +54,20 @@ void print_banner(){
 
 	print_set_color(PRINT_COLOR_WHITE, PRINT_COLOR_BLACK);
 	print_str("---------------------------------------------------\n\n");
+}
+
+uintptr_t get_rip() {
+    uintptr_t rip;
+    asm volatile ("lea (%%rip), %0" : "=r" (rip));
+    return rip;
+}
+
+void check_kernel_position() {
+    uintptr_t rip = get_rip();
+   
+    if (rip >= 0xFFFFFF8000000000) {
+        print_str("[KERNEL] Running in higher-half kernel space\n");
+    } else {
+        print_str("[KERNEL] Running in lower memory\n");
+    }
 }

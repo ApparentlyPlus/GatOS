@@ -6,10 +6,13 @@
 #
 # Includes error handling that outputs an error code on screen and halts.
 # -----------------------------------------------------------------------------
-
+#include "paging.h"
 .intel_syntax noprefix
 
 .global start
+.global gdt64_pointer
+.global PML4
+
 .extern long_mode_start
 .extern __stack_top
 
@@ -18,7 +21,7 @@
 
 start:
 	# Set stack pointer to top of the stack defined by linker symbol
-	mov esp, offset __stack_top
+	mov esp, offset V2P(__stack_top)
 
 	# I am transferring the multiboot information
 	# directly to edi which will then be zero extended 
@@ -43,10 +46,10 @@ start:
 	call enable_paging
 
 	# Load the 64-bit GDT descriptor
-	lgdt [gdt64_pointer]
+	lgdt [V2P(gdt64_pointer)]
 
 	# Far jump to 64-bit kernel entry point via code segment selector
-	jmp gdt64_code_segment:long_mode_start
+	jmp gdt64_code_segment:V2P(long_mode_start)
 
 	# Halt if for some reason jump returns
 	hlt
@@ -115,70 +118,44 @@ check_long_mode:
 # -----------------------------------------------------------------------------
 setup_page_tables:
     # PML4[0] entry points to the base address of our PDPT table.
-    # Flags: Present (P=1), Read/Write (R/W=1)
-    mov eax, offset PDPT
+    # This maps the lower half (identity mapping)
+    mov eax, offset V2P(PDPT)
     or eax, 0b11
-    mov dword ptr [PML4], eax
+    mov dword ptr [V2P(PML4)], eax
+    
+    # PML4[511] entry also points to the same PDPT table.
+    # This maps the higher half (0xFFFFFF8000000000 range)
+    mov dword ptr [V2P(PML4) + 511 * 8], eax
 
     # PDPT[0] entry points to the base address of our PD table.
     # Flags: Present (P=1), Read/Write (R/W=1)
-    mov eax, offset PD
+    mov eax, offset V2P(PD)
     or eax, 0b11
-    mov dword ptr [PDPT], eax
+    mov dword ptr [V2P(PDPT)], eax
 
-    # We need to map 1GB using 4KB pages.
-    # Each Page Table (PT) covers 2MB (512 * 4KB pages).
-    # To cover 1GB, we need 1GB / 2MB = 512 PT tables.
-    # So, we will use the first 512 entries of our single PD table (PD[0] to PD[511]).
-    mov ecx, 0 # Loop counter for PD entries (0 to 511)
+    mov ecx, 0
 .PD_loop:
-    # Calculate the base physical address for the current Page Table (PT)
-    # This PT will be at PT_BASE + (current_PD_index * size_of_one_PT)
-    # Size of one PT = 4096 bytes (4KB)
-    # So, address = PT + (ecx * 4096)
     mov eax, ecx
-    shl eax, 12                # eax = ecx * 4096 (calculate byte offset for the PT)
-    add eax, offset PT         # eax = physical address of current PT table
-
-    # Add flags for the PD entry: Present (P=1), Read/Write (R/W=1)
+    shl eax, 12
+    add eax, offset V2P(PT)
     or eax, 0b11
-    
-    # Store the calculated PT address into the PD table
-    # Each PD entry is 8 bytes (64-bit).
-    # Offset in PD table = current_PD_index * 8
     mov ebx, ecx
-    shl ebx, 3                 # ebx = ecx * 8 (calculate byte offset within PD table)
-    mov dword ptr [PD + ebx], eax        # Write the entry to PD[ecx]
-
+    shl ebx, 3
+    mov dword ptr [V2P(PD) + ebx], eax
     inc ecx
-    cmp ecx, 512               # Loop 512 times (for PD[0] to PD[511])
+    cmp ecx, 512
     jne .PD_loop
 
-    # We have 512 PT tables, each containing 512 entries.
-    # Total 4KB pages to map in 1GB = 1GB / 4KB = 262144 pages.
-    # So, we will fill 512 * 512 = 262144 PT entries sequentially.
-    mov ecx, 0 # Loop counter for all PT entries (0 to 262143)
+    mov ecx, 0
 .PT_loop:
-    # Calculate the physical address that this Page Table Entry (PTE) will map.
-    # Each PTE maps a 4KB page.
-    # physical_address = current_PTE_index * size_of_one_page
-    # Size of one page = 4096 bytes (4KB)
-    # So, address = ecx * 4096
     mov eax, ecx
-    shl eax, 12                # eax = ecx * 4096 (calculate physical page address)
-
-    # Add flags for the PT entry: Present (P=1), Read/Write (R/W=1)
+    shl eax, 12
     or eax, 0b11
-
-    # Store the calculated physical page address into the current PT entry.
-    # Each PT entry is 8 bytes (64-bit).
-    # Offset in contiguous PT memory = current_PTE_index * 8
     mov ebx, ecx
-    shl ebx, 3                 # ebx = ecx * 8 (calculate byte offset within the PT memory block)
-    mov dword ptr [PT + ebx], eax        # Write the entry to PT[ecx] (conceptually)
-
+    shl ebx, 3
+    mov dword ptr [V2P(PT) + ebx], eax
     inc ecx
-    cmp ecx, 512 * 512         # Loop 512 * 512 = 262144 times
+    cmp ecx, 512 * 512
     jne .PT_loop
 
     ret
@@ -190,7 +167,7 @@ setup_page_tables:
 # -----------------------------------------------------------------------------
 enable_paging:
     # Set CR3 to address of PML4
-	mov eax, offset PML4
+	mov eax, offset V2P(PML4)
 	mov cr3, eax
 
     # Enable PAE (Physical Address Extension)
@@ -211,7 +188,7 @@ enable_paging:
 	ret
 
 # -----------------------------------------------------------------------------
-# err:
+# Error:
 # Displays error message "ERR: X" where X is error code in AL,
 # then halts the CPU
 # -----------------------------------------------------------------------------
@@ -250,7 +227,7 @@ gdt64:
 gdt64_code_segment = . - gdt64
 	.quad (1 << 43) | (1 << 44) | (1 << 47) | (1 << 53) # 64-bit code segment descriptor
 gdt64_pointer:
-	.word . - gdt64 - 1 # limit (size of GDT - 1)
+	.word . - gdt64 - 1  # limit (size of GDT - 1)
 	.quad gdt64          # base address of GDT
 
 ## Notes:
