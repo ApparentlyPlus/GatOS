@@ -5,16 +5,18 @@
 # long mode (64-bit mode), and jumps to the 64-bit kernel start.
 #
 # Includes error handling that outputs an error code on screen and halts.
+# Added page table dumping functionality for debugging.
 # -----------------------------------------------------------------------------
 #include "paging.h"
 .intel_syntax noprefix
 
 .global start
-.global gdt64_pointer
+.global gdt64_vpointer
 .global PML4
 
 .extern long_mode_start
 .extern __stack_top
+.extern dbg_dump_pmt
 
 .section .text
 .code32
@@ -42,6 +44,9 @@ start:
 	# Set up paging structures for long mode
 	call setup_page_tables
 
+	# Dump page tables to serial port for debugging - defined elsewhere
+	# call dbg_dump_pmt
+
 	# Enable paging and enter long mode
 	call enable_paging
 
@@ -49,7 +54,7 @@ start:
 	lgdt [V2P(gdt64_pointer)]
 
 	# Far jump to 64-bit kernel entry point via code segment selector
-	jmp gdt64_code_segment:V2P(long_mode_start)
+	jmp 0x08:V2P(long_mode_start)
 
 	# Halt if for some reason jump returns
 	hlt
@@ -66,6 +71,7 @@ check_multiboot:
 .no_multiboot:
 	mov al, 'M'    # Error code 'M'
 	jmp error
+
 
 # -----------------------------------------------------------------------------
 # check_cpuid:
@@ -117,14 +123,17 @@ check_long_mode:
 # of physical memory using 4KiB pages.
 # -----------------------------------------------------------------------------
 setup_page_tables:
+	# The following code does 2 things:
+	# 1.) Identity maps the first 1GB worth of 4kb pages (kvirt = kphys)
+	# 2.) Maps the same 1GB to kvirt higher half with base address 0xFFFFFFFF80000000
+
     # PML4[0] entry points to the base address of our PDPT table.
     # This maps the lower half (identity mapping)
-    mov eax, offset V2P(PDPT)
+    mov eax, offset V2P(PDPT) 
     or eax, 0b11
     mov dword ptr [V2P(PML4)], eax
     
-    # PML4[511] entry also points to the same PDPT table.
-    # This maps the higher half (0xFFFFFF8000000000 range)
+    # PML4[511] entry also points to the same PDPT table (for higher half)
     mov dword ptr [V2P(PML4) + 511 * 8], eax
 
     # PDPT[0] entry points to the base address of our PD table.
@@ -132,6 +141,9 @@ setup_page_tables:
     mov eax, offset V2P(PD)
     or eax, 0b11
     mov dword ptr [V2P(PDPT)], eax
+
+	# PDPT[510] should also point to PD (for higher half)
+	mov dword ptr [V2P(PDPT) + 510 * 8], eax
 
     mov ecx, 0
 .PD_loop:
@@ -185,6 +197,7 @@ enable_paging:
 	mov eax, cr0
 	or eax, 1 << 31 # enable paging
 	mov cr0, eax
+
 	ret
 
 # -----------------------------------------------------------------------------
@@ -213,11 +226,6 @@ PD:
 PT:
 	.skip 4096 * 512
 
-# Uncomment the following to reserve stack here (instead of linker)
-#stack_bottom:
-#	.skip 4096 * 4
-#stack_top:
-
 # -----------------------------------------------------------------------------
 # Read-only data section containing 64-bit GDT entries and pointer descriptor
 # -----------------------------------------------------------------------------
@@ -228,55 +236,7 @@ gdt64_code_segment = . - gdt64
 	.quad (1 << 43) | (1 << 44) | (1 << 47) | (1 << 53) # 64-bit code segment descriptor
 gdt64_pointer:
 	.word . - gdt64 - 1  # limit (size of GDT - 1)
-	.quad gdt64          # base address of GDT
-
-## Notes:
-
-## Notes on x86-64 Paging Structure for 4KB Pages:
-#
-# In 64-bit Long Mode, memory addresses are translated through a 4-level paging hierarchy.
-# Each table (PML4, PDPT, PD, PT) is 4096 bytes (4KB) in size and contains 512 entries.
-# Each entry is 8 bytes (64-bit).
-#
-# The hierarchy and what each level covers:
-#
-# 1.  PML4 (Page Map Level 4 Table):
-#     - Highest level table.
-#     - An entry in PML4 points to a PDPT.
-#     - One PML4 entry can address up to 512 GB of physical memory.
-#
-# 2.  PDPT (Page Directory Pointer Table):
-#     - An entry in PDPT points to a PD table.
-#     - One PDPT entry can address up to 1 GB of physical memory.
-#
-# 3.  PD (Page Directory Table):
-#     - An entry in PD points to a PT table (for 4KB pages).
-#     - One PD entry (pointing to a PT) can address up to 2 MB of physical memory (512 * 4KB pages).
-#
-# 4.  PT (Page Table):
-#     - Lowest level table.
-#     - An entry in PT points directly to a 4KB physical memory block (page frame).
-#     - One PT table (512 entries) can address up to 2 MB of physical memory.
-#
-#
-# To map the first 1 GB of physical memory using 4KB pages, we need:
-#
-# -   1 PML4 Table:
-#     - We use PML4 entry 0 to point to our single PDPT table.
-#
-# -   1 PDPT Table:
-#     - We use PDPT entry 0 to point to our single PD table.
-#
-# -   1 PD (Page Directory) Table:
-#     - This single PD table will contain 512 entries (PD[0] through PD[511]).
-#     - Each of these 512 entries will point to a *separate* Page Table (PT).
-#     - Since each PD entry (via its PT) covers 2MB, 512 PD entries cover:
-#       512 entries * 2MB/entry = 1 GB total.
-#
-# -   512 PT (Page Table) Tables:
-#     - To cover the full 1GB, we need 512 individual PT tables.
-#     - Each of these 512 PT tables will contain 512 entries.
-#     - Each of these 512*512 = 262,144 total PT entries will point to a unique 4KB physical page.
-#     - The total memory required for these 512 PT tables is 512 * 4KB = 2 MB.
-#
-# This setup allows us to linearly map the first 1GB of physical memory using 4KB pages.
+	.long V2P(gdt64)     # base address of GDT (32-bit)
+gdt64_vpointer:
+	.word . - gdt64 - 1  # limit (size of GDT - 1)
+	.quad gdt64     # base address of GDT (64-bit)

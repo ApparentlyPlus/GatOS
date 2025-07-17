@@ -100,9 +100,9 @@ void* mb2_get_acpi_rsdp(multiboot2_parser_t* p) {
 }
 
 void mb2_dump(multiboot2_parser_t* p) {
-	const char* cmdline = mb2_get_cmdline(p);
+	//const char* cmdline = mb2_get_cmdline(p);
+	//print_str("[MB2] Command line: "); print_str(cmdline ? cmdline : "(none)"); print_str("\n");
 	const char* bootloader = mb2_get_bootloader_name(p);
-	print_str("[MB2] Command line: "); print_str(cmdline ? cmdline : "(none)"); print_str("\n");
 	print_str("[MB2] Bootloader: "); print_str(bootloader ? bootloader : "(unknown)"); print_str("\n");
 
 	int mods = mb2_get_module_count(p);

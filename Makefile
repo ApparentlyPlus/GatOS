@@ -4,11 +4,11 @@ AS := x86_64-elf-as
 LD := x86_64-elf-ld
 
 # Compilation flags
-CFLAGS := -m64 -ffreestanding -nostdlib -fno-pic -mcmodel=large -I src/headers -g
+CFLAGS := -m64 -ffreestanding -nostdlib -fno-pic -mcmodel=kernel -I src/headers -g
 LDFLAGS := -n -nostdlib -T targets/x86_64/linker.ld --no-relax -g
 
 # Preprocessor flags (for .S files)
-CPPFLAGS := -I src/headers -D__ASSEMBLER__  # Ensures `memory.h` macros work
+CPPFLAGS := -I src/headers -D__ASSEMBLER__  # Ensures preprocessed macros work
 
 # Build directories
 BUILD_DIR := build

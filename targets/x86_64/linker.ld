@@ -1,6 +1,6 @@
 ENTRY(start)
 
-HH_KERNEL_OFFSET = 0xFFFFFF8000000000;
+HH_KERNEL_OFFSET = 0xFFFFFFFF80000000;
 LH_KERNEL_START = 0x10000;
 
 SECTIONS
@@ -36,7 +36,7 @@ SECTIONS
 	.stack : AT(ADDR(.stack) - HH_KERNEL_OFFSET) ALIGN(4K)
 	{
 		__stack_bottom = .;
-		. = . + 0x8000; /* 32 KiB should be fine for now */
+		. = . + 0x8000; /* 32 KiB should be fine for now, will manage in C later */
 		__stack_top = .;
 	}
 }

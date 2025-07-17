@@ -13,13 +13,14 @@
 .section .text
 .code64
 long_mode_start:
+
     # If for some reason the multiboot information
     # is not passed, we will just halt the system.
     cmp rdi, 0
     je .no_multiboot_info
 
     # NULLIFY all data segment registers
-    mov ax, 0
+    mov ax, 0x0
     mov ss, ax
     mov ds, ax
     mov es, ax
@@ -34,16 +35,10 @@ long_mode_start:
 
 
 upper_memory:
-    mov rax, 0xFFFFFF8000000000
+    mov rax, 0xFFFFFFFF80000000
     add rsp, rax
 
-    // mov rax, 0
-    // movabs [PML4], rax /* We need to remove the lower mapping! */
-
-    // mov rax, cr3
-    // mov cr3, rax
-
-    movabs rax, offset gdt64_pointer
+    movabs rax, offset gdt64_vpointer
     lgdt [rax]
     mov rax, 0x0
     mov ss, rax
@@ -51,11 +46,16 @@ upper_memory:
     mov es, rax
 
     pushq 0x8
-    movabs rax, offset .reload_cs
+    movabs rax, offset .transition_to_c
     push rax
     retfq
 
-.reload_cs:
+.transition_to_c:
+    //mov rax, 0
+    //movabs [PML4], rax /* Remove the lower mapping after mapping video! */
+    //mov rax, cr3
+    //mov cr3, rax  # Flush TLB
+    
     # RDI contains the multiboot information
     # which is passed from the bootloader.
     # It is handled by the kernel as an argument.

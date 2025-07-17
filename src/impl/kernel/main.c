@@ -23,9 +23,11 @@ static char* KERNEL_VERSION = "v1.5.0";
 void kernel_main(void* mb_info) {
 	print_clear();
 	print_banner();
+
 	multiboot2_parser_t* p;
 	multiboot2_parser_init(p, mb_info);
 	mb2_dump(p);
+	
 	check_kernel_position();
 }
 
@@ -65,7 +67,7 @@ uintptr_t get_rip() {
 void check_kernel_position() {
     uintptr_t rip = get_rip();
    
-    if (rip >= 0xFFFFFF8000000000) {
+    if (rip >= 0xFFFFFFFF80000000) {
         print_str("[KERNEL] Running in higher-half kernel space\n");
     } else {
         print_str("[KERNEL] Running in lower memory\n");
