@@ -4,9 +4,11 @@ AS := x86_64-elf-as
 LD := x86_64-elf-ld
 
 # Compilation flags
-CFLAGS := -I src/headers -ffreestanding
-ASFLAGS := --64
-LDFLAGS := -n -T targets/x86_64/linker.ld
+CFLAGS := -m64 -ffreestanding -nostdlib -fno-pic -mcmodel=large -I src/headers -g
+LDFLAGS := -n -nostdlib -T targets/x86_64/linker.ld --no-relax -g
+
+# Preprocessor flags (for .S files)
+CPPFLAGS := -I src/headers -D__ASSEMBLER__  # Ensures `memory.h` macros work
 
 # Build directories
 BUILD_DIR := build
@@ -40,10 +42,10 @@ $(BUILD_DIR)/x86_64/%.o: $(X86_64_SRC_DIR)/%.c
 	@mkdir -p $(@D)
 	$(CC) -c $(CFLAGS) $< -o $@
 
-# Build x86_64 assembly objects
+# Build x86_64 assembly objects (PREPROCESSED)
 $(BUILD_DIR)/x86_64/%.o: $(X86_64_SRC_DIR)/%.S
 	@mkdir -p $(@D)
-	$(AS) $(ASFLAGS) $< -o $@
+	$(CC) -c $(CPPFLAGS) -o $@ $<
 
 # Main build target
 .PHONY: build-x86_64

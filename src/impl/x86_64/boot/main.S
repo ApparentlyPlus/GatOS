@@ -211,7 +211,7 @@ enable_paging:
 	ret
 
 # -----------------------------------------------------------------------------
-# error:
+# err:
 # Displays error message "ERR: X" where X is error code in AL,
 # then halts the CPU
 # -----------------------------------------------------------------------------
