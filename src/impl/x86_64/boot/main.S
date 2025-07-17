@@ -16,7 +16,6 @@
 
 .extern long_mode_start
 .extern __stack_top
-.extern dbg_dump_pmt
 
 .section .text
 .code32
@@ -43,9 +42,6 @@ start:
 
 	# Set up paging structures for long mode
 	call setup_page_tables
-
-	# Dump page tables to serial port for debugging - defined elsewhere
-	# call dbg_dump_pmt
 
 	# Enable paging and enter long mode
 	call enable_paging
