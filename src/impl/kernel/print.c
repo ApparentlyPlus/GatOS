@@ -77,7 +77,7 @@ void print_char(char character) {
     col++;
 }
 
-void print_str(const char* str) {
+void print(const char* str) {
     for (size_t i = 0; ; i++) {
         char character = (uint8_t) str[i];
         if (character == '\0') return;
@@ -118,8 +118,8 @@ void print_int(int value) {
     }
 }
 
-void print_hex(uint32_t value) {
-    print_str("0x");
+void print_hex32(uint32_t value) {
+    print("0x");
 
     for (int i = 7; i >= 0; i--) {
         uint8_t nibble = (value >> (i * 4)) & 0xF;
@@ -129,7 +129,7 @@ void print_hex(uint32_t value) {
 }
 
 void print_hex64(uint64_t value) {
-    print_str("0x");
+    print("0x");
 
     for (int i = 15; i >= 0; i--) {
         uint8_t nibble = (value >> (i * 4)) & 0xF;

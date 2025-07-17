@@ -21,11 +21,9 @@
 #define PRINT_COLOR_WHITE 15
 
 void print_char(char character);
-void print_str(const char* string);
+void print(const char* string);
 void print_int(int value);
-void print_hex(uint32_t value);
+void print_hex32(uint32_t value);
 void print_hex64(uint64_t value);
 void print_set_color(uint8_t foreground, uint8_t background);
 void print_clear(void);
-
-#define print_hex32 print_hex

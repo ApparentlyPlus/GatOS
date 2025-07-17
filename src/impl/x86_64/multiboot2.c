@@ -101,25 +101,25 @@ void* mb2_get_acpi_rsdp(multiboot2_parser_t* p) {
 
 void mb2_dump(multiboot2_parser_t* p) {
 	//const char* cmdline = mb2_get_cmdline(p);
-	//print_str("[MB2] Command line: "); print_str(cmdline ? cmdline : "(none)"); print_str("\n");
+	//print("[MB2] Command line: "); print(cmdline ? cmdline : "(none)"); print("\n");
 	const char* bootloader = mb2_get_bootloader_name(p);
-	print_str("[MB2] Bootloader: "); print_str(bootloader ? bootloader : "(unknown)"); print_str("\n");
+	print("[MB2] Bootloader: "); print(bootloader ? bootloader : "(unknown)"); print("\n");
 
 	int mods = mb2_get_module_count(p);
 	for (int i = 0; i < mods; i++) {
 		multiboot_module_t* mod = mb2_get_module(p, i);
-		print_str("[MB2] Module: 0x"); print_hex32(mod->mod_start);
-		print_str(" - 0x"); print_hex32(mod->mod_end);
-		print_str(" | String: "); print_str((char*)(uintptr_t)mod->string); print_str("\n");
+		print("[MB2] Module: 0x"); print_hex32(mod->mod_start);
+		print(" - 0x"); print_hex32(mod->mod_end);
+		print(" | String: "); print((char*)(uintptr_t)mod->string); print("\n");
 	}
 
 	// Framebuffer
 	multiboot_tag_framebuffer_t* fb = mb2_get_framebuffer_info(p);
 	if (fb) {
-		print_str("[MB2] Framebuffer: ");
-		print_int(fb->width); print_str("x");
-		print_int(fb->height); print_str(" @ ");
-		print_int(fb->bpp); print_str("bpp\n");
+		print("[MB2] Framebuffer: ");
+		print_int(fb->width); print("x");
+		print_int(fb->height); print(" @ ");
+		print_int(fb->bpp); print("bpp\n");
 	}
 }
 
@@ -127,11 +127,11 @@ void mb2_dump_memory_map(multiboot2_parser_t* p) {
 	multiboot_tag_mmap_t* mmap_tag = mb2_get_memory_map(p);
 
 	if (!mmap_tag) {
-		print_str("[MB2] No memory map found.\n");
+		print("[MB2] No memory map found.\n");
 		return;
 	}
 
-	print_str("[MB2] Memory Map:\n");
+	print("[MB2] Memory Map:\n");
 
 	uintptr_t mmap_end = (uintptr_t)mmap_tag + mmap_tag->size;
 	uintptr_t ptr = (uintptr_t)mmap_tag + sizeof(multiboot_tag_mmap_t);
@@ -139,32 +139,32 @@ void mb2_dump_memory_map(multiboot2_parser_t* p) {
 	while (ptr < mmap_end) {
 		multiboot_mmap_entry_t* entry = (multiboot_mmap_entry_t*)ptr;
 
-		print_str("  [Region] Start: ");
+		print("  [Region] Start: ");
 		print_hex64(entry->addr);
-		print_str(" | End: ");
+		print(" | End: ");
 		print_hex64(entry->addr + entry->len);
-		print_str(" | Size: ");
+		print(" | Size: ");
 		print_int((int)(entry->len / 1024));
-		print_str(" KiB | Type: ");
+		print(" KiB | Type: ");
 
 		switch (entry->type) {
 			case MULTIBOOT_MEMORY_AVAILABLE:
-				print_str("Available\n");
+				print("Available\n");
 				break;
 			case MULTIBOOT_MEMORY_RESERVED:
-				print_str("Reserved\n");
+				print("Reserved\n");
 				break;
 			case MULTIBOOT_MEMORY_ACPI_RECLAIMABLE:
-				print_str("ACPI Reclaimable\n");
+				print("ACPI Reclaimable\n");
 				break;
 			case MULTIBOOT_MEMORY_NVS:
-				print_str("ACPI NVS\n");
+				print("ACPI NVS\n");
 				break;
 			case MULTIBOOT_MEMORY_BADRAM:
-				print_str("Bad RAM\n");
+				print("Bad RAM\n");
 				break;
 			default:
-				print_str("Unknown\n");
+				print("Unknown\n");
 				break;
 		}
 
