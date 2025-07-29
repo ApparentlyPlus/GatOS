@@ -1,61 +1,56 @@
 # Toolchain configuration
 CC := x86_64-elf-gcc
-AS := x86_64-elf-as
 LD := x86_64-elf-ld
 
-# Compilation flags
+# Compilation and preprocessing flags
 CFLAGS := -m64 -ffreestanding -nostdlib -fno-pic -mcmodel=kernel -I src/headers -g
+CPPFLAGS := -I src/headers -D__ASSEMBLER__
 LDFLAGS := -n -nostdlib -T targets/x86_64/linker.ld --no-relax -g
 
-# Preprocessor flags (for .S files)
-CPPFLAGS := -I src/headers -D__ASSEMBLER__  # Ensures preprocessed macros work
-
-# Build directories
+# Directories
+SRC_DIR := src/impl
+HEADER_DIR := src/headers
 BUILD_DIR := build
-DIST_DIR := dist
+DIST_DIR := dist/x86_64
 ISO_DIR := targets/x86_64/iso
 
-# Kernel source files
-KERNEL_SRC_DIR := src/impl/kernel
-KERNEL_SRC_FILES := $(shell find $(KERNEL_SRC_DIR) -name '*.c')
-KERNEL_OBJ_FILES := $(patsubst $(KERNEL_SRC_DIR)/%.c,$(BUILD_DIR)/kernel/%.o,$(KERNEL_SRC_FILES))
+# Discover all C and Assembly sources recursively
+C_SRC_FILES := $(shell find $(SRC_DIR) -type f -name '*.c')
+ASM_SRC_FILES := $(shell find $(SRC_DIR) -type f -name '*.S')
 
-# x86_64 source files
-X86_64_SRC_DIR := src/impl/x86_64
-X86_64_C_SRC_FILES := $(shell find $(X86_64_SRC_DIR) -name '*.c')
-X86_64_ASM_SRC_FILES := $(shell find $(X86_64_SRC_DIR) -name '*.S')
-X86_64_C_OBJ_FILES := $(patsubst $(X86_64_SRC_DIR)/%.c,$(BUILD_DIR)/x86_64/%.o,$(X86_64_C_SRC_FILES))
-X86_64_ASM_OBJ_FILES := $(patsubst $(X86_64_SRC_DIR)/%.S,$(BUILD_DIR)/x86_64/%.o,$(X86_64_ASM_SRC_FILES))
-X86_64_OBJ_FILES := $(X86_64_C_OBJ_FILES) $(X86_64_ASM_OBJ_FILES)
+# Generate corresponding object file paths
+C_OBJ_FILES := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(C_SRC_FILES))
+ASM_OBJ_FILES := $(patsubst $(SRC_DIR)/%.S,$(BUILD_DIR)/%.o,$(ASM_SRC_FILES))
+OBJ_FILES := $(C_OBJ_FILES) $(ASM_OBJ_FILES)
 
 # Default target
 .PHONY: all
-all: build-x86_64
+all: iso
 
-# Build kernel objects
-$(BUILD_DIR)/kernel/%.o: $(KERNEL_SRC_DIR)/%.c
+# Compile C source files
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
 	@mkdir -p $(@D)
 	$(CC) -c $(CFLAGS) $< -o $@
 
-# Build x86_64 C objects
-$(BUILD_DIR)/x86_64/%.o: $(X86_64_SRC_DIR)/%.c
+# Compile Assembly (.S) source files with preprocessing
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.S
 	@mkdir -p $(@D)
-	$(CC) -c $(CFLAGS) $< -o $@
+	$(CC) -c $(CPPFLAGS) $< -o $@
 
-# Build x86_64 assembly objects (PREPROCESSED)
-$(BUILD_DIR)/x86_64/%.o: $(X86_64_SRC_DIR)/%.S
-	@mkdir -p $(@D)
-	$(CC) -c $(CPPFLAGS) -o $@ $<
+# Link everything into a flat binary
+.PHONY: build
+build: $(OBJ_FILES)
+	@mkdir -p $(DIST_DIR)
+	$(LD) $(LDFLAGS) -o $(DIST_DIR)/kernel.bin $^
 
-# Main build target
-.PHONY: build-x86_64
-build-x86_64: $(KERNEL_OBJ_FILES) $(X86_64_OBJ_FILES)
-	@mkdir -p $(DIST_DIR)/x86_64
-	$(LD) $(LDFLAGS) -o $(DIST_DIR)/x86_64/kernel.bin $^
-	@cp $(DIST_DIR)/x86_64/kernel.bin $(ISO_DIR)/boot/kernel.bin
-	grub-mkrescue /usr/lib/grub/i386-pc -o $(DIST_DIR)/x86_64/kernel.iso $(ISO_DIR)
+# Generate ISO image
+.PHONY: iso
+iso: build
+	@mkdir -p $(ISO_DIR)/boot
+	cp $(DIST_DIR)/kernel.bin $(ISO_DIR)/boot/kernel.bin
+	grub-mkrescue /usr/lib/grub/i386-pc -o $(DIST_DIR)/kernel.iso $(ISO_DIR)
 
-# Clean build artifacts
+# Clean all build and dist files
 .PHONY: clean
 clean:
-	rm -rf $(BUILD_DIR) $(DIST_DIR) $(ISO_DIR)/boot/kernel.bin
+	rm -rf $(BUILD_DIR) $(DIST_DIR) dist $(ISO_DIR)/boot/kernel.bin
