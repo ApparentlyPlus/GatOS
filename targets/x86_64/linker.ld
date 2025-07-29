@@ -1,14 +1,14 @@
 ENTRY(start)
 
 HH_KERNEL_OFFSET = 0xFFFFFFFF80000000;
-LH_KERNEL_START = 0x10000;
+KPHYS_START = 0x10000;
 
 SECTIONS
 {
-	. = LH_KERNEL_START + HH_KERNEL_OFFSET;
-	HH_KERNEL_START = .;
+	. = KPHYS_START + HH_KERNEL_OFFSET;
+	KVIRT_START = .;
 
-	.boot : AT(ADDR(.boot) - HH_KERNEL_OFFSET)
+	.boot : AT(ADDR(.boot) - HH_KERNEL_OFFSET) ALIGN(4K)
 	{
 		KEEP(*(.multiboot_header))
 	}
@@ -39,4 +39,7 @@ SECTIONS
 		. = . + 0x8000; /* 32 KiB should be fine for now, will manage in C later */
 		__stack_top = .;
 	}
+
+	KPHYS_END = . - HH_KERNEL_OFFSET;
+	KVIRT_END = .;
 }
