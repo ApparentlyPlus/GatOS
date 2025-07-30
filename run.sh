@@ -81,7 +81,7 @@ function main() {
 
   # Attempt build
   if ! run_make; then
-    echo "Make failed. If you ran setup.sh, you probably forgot to restart your terminal."
+    echo "If you ran setup.sh, you probably forgot to restart your terminal."
     exit 1
   fi
 
