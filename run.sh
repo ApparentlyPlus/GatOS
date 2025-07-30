@@ -81,22 +81,15 @@ function main() {
 
   # Attempt build
   if ! run_make; then
-    if prompt_yes_no "Build failed. Would you like to run setup and try again? [Y/n]" "Y"; then
-      run_setup
-      run_make || exit 1
-    else
-      exit 1
-    fi
+    echo "Make failed. If you ran setup.sh, you probably forgot to restart your terminal."
+    exit 1
   fi
 
   # Verify QEMU is available
   if ! command_exists "${QEMU_EXEC}"; then
     echo -e "${RED}[ERROR] QEMU is required but not found${NC}" >&2
-    if prompt_yes_no "Would you like to run setup to install QEMU? [Y/n]" "Y"; then
-      run_setup
-    else
-      exit 1
-    fi
+    echo "If you ran setup.sh, you probably forgot to restart your terminal."
+    exit 1
   fi
 
   # Run QEMU
