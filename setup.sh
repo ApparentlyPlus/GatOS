@@ -77,7 +77,7 @@ done
 BREW_PREFIX="/home/linuxbrew/.linuxbrew"
 if ! command -v brew &> /dev/null; then
   echo -e "${BLUE}[*] Homebrew not found. Installing Homebrew...${NC}"
-  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || {
+  NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || {
     echo -e "${RED}[X] Homebrew installation failed${NC}"
     exit 1
   }
@@ -99,7 +99,7 @@ fi
 # Install x86_64-elf-gcc if not installed
 if ! brew list x86_64-elf-gcc &> /dev/null; then
   echo -e "${BLUE}[*] Installing x86_64-elf-gcc via Homebrew...${NC}"
-  brew install x86_64-elf-gcc || {
+  brew install -q x86_64-elf-gcc || {
     echo -e "${RED}[X] Failed to install x86_64-elf-gcc${NC}"
     exit 1
   }
