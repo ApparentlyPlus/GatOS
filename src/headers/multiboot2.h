@@ -1,3 +1,12 @@
+/*
+ * multiboot2.h - Multiboot 2 specification definitions
+ *
+ * Defines structures and constants for parsing Multiboot 2 boot information.
+ * Includes memory management structures for available memory tracking.
+ *
+ * Author: u/ApparentlyPlus
+ */
+
 #pragma once
 #include <stdint.h>
 #include <stddef.h>

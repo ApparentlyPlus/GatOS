@@ -1,5 +1,5 @@
 /*
- * kernel_main.c - Entry point for the GatOS 64-bit kernel
+ * main.c - Entry point for the GatOS 64-bit kernel
  *
  * This file defines the `kernel_main` function, which is the first function
  * called once the kernel takes control after boot.

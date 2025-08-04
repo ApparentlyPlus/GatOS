@@ -1,3 +1,12 @@
+/*
+ * paging.h - Page table management definitions
+ *
+ * Defines constants and macros for x86_64 paging structures,
+ * including virtual-to-physical address translation utilities.
+ *
+ * Author: u/ApparentlyPlus
+ */
+
 #define HH_BASE 0xFFFFFFFF80000000
 
 #ifdef __ASSEMBLER__

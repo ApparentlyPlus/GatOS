@@ -1,3 +1,12 @@
+/*
+ * debug.h - Debugging utilities for GatOS kernel
+ *
+ * Provides the DEBUG macro for formatted serial output with automatic 
+ * counter tracking. Includes file/line information when enabled.
+ *
+ * Author: u/ApparentlyPlus
+ */
+
 static int DBG_COUNTER = 0;
 
 #define DEBUG(str, total) do { \

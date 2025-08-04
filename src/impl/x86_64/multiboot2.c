@@ -12,17 +12,25 @@
 #include "libc/string.h"
 #include <stddef.h>
 
-// Helper functions
+/*
+ * align_up - Aligns address to specified boundary
+ */
 static uintptr_t align_up(uintptr_t val, uintptr_t align) {
     return (val + align - 1) & ~(align - 1);
 }
 
+/*
+ * get_next_tag - Advances to next multiboot tag
+ */
 static multiboot_tag_t* get_next_tag(multiboot_tag_t* tag) {
     uintptr_t addr = (uintptr_t)tag;
     size_t padded_size = align_up(tag->size, 8);
     return (multiboot_tag_t*)(addr + padded_size);
 }
 
+/*
+ * find_tag - Locates specific multiboot tag type
+ */
 static multiboot_tag_t* find_tag(multiboot_parser_t* parser, uint32_t type) {
     if (!parser->initialized) return NULL;
     
@@ -37,10 +45,16 @@ static multiboot_tag_t* find_tag(multiboot_parser_t* parser, uint32_t type) {
     return NULL;
 }
 
+/*
+ * memory_ranges_overlap - Checks for memory region collisions
+ */
 static int memory_ranges_overlap(uintptr_t start1, uintptr_t end1, uintptr_t start2, uintptr_t end2) {
     return (start1 < end2) && (start2 < end1);
 }
 
+/*
+ * add_available_memory_range - Adds memory region to available list
+ */
 static void add_available_memory_range(multiboot_parser_t* parser, uintptr_t start, uintptr_t end, memory_range_t** prev) {
     if (parser->available_memory_count >= MAX_MEMORY_RANGES) {
         return;
@@ -61,6 +75,9 @@ static void add_available_memory_range(multiboot_parser_t* parser, uintptr_t sta
     parser->available_memory_count++;
 }
 
+/*
+ * build_available_memory_list - Constructs available memory region list
+ */
 static void build_available_memory_list(multiboot_parser_t* parser) {
     parser->available_memory_head = NULL;
     parser->available_memory_count = 0;
@@ -102,9 +119,12 @@ static void build_available_memory_list(multiboot_parser_t* parser) {
     }
 }
 
+/*
+ * calculate_required_size - Computes needed buffer size for multiboot data
+ */
 static size_t calculate_required_size(void* mb_info) {
     multiboot_info_t* info = (multiboot_info_t*)mb_info;
-    size_t total_size = info->total_size; //TRYING TO ACCESS 0x45f3000 -> PAGE FAULT!!!
+    size_t total_size = info->total_size;
 
     // Parse tags to find strings and calculate their sizes
     multiboot_tag_t* tag = (multiboot_tag_t*)((uintptr_t)info + sizeof(multiboot_info_t));
@@ -131,6 +151,9 @@ static size_t calculate_required_size(void* mb_info) {
     return total_size + 64; // Add padding
 }
 
+/*
+ * copy_multiboot_data - Copies and processes multiboot information
+ */
 static void copy_multiboot_data(multiboot_parser_t* parser, void* mb_info) {
     multiboot_info_t* src_info = (multiboot_info_t*)mb_info;
     
@@ -196,8 +219,9 @@ static void copy_multiboot_data(multiboot_parser_t* parser, void* mb_info) {
     }
 }
 
-// Public API Implementation
-
+/*
+ * multiboot_init - Initializes multiboot parser with boot information
+ */
 void multiboot_init(multiboot_parser_t* parser, void* mb_info, uint8_t* buffer, size_t buffer_size) {
     // Initialize parser
     memset(parser, 0, sizeof(multiboot_parser_t));
@@ -231,14 +255,23 @@ void multiboot_init(multiboot_parser_t* parser, void* mb_info, uint8_t* buffer, 
     print(" bytes)\n");
 }
 
+/*
+ * multiboot_get_bootloader_name - Returns bootloader name string
+ */
 const char* multiboot_get_bootloader_name(multiboot_parser_t* parser) {
     return parser->bootloader_name;
 }
 
+/*
+ * multiboot_get_command_line - Returns kernel command line
+ */
 const char* multiboot_get_command_line(multiboot_parser_t* parser) {
     return parser->command_line;
 }
 
+/*
+ * multiboot_get_total_memory - Returns total usable memory
+ */
 uint64_t multiboot_get_total_memory(multiboot_parser_t* parser) {
     if (!parser->memory_map || parser->memory_map_length == 0) {
         return 0;
@@ -260,14 +293,23 @@ uint64_t multiboot_get_total_memory(multiboot_parser_t* parser) {
     return highest_addr;
 }
 
+/*
+ * multiboot_get_available_memory - Returns linked list of available memory regions
+ */
 memory_range_t* multiboot_get_available_memory(multiboot_parser_t* parser) {
     return parser->available_memory_head;
 }
 
+/*
+ * multiboot_get_available_memory_count - Returns available region count
+ */
 size_t multiboot_get_available_memory_count(multiboot_parser_t* parser) {
     return parser->available_memory_count;
 }
 
+/*
+ * multiboot_get_memory_region - Retrieves memory region by index
+ */
 int multiboot_get_memory_region(multiboot_parser_t* parser, size_t index, 
                                uintptr_t* start, uintptr_t* end, uint32_t* type) {
     if (!parser->memory_map || index >= parser->memory_map_length) {
@@ -284,6 +326,9 @@ int multiboot_get_memory_region(multiboot_parser_t* parser, size_t index,
     return 0; // Success
 }
 
+/*
+ * multiboot_get_module_count - Returns number of loaded modules
+ */
 int multiboot_get_module_count(multiboot_parser_t* parser) {
     if (!parser->initialized) return 0;
     
@@ -299,6 +344,9 @@ int multiboot_get_module_count(multiboot_parser_t* parser) {
     return count;
 }
 
+/*
+ * multiboot_get_module - Retrieves module information by index
+ */
 multiboot_module_t* multiboot_get_module(multiboot_parser_t* parser, int index) {
     if (!parser->initialized) return NULL;
     
@@ -318,14 +366,23 @@ multiboot_module_t* multiboot_get_module(multiboot_parser_t* parser, int index) 
     return NULL;
 }
 
+/*
+ * multiboot_get_framebuffer - Returns framebuffer information if available
+ */
 multiboot_framebuffer_t* multiboot_get_framebuffer(multiboot_parser_t* parser) {
     return (multiboot_framebuffer_t*)find_tag(parser, MULTIBOOT_TAG_TYPE_FRAMEBUFFER);
 }
 
+/*
+ * multiboot_get_elf_sections - Returns ELF section headers if available
+ */
 multiboot_elf_sections_t* multiboot_get_elf_sections(multiboot_parser_t* parser) {
     return (multiboot_elf_sections_t*)find_tag(parser, MULTIBOOT_TAG_TYPE_ELF_SECTIONS);
 }
 
+/*
+ * multiboot_get_acpi_rsdp - Returns ACPI RSDP pointer
+ */
 void* multiboot_get_acpi_rsdp(multiboot_parser_t* parser) {
     multiboot_tag_t* tag = find_tag(parser, MULTIBOOT_TAG_TYPE_ACPI_NEW);
     if (!tag) {
@@ -334,11 +391,17 @@ void* multiboot_get_acpi_rsdp(multiboot_parser_t* parser) {
     return tag ? ((multiboot_acpi_t*)tag)->rsdp : NULL;
 }
 
+/*
+ * multiboot_get_kernel_range - Retrieves kernel physical memory range
+ */
 void multiboot_get_kernel_range(uintptr_t* start, uintptr_t* end) {
     *start = (uintptr_t)&KPHYS_START;
     *end = (uintptr_t)&KPHYS_END;
 }
 
+/*
+ * multiboot_is_page_used - Checks if physical page is reserved
+ */
 int multiboot_is_page_used(multiboot_parser_t* parser, uintptr_t start, size_t page_size) {
     if (!parser->initialized) return 0;
     
@@ -361,6 +424,9 @@ int multiboot_is_page_used(multiboot_parser_t* parser, uintptr_t start, size_t p
     return 0;
 }
 
+/*
+ * multiboot_dump_info - Prints multiboot information for debugging
+ */
 void multiboot_dump_info(multiboot_parser_t* parser) {
     if (!parser->initialized) {
         print("[MB2] Parser not initialized\n");
@@ -432,6 +498,9 @@ void multiboot_dump_info(multiboot_parser_t* parser) {
     }
 }
 
+/*
+ * multiboot_dump_memory_map - Prints memory map for debugging
+ */
 void multiboot_dump_memory_map(multiboot_parser_t* parser) {
     if (!parser->memory_map) {
         print("[MB2] No memory map found\n");

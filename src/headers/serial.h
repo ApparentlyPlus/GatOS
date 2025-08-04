@@ -1,3 +1,12 @@
+/*
+ * serial.h - Serial port communication interface
+ *
+ * Declares functions for initializing COM1 port and outputting data,
+ * including formatted hexadecimal value printing.
+ *
+ * Author: u/ApparentlyPlus
+ */
+
 #pragma once
 
 #include <stdint.h>

@@ -25,6 +25,9 @@ size_t col = 0;
 size_t row = 0;
 uint8_t color = PRINT_COLOR_WHITE | PRINT_COLOR_BLACK << 4;
 
+/*
+ * clear_row - Clears specified VGA text row
+ */
 void clear_row(size_t row) {
     struct Char empty = {
         .character = ' ',
@@ -36,12 +39,18 @@ void clear_row(size_t row) {
     }
 }
 
+/*
+ * print_clear - Clears entire VGA text buffer
+ */
 void print_clear() {
     for (size_t i = 0; i < NUM_ROWS; i++) {
         clear_row(i);
     }
 }
 
+/*
+ * print_newline - Advances cursor to next line (with scrolling)
+ */
 void print_newline() {
     col = 0;
 
@@ -60,6 +69,9 @@ void print_newline() {
     clear_row(NUM_ROWS - 1);
 }
 
+/*
+ * print_char - Outputs single character to screen
+ */
 void print_char(char character) {
     if (character == '\n') {
         print_newline();
@@ -78,6 +90,9 @@ void print_char(char character) {
     col++;
 }
 
+/*
+ * print - Outputs null-terminated string to screen
+ */
 void print(const char* str) {
     for (size_t i = 0; ; i++) {
         char character = (uint8_t) str[i];
@@ -86,10 +101,17 @@ void print(const char* str) {
     }
 }
 
+/*
+ * print_set_color - Sets foreground/background text colors
+ */
 void print_set_color(uint8_t foreground, uint8_t background) {
     color = foreground + (background << 4);
 }
 
+
+/*
+ * print_int - Outputs signed integer in decimal format
+ */
 void print_int(int value) {
     char buffer[12];
     int i = 0;
@@ -119,6 +141,9 @@ void print_int(int value) {
     }
 }
 
+/*
+ * print_hex32 - Outputs 32-bit value in hexadecimal format
+ */
 void print_hex32(uint32_t value) {
     print("0x");
 
@@ -129,6 +154,9 @@ void print_hex32(uint32_t value) {
     }
 }
 
+/*
+ * print_hex64 - Outputs 64-bit value in hexadecimal format
+ */
 void print_hex64(uint64_t value) {
     print("0x");
 

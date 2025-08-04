@@ -1,21 +1,37 @@
+/*
+ * paging.c - Page table management implementation
+ *
+ * Handles higher-half memory mapping, identity mapping removal,
+ * and page table cleanup for kernel memory space.
+ *
+ * Author: u/ApparentlyPlus
+ */
+
 #include "memory/paging.h"
 #include "print.h"
 #include "serial.h"
 
-
+/*
+ * flush_tlb - Invalidates TLB cache
+ */
 void flush_tlb(void) {
     uint64_t cr3;
     __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
     __asm__ volatile("mov %0, %%cr3" : : "r"(cr3));
 }
 
-// Get pointer to PML4 (CR3) as virtual address
+/*
+ * getPML4 - Retrieves current PML4 table address (virtual)
+ */
 static inline uint64_t* getPML4(void) {
     uint64_t cr3;
     __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
     return (uint64_t*)P2V(cr3);
 }
 
+/*
+ * unmap_identity - Removes lower memory identity mapping
+ */
 void unmap_identity(){
     int64_t* PML4 = getPML4();
     uint64_t* PDPT = PML4 + 512 * PREALLOC_PML4s;
@@ -24,7 +40,9 @@ void unmap_identity(){
     flush_tlb();
 }
 
-
+/*
+ * cleanup_page_tables - Removes unused page table entries
+ */
 void cleanup_page_tables(void) {
     uint64_t* PML4 = getPML4();
     uint64_t* PDPT = PML4 + 512 * PREALLOC_PML4s;
@@ -104,7 +122,9 @@ void cleanup_page_tables(void) {
     flush_tlb();
 }
 
-
+/*
+ * dbg_dump_pmt - Debug function to print page table structure
+ */
 void dbg_dump_pmt(void) {
     uint64_t* PML4 = getPML4();
     serial_write("Page Tables:\n");

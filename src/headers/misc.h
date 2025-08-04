@@ -1,3 +1,12 @@
+/*
+ * misc.h - Miscellaneous kernel utilities
+ *
+ * Contains function declarations for kernel banner printing, 
+ * position verification, and integer conversion utilities.
+ *
+ * Author: u/ApparentlyPlus
+ */
+
 #include <stdint.h>
 
 void print_banner(char* KERNEL_VERSION);

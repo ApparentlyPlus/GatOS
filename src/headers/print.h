@@ -1,3 +1,12 @@
+/*
+ * print.h - VGA text mode printing interface
+ *
+ * Provides color definitions and function prototypes for screen output
+ * including character/string printing, integer formatting, and screen control.
+ *
+ * Author: u/ApparentlyPlus
+ */
+
 #pragma once
 
 #include <stdint.h>

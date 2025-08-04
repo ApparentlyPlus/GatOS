@@ -1,3 +1,12 @@
+/*
+ * misc.c - Miscellaneous kernel utilities implementation
+ *
+ * Contains helper functions for kernel boot process including
+ * banner display, position verification, and integer formatting.
+ *
+ * Author: u/ApparentlyPlus
+ */
+
 #include "print.h"
 #include <stdint.h>
 
@@ -28,6 +37,9 @@ void print_banner(char* KERNEL_VERSION){
 	print("---------------------------------------------------\n\n");
 }
 
+/*
+ * int_to_str - Converts integer to string representation
+ */
 int int_to_str(int num, char *str) {
     int i = 0, sign = num;
     if (num < 0) num = -num;  // Make num positive
@@ -49,12 +61,18 @@ int int_to_str(int num, char *str) {
 	return i;
 }
 
+/*
+ * get_rip - Retrieves current instruction pointer value
+ */
 uintptr_t get_rip() {
     uintptr_t rip;
     asm volatile ("lea (%%rip), %0" : "=r" (rip));
     return rip;
 }
 
+/*
+ * check_kernel_position - Verifies kernel is running in higher-half memory
+ */
 void check_kernel_position() {
     uintptr_t rip = get_rip();
    

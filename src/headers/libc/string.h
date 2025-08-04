@@ -1,3 +1,12 @@
+/*
+ * string.h - Standard C string and memory operations
+ *
+ * Declares common string manipulation and memory handling functions
+ * compliant with standard C library specifications.
+ *
+ * Author: u/ApparentlyPlus
+ */
+ 
 #ifndef STRING_H
 #define STRING_H
 
