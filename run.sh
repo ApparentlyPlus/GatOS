@@ -11,7 +11,6 @@ readonly BLUE='\033[1;34m'
 # Configuration
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly QEMU_EXEC="qemu-system-x86_64"
-readonly SETUP_SCRIPT="setup.sh"
 readonly ISO_PATH="dist/x86_64/kernel.iso"
 
 function command_exists() {
@@ -34,7 +33,7 @@ function run_make() {
   fi
 
   echo -e "${YELLOW}[INFO] Building GatOS...${NC}"
-  if ! make build-x86_64; then
+  if ! make; then
     echo -e "${RED}[ERROR] Build failed${NC}" >&2
     return 1
   fi
