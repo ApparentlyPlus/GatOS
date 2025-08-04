@@ -1,5 +1,5 @@
 /*
- * kernel_main.c - Entry point for the GatOS 64-bit kernel
+ * main.c - Entry point for the GatOS 64-bit kernel
  *
  * This file defines the `kernel_main` function, which is the first function
  * called once the kernel takes control after boot.
@@ -8,55 +8,50 @@
  */
 
 #include "print.h"
-#include "mem.h"
+#include "misc.h"
+#include "serial.h"
+#include "debug.h"
 #include "multiboot2.h"
+#include "memory/paging.h"
+#include "libc/string.h"
 
-void print_banner();
+#define TOTAL_DBG 5
 
-static char* KERNEL_VERSION = "v1.0.0";
+static char* KERNEL_VERSION = "v1.5.0";
+static uint8_t multiboot_buffer[8 * 1024]; // 8KB should be more than enough
 
 /*
  * kernel_main - Main entry point for the GatOS kernel
- * @mb_info: Pointer to the Multiboot2 information structure provided by the bootloader
  */
 void kernel_main(void* mb_info) {
+	DEBUG("Kernel main reached, normal assembly boot succeeded", TOTAL_DBG);
 
 	print_clear();
-	print_banner();
+	print_banner(KERNEL_VERSION);
 
-	uint64_t heap_size = multiboot_detect_heap(mb_info);
-	heap_init(heap_size);
+	multiboot_parser_t multiboot = {0};
 	
-	print_set_color(PRINT_COLOR_LIGHT_GREEN, PRINT_COLOR_BLACK);
-	print_str("[+] 32 KiB of memory reserved for the kernel stack\n");
-	print_str("[+] Heap initialized with size: ");
-	print_int(heap_size / (1024 * 1024));
-	print_str(" MB\n");
-}
+	// Initialize multiboot parser (copies everything to higher half)
+    multiboot_init(&multiboot, mb_info, multiboot_buffer, sizeof(multiboot_buffer));
 
-/*
- * print_banner - Prints the GatOS kernel banner and metadata to the screen
- */
-void print_banner(){
-	print_set_color(PRINT_COLOR_CYAN, PRINT_COLOR_BLACK);
-	print_str(
-"  ____       _    ___   ____\n"
-" / ___| __ _| |_ / _ \\ / ___|\n"
-"| |  _ / _` | __| | | |\\___ \\\n"
-"| |_| | (_| | | | |_| | ___) |\n"
-" \\____|\\__,_|\\_\\ \\___/ |____/\n");
+	DEBUG("Multiboot structure parsed and copied to higher half", TOTAL_DBG);
 
-	print_set_color(PRINT_COLOR_MAGENTA, PRINT_COLOR_BLACK);
-	print_str("\nG a t O S   K e r n e l  ");
-	print_str(KERNEL_VERSION);
-	print_str("\n\n");
+	// Unmap anything besides [0, KPHYS_END] and [HH_BASE, HH_BASE + KPHYS_END]
+	cleanup_page_tables();
+
+	DEBUG("Unmapped Page Tables aside from the kernel range", TOTAL_DBG);
 	
-	print_set_color(PRINT_COLOR_YELLOW, PRINT_COLOR_BLACK);
-	print_str("This is a 64-bit long mode kernel!\n");
-	print_str("Currently in VGA text mode, for testing.\n");
-	print_str("Created by: u/ApparentlyPlus\n");
-	print_str("Name inspired by: SkylOS, a project by u/BillyZeim\n\n");
+	// Unmap [0, KPHYS_END], we only have [HH_BASE, HH_BASE + KPHYS_END] mapped
+	unmap_identity();
 
-	print_set_color(PRINT_COLOR_WHITE, PRINT_COLOR_BLACK);
-	print_str("---------------------------------------------------\n\n");
+	DEBUG("Unmapped identity mapping, only higher half remains", TOTAL_DBG);
+
+    if (!multiboot.initialized) {
+       	print("[KERNEL] Failed to initialize multiboot2 parser!\n");
+    	return;
+    }
+
+	check_kernel_position();
+
+	DEBUG("Reached kernel end", TOTAL_DBG);
 }

@@ -1,39 +1,45 @@
 ENTRY(start)
 
+HH_KERNEL_OFFSET = 0xFFFFFFFF80000000;
+KPHYS_START = 0x10000;
+
 SECTIONS
 {
-	. = 1M;
+	. = KPHYS_START + HH_KERNEL_OFFSET;
+	KVIRT_START = .;
 
-	.boot :
+	.boot : AT(ADDR(.boot) - HH_KERNEL_OFFSET) ALIGN(4K)
 	{
 		KEEP(*(.multiboot_header))
 	}
 
-	.text : ALIGN(4K)
+	.text : AT(ADDR(.text) - HH_KERNEL_OFFSET) ALIGN(4K)
 	{
 		*(.text)
 	}
 
-	.rodata : ALIGN(4K)
+	.rodata : AT(ADDR(.rodata) - HH_KERNEL_OFFSET) ALIGN(4K)
 	{
 		*(.rodata*)
 	}
 
-	.data : ALIGN(4K)
+	.data : AT(ADDR(.data) - HH_KERNEL_OFFSET) ALIGN(4K)
 	{
 		*(.data)
 	}
 
-	.bss : ALIGN(4K)
+	.bss : AT(ADDR(.bss) - HH_KERNEL_OFFSET) ALIGN(4K)
 	{
 		*(.bss*)
-		__bss_end = .;
 	}
 
-	.stack : ALIGN(4K)
+	.stack : AT(ADDR(.stack) - HH_KERNEL_OFFSET) ALIGN(4K)
 	{
 		__stack_bottom = .;
 		. = . + 0x8000; /* 32 KiB should be fine for now, will manage in C later */
 		__stack_top = .;
 	}
+
+	KPHYS_END = . - HH_KERNEL_OFFSET;
+	KVIRT_END = .;
 }
