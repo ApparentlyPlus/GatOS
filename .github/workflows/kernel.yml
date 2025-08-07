@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  build-and-test:
+  build_and_test:
     runs-on: ubuntu-latest
 
     steps:
@@ -17,14 +17,18 @@ jobs:
     - name: Set up dependencies
       run: |
         sudo apt update
-        sudo apt install -y expect
         chmod +x setup.sh
         ./setup.sh
 
     - name: Build and Run Kernel
       run: |
-        chmod +x run.sh
-        ./run.sh | tee serial.log
+        make clean
+        make
+        timeout 10s qemu-system-x86_64 \
+          -cdrom dist/x86_64/kernel.iso \
+          -nographic \
+          -serial file:serial.log \
+          -no-reboot || true
 
     - name: Parse Serial Output and Validate Tests
       run: |
@@ -39,6 +43,8 @@ jobs:
 
         if [ "$passed" -ne "$total" ]; then
           echo "$((total - passed)) tests failed"
+          echo "Serial log:"
+          cat serial.log
           exit 1
         fi
 

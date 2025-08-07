@@ -138,7 +138,7 @@ $SUDO apt update -y || {
 }
 
 # Install GatOS build dependencies
-REQUIRED_PKGS=(build-essential nasm xorriso grub-pc-bin qemu-system-x86)
+REQUIRED_PKGS=(build-essential nasm xorriso grub-pc-bin qemu-system-x86 mtools)
 echo -e "${BLUE}[*] Installing required packages: ${REQUIRED_PKGS[*]}${NC}"
 for pkg in "${REQUIRED_PKGS[@]}"; do
   if ! dpkg -s "$pkg" &> /dev/null; then
