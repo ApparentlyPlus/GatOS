@@ -14,10 +14,10 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Set up deps
+    - name: Set up dependencies
       run: |
         sudo apt update
-        sudo apt install -y expect # Needed to simulate serial input/output
+        sudo apt install -y expect
         chmod +x setup.sh
         ./setup.sh
 
@@ -38,6 +38,7 @@ jobs:
         echo "Passed $passed out of $total tests"
 
         if [ "$passed" -ne "$total" ]; then
-          echo "Some tests failed"
+          echo "$((total - passed)) tests failed"
           exit 1
         fi
+
