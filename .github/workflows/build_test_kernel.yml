@@ -1,0 +1,43 @@
+name: GatOS CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up deps
+      run: |
+        sudo apt update
+        sudo apt install -y expect # Needed to simulate serial input/output
+        chmod +x setup.sh
+        ./setup.sh
+
+    - name: Build and Run Kernel
+      run: |
+        chmod +x run.sh
+        ./run.sh | tee serial.log
+
+    - name: Parse Serial Output and Validate Tests
+      run: |
+        if ! grep -q "\[[0-9]\+/[0-9]\+\]" serial.log; then
+          echo "No test output found"
+          exit 1
+        fi
+
+        total=$(grep -o '\[[0-9]\+/[0-9]\+\]' serial.log | tail -n1 | sed 's/.*\/\([0-9]\+\)].*/\1/')
+        passed=$(grep -o '\[[0-9]\+/[0-9]\+\]' serial.log | tail -n1 | sed 's/\[\([0-9]\+\)\/.*/\1/')
+        echo "Passed $passed out of $total tests"
+
+        if [ "$passed" -ne "$total" ]; then
+          echo "Some tests failed"
+          exit 1
+        fi
