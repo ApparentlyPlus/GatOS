@@ -165,3 +165,8 @@ echo "To build and run GatOS in QEMU, use:"
 echo -e "    ${BLUE}chmod +x run.sh${NC}"
 echo -e "    ${BLUE}./run.sh${NC}"
 echo
+
+# Append PATH to GitHub Actions environment if running there
+if [[ -n "${GITHUB_ENV:-}" ]]; then
+  echo "export PATH=${BREW_PREFIX}/bin:\$PATH" >> "$GITHUB_ENV"
+fi
