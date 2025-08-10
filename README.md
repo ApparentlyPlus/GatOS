@@ -106,7 +106,7 @@ If you have `apt` as your package manager and run on Ubuntu or Debian in Linux o
 ### Quick Start (Ubuntu/Debian)
 
 ```bash
-# Execcute permissions for setup and run bash scripts
+# Exec permissions for setup and run bash scripts
 chmod +x setup.sh
 chmod +x run.sh
 
@@ -122,7 +122,7 @@ chmod +x run.sh
 
 ## Testing
 
-Currently, there is no formal testing suite built into the project. I'm working with a more... let's call it "primitive" approach, haha. Well, OS-dev doesn't give you any leeway for testing tools anyway.
+Currently, there is no formal testing suite built into the project. I'm working with a more... let's call it "primitive" approach, haha. Well, OS-dev doesn't give you any leeway for testing tools anyway :)
 
 ### Current Testing Approach
 
