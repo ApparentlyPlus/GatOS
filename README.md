@@ -207,3 +207,7 @@ The restrictive nature is partly due to academic requirements and partly because
 - [MittOS64](https://github.com/thomasloven/mittos64) - Very good documentation that helped me through a lot of the struggles so far
 - [Simple-OS](https://github.com/httpe/simple-os) - An already self-hosted modern kernel with libc ported, plenty useful for peeking inside implementations
 - [OS-Series](https://github.com/davidcallanan/os-series/) - Helped me boostrap the entire project
+
+This README is a work in progress and may change over time[^note].
+
+[^note]: There’s a lot I want to build and many features I hope to implement in a very short time. Because of this, the README will likely evolve as the project progresses — with better documentation and clearer explanations of the project’s structure. For now, completing the project takes priority, so some parts remain unfinished or unexplained. These will be clarified once the initial rush is over. Thanks for your patience and interest!
