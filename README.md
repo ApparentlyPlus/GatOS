@@ -196,7 +196,7 @@ Once the thesis is complete, I might consider opening it up for contributions, b
 
 This project is licensed under a strict custom license that does not allow for replication of the code without explicit consent. I am unsure how this project will be used in the future, so the licensing is restrictive for now.
 
-See the [LICENSE.md](LICENSE.md) file for details.
+See the [LICENSE](LICENSE) file for details.
 
 The restrictive nature is partly due to academic requirements and partly because I haven't decided what I want to do with this project long-term. This may change after thesis completion.
 
