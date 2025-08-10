@@ -6,7 +6,7 @@
 GatOS is a cleanly designed, modular kernel serving as the foundational layer for building toy operating systems. It is also part of my undergraduate thesis at the [University of Macedonia](https://www.uom.gr/en/dai), and serves as the backbone of a configurable, toy-OS building toolchain called PawStack.
 
 > [!NOTE]
-> This project is currently under active development and is not yet ready for production use or general local deployment.
+> This project is currently under heavily experimental development and is by no means ready for production use or general local deployment.
 
 The first section of this README focuses on providing some insight as to the vision of this project. If you're just interested in running GatOS in your system, skip to the [Getting Started](#getting-started) section.
 
@@ -40,7 +40,6 @@ The whole toolchain is comprised of 3 components:
 | **GatOS** | The current project. It is a modular kernel forming the core of PawStack. It aims to expose APIs and syscalls for core OS functionality. | **In Development** |
 | **Gata** | A custom high-level programming language for writing operating systems. It will *feel* like a modern language but will be built with features that make low-level development simpler and more approachable. | **Planned** |
 | **Appa** | The compiler for Gata. It takes in Gata source code and transpiles it into C code that calls GatOS's APIs. Appa constructs the kernel depending on the code's logic by leveraging the modularity of GatOS's design. The end result is a custom-configured version of GatOS for that specific Gata project. | **Planned** |
-
 
 Technically, GatOS is not the end of the toolchain. Even after you have a version of GatOS generated for your Gata logic, the kernel itself still needs to be compiled into bare-metal machine code. This final build stage is handled by a GCC-based compilation toolchain, with packaging done through tools like grub-mkrescue and xorriso to produce a bootable image.
 
@@ -107,10 +106,12 @@ If you have `apt` as your package manager and run on Ubuntu or Debian in Linux o
 ### Quick Start (Ubuntu/Debian)
 
 ```bash
-# Install prerequisites
-./setup.sh
+# Execcute permissions for setup and run bash scripts
+chmod +x setup.sh
+chmod +x run.sh
 
-# Restart your terminal!
+# Install prerequisites (don't forget to restart your terminal)
+./setup.sh
 
 # Run the kernel in QEMU
 ./run.sh
@@ -121,7 +122,7 @@ If you have `apt` as your package manager and run on Ubuntu or Debian in Linux o
 
 ## Testing
 
-Currently, there is no formal testing suite built into the project. We're working with a more... let's call it "primitive" approach.
+Currently, there is no formal testing suite built into the project. I'm working with a more... let's call it "primitive" approach, haha. Well, OS-dev doesn't give you any leeway for testing tools anyway.
 
 ### Current Testing Approach
 
@@ -139,13 +140,11 @@ Since there's no automated test suite, "testing" means running the kernel and ch
 
 ```c
 #include "debug.h"
-#define TOTAL_DBG 2
+#define TOTAL_DBG 2 # Number of total DEBUG calls
 
 void my_function() {
     DEBUG("Made it to my_function - things are working!", TOTAL_DBG);
-
     // Your code here
-
     DEBUG("Still alive after doing stuff", TOTAL_DBG);
 }
 ```
