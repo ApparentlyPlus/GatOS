@@ -37,7 +37,7 @@ void kernel_main(void* mb_info) {
 	DEBUG("Multiboot structure parsed and copied to higher half", TOTAL_DBG);
 
 	// Unmap anything besides [0, KPHYS_END] and [HH_BASE, HH_BASE + KPHYS_END]
-	cleanup_page_tables();
+	cleanup_page_tables(0x0, (uintptr_t)&KPHYS_END);
 
 	DEBUG("Unmapped Page Tables aside from the kernel range", TOTAL_DBG);
 	
@@ -50,6 +50,9 @@ void kernel_main(void* mb_info) {
        	print("[KERNEL] Failed to initialize multiboot2 parser!\n");
     	return;
     }
+
+	print_int(multiboot_get_total_RAM(&multiboot, MEASUREMENT_UNIT_MB));
+	print("\n");
 
 	check_kernel_position();
 

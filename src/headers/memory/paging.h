@@ -37,7 +37,8 @@
 void flush_tlb(void);
 void dbg_dump_pmt(void);
 void unmap_identity();
-void cleanup_page_tables(void);
+void cleanup_page_tables(uintptr_t start, uintptr_t end);
 
 extern uintptr_t KPHYS_END;
+extern uintptr_t KPHYS_START;
 #endif

@@ -41,16 +41,15 @@ void unmap_identity(){
 }
 
 /*
- * cleanup_page_tables - Removes unused page table entries
+ * cleanup_page_tables:
+ * Removes unused page table entries, keeps only the given range
+ * That range is both identity and higher half mapped.
  */
-void cleanup_page_tables(void) {
+void cleanup_page_tables(uintptr_t start, uintptr_t end) {
     uint64_t* PML4 = getPML4();
     uint64_t* PDPT = PML4 + 512 * PREALLOC_PML4s;
     uint64_t* PD = PDPT + 512 * PREALLOC_PDPTs;
     uint64_t* PT = PD + 512 * PREALLOC_PDs;
-
-    uintptr_t start = 0x0;
-    uintptr_t end = (uintptr_t)&KPHYS_END;
 
     uintptr_t kernel_size = end - start;
     if (kernel_size > (1UL << 30)) return; // > 1 GiB not allowed
