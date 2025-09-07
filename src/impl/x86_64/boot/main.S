@@ -40,6 +40,9 @@ start:
 	# Verify CPU supports long mode (64-bit)
 	call check_long_mode
 
+	# Verify SSE support
+	call check_SSE
+
 	# Set up paging structures for long mode
 	call setup_page_tables
 
@@ -67,6 +70,26 @@ check_multiboot:
 .no_multiboot:
 	mov al, 'M'    # Error code 'M'
 	jmp error
+
+# -----------------------------------------------------------------------------
+# check_SSE:
+# Checks SSE support exists in the system for floating point instructions
+# Jumps to error if invalid
+# -----------------------------------------------------------------------------
+check_SSE:
+	mov eax, 0x1
+	cpuid
+	test edx, 1<<25
+	jz .no_SSE
+.no_SSE:
+	mov eax, cr0
+	and ax, 0xFFFB		#clear coprocessor emulation CR0.EM
+	or ax, 0x2			#set coprocessor monitoring  CR0.MP
+	mov cr0, eax
+	mov eax, cr4
+	or ax, 3 << 9		#set CR4.OSFXSR and CR4.OSXMMEXCPT at the same time
+	mov cr4, eax
+	ret
 
 
 # -----------------------------------------------------------------------------
