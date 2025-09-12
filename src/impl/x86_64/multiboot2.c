@@ -80,8 +80,8 @@ static void build_available_memory_list(multiboot_parser_t* parser) {
         return;
     }
     
-    uintptr_t kernel_start = (uintptr_t)&KPHYS_START;
-    uintptr_t kernel_end = (uintptr_t)&KPHYS_END;
+    uintptr_t kernel_start = (uintptr_t)get_kstart(false);
+    uintptr_t kernel_end = (uintptr_t)get_kend(false);
     
     memory_range_t* prev = NULL;
     
@@ -267,7 +267,8 @@ const char* multiboot_get_command_line(multiboot_parser_t* parser) {
  * multiboot_get_total_RAM - Returns total RAM size
  */
 uint64_t multiboot_get_total_RAM(multiboot_parser_t* parser, int measurementUnit) {
-    return (multiboot_get_highest_physical_address(parser) - (uint64_t)(uintptr_t)&KPHYS_START)/measurementUnit;
+    //return (multiboot_get_highest_physical_address(parser) - (uint64_t)(uintptr_t)&KPHYS_START)/measurementUnit;
+    return multiboot_get_highest_physical_address(parser)/measurementUnit;
 }
 
 /*
@@ -396,8 +397,8 @@ void* multiboot_get_acpi_rsdp(multiboot_parser_t* parser) {
  * multiboot_get_kernel_range - Retrieves kernel physical memory range
  */
 void multiboot_get_kernel_range(uintptr_t* start, uintptr_t* end) {
-    *start = (uintptr_t)&KPHYS_START;
-    *end = (uintptr_t)&KPHYS_END;
+    *start = (uintptr_t)get_kstart(false);
+    *end = (uintptr_t)get_kend(false);
 }
 
 /*

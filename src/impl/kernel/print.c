@@ -20,7 +20,7 @@ struct Char {
     uint8_t color;
 };
 
-struct Char* buffer = (struct Char*)P2V(0xb8000);
+struct Char* buffer = (struct Char*)KERNEL_P2V(0xb8000);
 size_t col = 0;
 size_t row = 0;
 uint8_t color = PRINT_COLOR_WHITE | PRINT_COLOR_BLACK << 4;

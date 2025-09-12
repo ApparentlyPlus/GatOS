@@ -22,7 +22,7 @@
 
 start:
 	# Set stack pointer to top of the stack defined by linker symbol
-	mov esp, offset V2P(__stack_top)
+	mov esp, offset KERNEL_V2P(__stack_top)
 
 	# I am transferring the multiboot information
 	# directly to edi which will then be zero extended 
@@ -50,10 +50,10 @@ start:
 	call enable_paging
 
 	# Load the 64-bit GDT descriptor
-	lgdt [V2P(gdt64_pointer)]
+	lgdt [KERNEL_V2P(gdt64_pointer)]
 
 	# Far jump to 64-bit kernel entry point via code segment selector
-	jmp 0x08:V2P(long_mode_start)
+	jmp 0x08:KERNEL_V2P(long_mode_start)
 
 	# Halt if for some reason jump returns
 	hlt
@@ -148,31 +148,31 @@ setup_page_tables:
 
     # PML4[0] entry points to the base address of our PDPT table.
     # This maps the lower half (identity mapping)
-    mov eax, offset V2P(PDPT) 
+    mov eax, offset KERNEL_V2P(PDPT) 
     or eax, 0b11
-    mov dword ptr [V2P(PML4)], eax
+    mov dword ptr [KERNEL_V2P(PML4)], eax
     
     # PML4[511] entry also points to the same PDPT table (for higher half)
-    mov dword ptr [V2P(PML4) + 511 * 8], eax
+    mov dword ptr [KERNEL_V2P(PML4) + 511 * 8], eax
 
     # PDPT[0] entry points to the base address of our PD table.
     # Flags: Present (P=1), Read/Write (R/W=1)
-    mov eax, offset V2P(PD)
+    mov eax, offset KERNEL_V2P(PD)
     or eax, 0b11
-    mov dword ptr [V2P(PDPT)], eax
+    mov dword ptr [KERNEL_V2P(PDPT)], eax
 
 	# PDPT[510] should also point to PD (for higher half)
-	mov dword ptr [V2P(PDPT) + 510 * 8], eax
+	mov dword ptr [KERNEL_V2P(PDPT) + 510 * 8], eax
 
     mov ecx, 0
 .PD_loop:
     mov eax, ecx
     shl eax, 12
-    add eax, offset V2P(PT)
+    add eax, offset KERNEL_V2P(PT)
     or eax, 0b11
     mov ebx, ecx
     shl ebx, 3
-    mov dword ptr [V2P(PD) + ebx], eax
+    mov dword ptr [KERNEL_V2P(PD) + ebx], eax
     inc ecx
     cmp ecx, 512
     jne .PD_loop
@@ -184,7 +184,7 @@ setup_page_tables:
     or eax, 0b11
     mov ebx, ecx
     shl ebx, 3
-    mov dword ptr [V2P(PT) + ebx], eax
+    mov dword ptr [KERNEL_V2P(PT) + ebx], eax
     inc ecx
     cmp ecx, 512 * 512
     jne .PT_loop
@@ -198,7 +198,7 @@ setup_page_tables:
 # -----------------------------------------------------------------------------
 enable_paging:
     # Set CR3 to address of PML4
-	mov eax, offset V2P(PML4)
+	mov eax, offset KERNEL_V2P(PML4)
 	mov cr3, eax
 
     # Enable PAE (Physical Address Extension)
@@ -255,7 +255,7 @@ gdt64_code_segment = . - gdt64
 	.quad (1 << 43) | (1 << 44) | (1 << 47) | (1 << 53) # 64-bit code segment descriptor
 gdt64_pointer:
 	.word . - gdt64 - 1  # limit (size of GDT - 1)
-	.long V2P(gdt64)     # base address of GDT (32-bit)
+	.long KERNEL_V2P(gdt64)     # base address of GDT (32-bit)
 gdt64_vpointer:
 	.word . - gdt64 - 1  # limit (size of GDT - 1)
 	.quad gdt64     # base address of GDT (64-bit)
