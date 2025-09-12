@@ -14,6 +14,10 @@ BUILD_DIR := build
 DIST_DIR := dist/x86_64
 ISO_DIR := targets/x86_64/iso
 
+# UEFI output path (we will create this file)
+UEFI_DIR := $(ISO_DIR)/EFI/BOOT
+UEFI_GRUB := $(UEFI_DIR)/BOOTX64.EFI
+
 # Discover all C and Assembly sources recursively
 C_SRC_FILES := $(shell find $(SRC_DIR) -type f -name '*.c')
 ASM_SRC_FILES := $(shell find $(SRC_DIR) -type f -name '*.S')
@@ -43,14 +47,24 @@ build: $(OBJ_FILES)
 	@mkdir -p $(DIST_DIR)
 	$(LD) $(LDFLAGS) -o $(DIST_DIR)/kernel.bin $^
 
-# Generate ISO image
+# Build a standalone EFI executable (grub) that embeds your grub.cfg
+# This creates $(ISO_DIR)/EFI/BOOT/BOOTX64.EFI which UEFI firmware will look for on removable media
+$(UEFI_GRUB): $(ISO_DIR)/boot/grub/grub.cfg
+	@mkdir -p $(@D)
+	# embed the grub.cfg from the ISO tree into a standalone EFI binary
+	grub-mkstandalone --format=x86_64-efi --output=$@ \
+		--locales="" --fonts="" \
+		"boot/grub/grub.cfg=$(ISO_DIR)/boot/grub/grub.cfg"
+
+# Generate ISO image (BIOS + UEFI hybrid)
 .PHONY: iso
-iso: build
+iso: build $(UEFI_GRUB)
 	@mkdir -p $(ISO_DIR)/boot
 	cp $(DIST_DIR)/kernel.bin $(ISO_DIR)/boot/kernel.bin
-	grub-mkrescue /usr/lib/grub/i386-pc -o $(DIST_DIR)/kernel.iso $(ISO_DIR)
+	grub-mkrescue -o $(DIST_DIR)/kernel.iso $(ISO_DIR) || \
+	grub-mkrescue -d /usr/lib/grub/i386-pc -o $(DIST_DIR)/kernel.iso $(ISO_DIR);
 
 # Clean all build and dist files
 .PHONY: clean
 clean:
-	rm -rf $(BUILD_DIR) $(DIST_DIR) dist $(ISO_DIR)/boot/kernel.bin
+	rm -rf $(BUILD_DIR) $(DIST_DIR) dist $(ISO_DIR)/boot/kernel.bin $(UEFI_GRUB)

@@ -7,17 +7,11 @@
  * Author: u/ApparentlyPlus
  */
 
+#include "memory/paging.h"
+#include "libc/string.h"
 #include "multiboot2.h"
 #include "print.h"
-#include "libc/string.h"
 #include <stddef.h>
-
-/*
- * align_up - Aligns address to specified boundary
- */
-static uintptr_t align_up(uintptr_t val, uintptr_t align) {
-    return (val + align - 1) & ~(align - 1);
-}
 
 /*
  * get_next_tag - Advances to next multiboot tag
@@ -86,8 +80,8 @@ static void build_available_memory_list(multiboot_parser_t* parser) {
         return;
     }
     
-    uintptr_t kernel_start = (uintptr_t)&KPHYS_START;
-    uintptr_t kernel_end = (uintptr_t)&KPHYS_END;
+    uintptr_t kernel_start = (uintptr_t)get_kstart(false);
+    uintptr_t kernel_end = (uintptr_t)get_kend(false);
     
     memory_range_t* prev = NULL;
     
@@ -270,9 +264,17 @@ const char* multiboot_get_command_line(multiboot_parser_t* parser) {
 }
 
 /*
- * multiboot_get_total_memory - Returns total usable memory
+ * multiboot_get_total_RAM - Returns total RAM size
  */
-uint64_t multiboot_get_total_memory(multiboot_parser_t* parser) {
+uint64_t multiboot_get_total_RAM(multiboot_parser_t* parser, int measurementUnit) {
+    //return (multiboot_get_highest_physical_address(parser) - (uint64_t)(uintptr_t)&KPHYS_START)/measurementUnit;
+    return multiboot_get_highest_physical_address(parser)/measurementUnit;
+}
+
+/*
+ * multiboot_get_highest_physical_address - Returns the highest physical address
+ */
+uint64_t multiboot_get_highest_physical_address(multiboot_parser_t* parser) {
     if (!parser->memory_map || parser->memory_map_length == 0) {
         return 0;
     }
@@ -284,7 +286,7 @@ uint64_t multiboot_get_total_memory(multiboot_parser_t* parser) {
         uint32_t type;
         
         if (multiboot_get_memory_region(parser, i, &start, &end, &type) == 0) {
-            if (end > highest_addr) {
+            if (end > highest_addr && type == MULTIBOOT_MEMORY_AVAILABLE) {
                 highest_addr = end;
             }
         }
@@ -395,8 +397,8 @@ void* multiboot_get_acpi_rsdp(multiboot_parser_t* parser) {
  * multiboot_get_kernel_range - Retrieves kernel physical memory range
  */
 void multiboot_get_kernel_range(uintptr_t* start, uintptr_t* end) {
-    *start = (uintptr_t)&KPHYS_START;
-    *end = (uintptr_t)&KPHYS_END;
+    *start = (uintptr_t)get_kstart(false);
+    *end = (uintptr_t)get_kend(false);
 }
 
 /*
@@ -457,9 +459,9 @@ void multiboot_dump_info(multiboot_parser_t* parser) {
     print_int((int)((kernel_end - kernel_start) / 1024));
     print(" KiB)\n");
     
-    uint64_t total_mem = multiboot_get_total_memory(parser);
+    uint64_t total_mem = multiboot_get_total_RAM(parser, MEASUREMENT_UNIT_MB);
     print("[MB2] Total memory: ");
-    print_int((int)(total_mem / (1024 * 1024)));
+    print_int((int)total_mem);
     print(" MiB\n");
     
     print("[MB2] Available memory ranges: ");

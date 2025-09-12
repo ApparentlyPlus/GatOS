@@ -45,6 +45,11 @@
 #define MULTIBOOT_TAG_TYPE_EFI64_IH            20
 #define MULTIBOOT_TAG_TYPE_LOAD_BASE_ADDR      21
 
+#define MEASUREMENT_UNIT_BYTES                 1
+#define MEASUREMENT_UNIT_KB                    1024
+#define MEASUREMENT_UNIT_MB                    1024*1024
+#define MEASUREMENT_UNIT_GB                    1024*1024*1024
+
 // Maximum number of memory ranges we can store
 #define MAX_MEMORY_RANGES 64
 
@@ -161,7 +166,8 @@ void multiboot_init(multiboot_parser_t* parser, void* mb_info, uint8_t* buffer, 
 // Information accessors
 const char* multiboot_get_bootloader_name(multiboot_parser_t* parser);
 const char* multiboot_get_command_line(multiboot_parser_t* parser);
-uint64_t multiboot_get_total_memory(multiboot_parser_t* parser);
+uint64_t multiboot_get_total_RAM(multiboot_parser_t* parser, int measurementUnit);
+uint64_t multiboot_get_highest_physical_address(multiboot_parser_t* parser);
 
 // Memory management
 memory_range_t* multiboot_get_available_memory(multiboot_parser_t* parser);
