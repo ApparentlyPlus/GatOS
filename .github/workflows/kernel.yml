@@ -1,0 +1,60 @@
+name: GatOS CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'targets/**'
+      - 'Makefile'
+      - 'setup.sh'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'targets/**'
+      - 'Makefile'
+      - 'setup.sh'
+
+jobs:
+  build_and_test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up dependencies
+      run: |
+        sudo apt update
+        chmod +x setup.sh
+        ./setup.sh
+
+    - name: Build and Run Kernel
+      run: |
+        make clean
+        make
+        timeout 10s qemu-system-x86_64 \
+          -cdrom dist/x86_64/kernel.iso \
+          -nographic \
+          -serial file:serial.log \
+          -no-reboot || true
+
+    - name: Parse Serial Output and Validate Tests
+      run: |
+        if ! grep -q "\[[0-9]\+/[0-9]\+\]" serial.log; then
+          echo "No test output found"
+          exit 1
+        fi
+
+        total=$(grep -o '\[[0-9]\+/[0-9]\+\]' serial.log | tail -n1 | sed 's/.*\/\([0-9]\+\)].*/\1/')
+        passed=$(grep -o '\[[0-9]\+/[0-9]\+\]' serial.log | tail -n1 | sed 's/\[\([0-9]\+\)\/.*/\1/')
+        echo "Passed $passed out of $total tests"
+
+        if [ "$passed" -ne "$total" ]; then
+          echo "$((total - passed)) tests failed"
+          echo "Serial log:"
+          cat serial.log
+          exit 1
+        fi
+
