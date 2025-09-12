@@ -10,6 +10,45 @@
 #include "memory/paging.h"
 #include "print.h"
 #include "serial.h"
+#include "multiboot2.h"
+
+static uint64_t KSTART = (uint64_t)&KPHYS_START;
+static uint64_t KEND = (uint64_t)&KPHYS_END;
+
+/*
+ * align_up - Aligns address to specified boundary
+ */
+uintptr_t align_up(uintptr_t val, uintptr_t align) {
+    return (val + align - 1) & ~(align - 1);
+}
+
+/*
+ * get_kstart - Gets the (current) kernel start
+ */
+uint64_t get_kstart(){
+    return KSTART;
+}
+
+/*
+ * get_kend - Gets the (current) kernel end
+ */
+uint64_t get_kend(){
+    return KEND;
+}
+
+/*
+ * get_canonical_kend - Gets the kernel end as defined by the linker symbol
+ */
+uint64_t get_canonical_kend(){
+    return (uint64_t)(uintptr_t)&KPHYS_END;
+}
+
+/*
+ * get_kend - Gets the kernel start as defined by the linker symbol
+ */
+uint64_t get_canonical_kstart(){
+    return (uint64_t)(uintptr_t)&KPHYS_START;
+}
 
 /*
  * flush_tlb - Invalidates TLB cache
@@ -119,6 +158,27 @@ void cleanup_page_tables(uintptr_t start, uintptr_t end) {
     }
 
     flush_tlb();
+}
+
+/*
+ * reserve_required_tablespace - This function utilizes the multiboot2
+ * struct to find out the RAM size of the machine, then reserves enough
+ * memory for page tables to map all of it to virtual memory.
+ * Returns the size needed for the page tables, in bytes.
+ */
+uint64_t reserve_required_tablespace(multiboot_parser_t* multiboot) {
+    uint64_t total_pages = multiboot_get_total_RAM(multiboot, MEASUREMENT_UNIT_BYTES) / PAGE_SIZE;
+
+    uint64_t total_PTs    = CEIL_DIV(total_pages, PAGE_ENTRIES);
+    uint64_t total_PDs    = CEIL_DIV(total_PTs, PAGE_ENTRIES);
+    uint64_t total_PDPTs  = CEIL_DIV(total_PDs, PAGE_ENTRIES);
+    uint64_t total_PML4s  = CEIL_DIV(total_PDPTs, PAGE_ENTRIES);
+
+    uint64_t table_bytes = (total_PTs + total_PDs + total_PDPTs + total_PML4s) * 4 * MEASUREMENT_UNIT_KB;
+    table_bytes = align_up(table_bytes, PAGE_SIZE); //align to 4kb
+
+    KEND += table_bytes;
+    return table_bytes;
 }
 
 /*

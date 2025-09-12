@@ -34,6 +34,18 @@
 
 
 #ifndef __ASSEMBLER__
+
+#include "multiboot2.h"
+#define CEIL_DIV(x, y) (((x) + (y) - 1) / (y)) //this is hacky and must be removed eventually
+
+uintptr_t align_up(uintptr_t val, uintptr_t align);
+uint64_t get_kstart();
+uint64_t get_kend();
+uint64_t get_canonical_kend();
+uint64_t get_canonical_kstart();
+uint64_t reserve_required_tablespace(multiboot_parser_t* multiboot);
+
+
 void flush_tlb(void);
 void dbg_dump_pmt(void);
 void unmap_identity();

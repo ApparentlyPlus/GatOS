@@ -15,7 +15,7 @@
 #include "memory/paging.h"
 #include "libc/string.h"
 
-#define TOTAL_DBG 5
+#define TOTAL_DBG 6
 
 static char* KERNEL_VERSION = "v1.5.0";
 static uint8_t multiboot_buffer[8 * 1024]; // 8KB should be more than enough
@@ -36,10 +36,15 @@ void kernel_main(void* mb_info) {
 
 	DEBUG("Multiboot structure parsed and copied to higher half", TOTAL_DBG);
 
-	// Unmap anything besides [0, KPHYS_END] and [HH_BASE, HH_BASE + KPHYS_END]
-	cleanup_page_tables(0x0, (uintptr_t)&KPHYS_END);
+	// Extend the kernel region to include space for the page tables to map all physical memory
+	reserve_required_tablespace(&multiboot);
 
-	DEBUG("Unmapped Page Tables aside from the kernel range", TOTAL_DBG);
+	DEBUG("Reserved the required space for page tables in the kernel region", TOTAL_DBG);
+
+	// Unmap anything besides [0, KPHYS_END] and [HH_BASE, HH_BASE + KPHYS_END]
+	cleanup_page_tables(0x0, get_kend());
+
+	DEBUG("Unmapped all memory besides the kernel range", TOTAL_DBG);
 	
 	// Unmap [0, KPHYS_END], we only have [HH_BASE, HH_BASE + KPHYS_END] mapped
 	unmap_identity();
@@ -50,10 +55,7 @@ void kernel_main(void* mb_info) {
        	print("[KERNEL] Failed to initialize multiboot2 parser!\n");
     	return;
     }
-
-	print_int(multiboot_get_total_RAM(&multiboot, MEASUREMENT_UNIT_MB));
-	print("\n");
-
+	
 	check_kernel_position();
 
 	DEBUG("Reached kernel end", TOTAL_DBG);

@@ -7,17 +7,11 @@
  * Author: u/ApparentlyPlus
  */
 
+#include "memory/paging.h"
+#include "libc/string.h"
 #include "multiboot2.h"
 #include "print.h"
-#include "libc/string.h"
 #include <stddef.h>
-
-/*
- * align_up - Aligns address to specified boundary
- */
-static uintptr_t align_up(uintptr_t val, uintptr_t align) {
-    return (val + align - 1) & ~(align - 1);
-}
 
 /*
  * get_next_tag - Advances to next multiboot tag

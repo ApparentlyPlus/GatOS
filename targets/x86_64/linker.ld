@@ -40,6 +40,8 @@ SECTIONS
 		__stack_top = .;
 	}
 
+	. = . + 0x1000; /* Skip a 4KB block so we can safely write there */
+	
 	KPHYS_END = . - HH_KERNEL_OFFSET;
 	KVIRT_END = .;
 }
