@@ -7,13 +7,13 @@
  * Author: u/ApparentlyPlus
  */
 
-#include "memory/paging.h"
-#include "libc/string.h"
-#include "multiboot2.h"
-#include "print.h"
-#include "misc.h"
-#include "serial.h"
-#include "debug.h"
+#include <memory/paging.h>
+#include <libc/string.h>
+#include <multiboot2.h>
+#include <print.h>
+#include <misc.h>
+#include <serial.h>
+#include <debug.h>
 
 #define TOTAL_DBG 7
 

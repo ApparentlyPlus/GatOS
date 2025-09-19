@@ -7,11 +7,12 @@
  * Author: u/ApparentlyPlus
  */
 
-#include "memory/paging.h"
-#include "libc/string.h"
-#include "multiboot2.h"
-#include "print.h"
+#include <memory/paging.h>
+#include <libc/string.h>
+#include <multiboot2.h>
+#include <print.h>
 #include <stddef.h>
+#include <stdbool.h>
 
 /*
  * get_next_tag - Advances to next multiboot tag

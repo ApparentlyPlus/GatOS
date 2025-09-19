@@ -7,7 +7,7 @@
  * Author: u/ApparentlyPlus
  */
 
-#include "serial.h"
+#include <serial.h>
 
 #define COM1_PORT 0x3F8
 

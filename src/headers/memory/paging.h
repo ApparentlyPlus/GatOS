@@ -49,7 +49,9 @@
 
 #ifndef __ASSEMBLER__
 
-#include "multiboot2.h"
+#include <multiboot2.h>
+#include <stdbool.h>
+
 #define CEIL_DIV(x, y) (((x) + (y) - 1) / (y)) // this is hacky and must be removed eventually
 
 uintptr_t align_up(uintptr_t val, uintptr_t align);

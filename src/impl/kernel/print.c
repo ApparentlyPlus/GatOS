@@ -8,8 +8,8 @@
  * Author: u/ApparentlyPlus
  */
 
-#include "print.h"
-#include "memory/paging.h"
+#include <print.h>
+#include <memory/paging.h>
 
 // VGA text mode constants
 const static size_t NUM_COLS = 80;

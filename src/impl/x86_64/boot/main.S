@@ -7,7 +7,8 @@
 # Includes error handling that outputs an error code on screen and halts.
 # Added page table dumping functionality for debugging.
 # -----------------------------------------------------------------------------
-#include "memory/paging.h"
+#include <memory/paging.h>
+
 .intel_syntax noprefix
 
 .global start

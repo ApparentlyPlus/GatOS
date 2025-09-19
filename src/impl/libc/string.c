@@ -7,7 +7,7 @@
  * Author: u/ApparentlyPlus
  */
 
-#include "libc/string.h"
+#include <libc/string.h>
 
 /*
  * memset - Fills memory with constant byte

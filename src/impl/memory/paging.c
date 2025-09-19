@@ -7,11 +7,12 @@
  * Author: u/ApparentlyPlus
  */
 
-#include "memory/paging.h"
-#include "libc/string.h"
-#include "print.h"
-#include "serial.h"
-#include "multiboot2.h"
+#include <stdbool.h>
+#include <memory/paging.h>
+#include <libc/string.h>
+#include <print.h>
+#include <serial.h>
+#include <multiboot2.h>
 
 typedef struct{
     uint64_t total_RAM;
