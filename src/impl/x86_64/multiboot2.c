@@ -10,7 +10,7 @@
 #include <memory/paging.h>
 #include <libc/string.h>
 #include <multiboot2.h>
-#include <print.h>
+#include <vga_stdio.h>
 #include <stddef.h>
 #include <stdbool.h>
 
@@ -185,7 +185,7 @@ static void copy_multiboot_data(multiboot_parser_t* parser, void* mb_info) {
                 memcpy(new_str, str_tag->string, str_len);
                 parser->buffer_used += align_up(str_len, 8);
                 
-                parser->command_line = new_str;
+                parser->command_line = strcmp(new_str, "") == 0 ? "Unknown/None" : new_str;
                 break;
             }
             
@@ -227,11 +227,8 @@ void multiboot_init(multiboot_parser_t* parser, void* mb_info, uint8_t* buffer, 
     size_t required_size = calculate_required_size(mb_info);
 
     if (required_size > buffer_size) {
-        print("[MB2] Error: Buffer too small (need ");
-        print_int((int)required_size);
-        print(", have ");
-        print_int((int)buffer_size);
-        print(")\n");
+        printf("[MB2] Error: Buffer too small (need %d, have %d)\n", 
+               (int)required_size, (int)buffer_size);
         return;
     }
     
@@ -243,11 +240,8 @@ void multiboot_init(multiboot_parser_t* parser, void* mb_info, uint8_t* buffer, 
     
     parser->initialized = 1;
     
-    print("[MB2] Initialization complete (used ");
-    print_int((int)parser->buffer_used);
-    print(" of ");
-    print_int((int)buffer_size);
-    print(" bytes)\n");
+    printf("[MB2] Initialization complete (used %d of %d bytes)\n",
+           (int)parser->buffer_used, (int)buffer_size);
 }
 
 /*
@@ -334,12 +328,12 @@ int multiboot_get_memory_region(multiboot_parser_t* parser, size_t index,
  */
 int multiboot_get_module_count(multiboot_parser_t* parser) {
     if (!parser->initialized) return 0;
-    
+
     int count = 0;
     multiboot_tag_t* tag = (multiboot_tag_t*)((uintptr_t)parser->info + sizeof(multiboot_info_t));
     
     while (tag->type != MULTIBOOT_TAG_TYPE_END) {
-        if (tag->type == MULTIBOOT_TAG_TYPE_MODULE) {
+        if (tag->type == MULTIBOOT_TAG_TYPE_MODULE) { // Page fault here immediately in the first iteration
             count++;
         }
         tag = get_next_tag(tag);
@@ -432,72 +426,46 @@ int multiboot_is_page_used(multiboot_parser_t* parser, uintptr_t start, size_t p
  */
 void multiboot_dump_info(multiboot_parser_t* parser) {
     if (!parser->initialized) {
-        print("[MB2] Parser not initialized\n");
+        printf("[MB2] Parser not initialized\n");
         return;
     }
     
-    print("[MB2] === Multiboot2 Information ===\n");
+    printf("[MB2] < Multiboot2 Information: >\n");
     
     if (parser->bootloader_name) {
-        print("[MB2] Bootloader: ");
-        print(parser->bootloader_name);
-        print("\n");
+        printf("[MB2] Bootloader: %s\n", parser->bootloader_name);
     }
     
     if (parser->command_line) {
-        print("[MB2] Command line: ");
-        print(parser->command_line);
-        print("\n");
+        printf("[MB2] Command line: %s\n", parser->command_line);
     }
     
     uintptr_t kernel_start, kernel_end;
     multiboot_get_kernel_range(&kernel_start, &kernel_end);
-    print("[MB2] Kernel range: ");
-    print_hex64(kernel_start);
-    print(" - ");
-    print_hex64(kernel_end);
-    print(" (");
-    print_int((int)((kernel_end - kernel_start) / 1024));
-    print(" KiB)\n");
+    printf("[MB2] Kernel range: 0x%p - 0x%p (%d KiB)\n", 
+           kernel_start, kernel_end, (int)((kernel_end - kernel_start) / 1024));
     
     uint64_t total_mem = multiboot_get_total_RAM(parser, MEASUREMENT_UNIT_MB);
-    print("[MB2] Total memory: ");
-    print_int((int)total_mem);
-    print(" MiB\n");
+    printf("[MB2] Total memory: %d MiB\n", (int)total_mem);
     
-    print("[MB2] Available memory ranges: ");
-    print_int((int)parser->available_memory_count);
-    print("\n");
+    printf("[MB2] Available memory ranges: %d\n", (int)parser->available_memory_count);
     
     memory_range_t* range = parser->available_memory_head;
     int i = 0;
     while (range) {
-        print("  [");
-        print_int(i++);
-        print("] ");
-        print_hex64(range->start);
-        print(" - ");
-        print_hex64(range->end);
-        print(" (");
-        print_int((int)((range->end - range->start) / (1024 * 1024)));
-        print(" MiB)\n");
+        printf("  [%d] 0x%p - 0x%p (%d MiB)\n", 
+               i++, range->start, range->end, 
+               (int)((range->end - range->start) / (1024 * 1024)));
         range = range->next;
     }
     
     int modules = multiboot_get_module_count(parser);
-    print("[MB2] Modules: ");
-    print_int(modules);
-    print("\n");
+    printf("[MB2] Modules: %d\n", modules);
     
     multiboot_framebuffer_t* fb = multiboot_get_framebuffer(parser);
     if (fb) {
-        print("[MB2] Framebuffer: ");
-        print_int(fb->width);
-        print("x");
-        print_int(fb->height);
-        print(" @ ");
-        print_int(fb->bpp);
-        print("bpp\n");
+        printf("[MB2] Framebuffer: %dx%d @ %dbpp\n", 
+               fb->width, fb->height, fb->bpp);
     }
 }
 
@@ -506,47 +474,38 @@ void multiboot_dump_info(multiboot_parser_t* parser) {
  */
 void multiboot_dump_memory_map(multiboot_parser_t* parser) {
     if (!parser->memory_map) {
-        print("[MB2] No memory map found\n");
+        printf("[MB2] No memory map found\n");
         return;
     }
     
-    print("[MB2] === Memory Map ===\n");
+    printf("[MB2] < Memory Map: >\n");
     
     for (size_t i = 0; i < parser->memory_map_length; i++) {
         uintptr_t start, end;
         uint32_t type;
         
         if (multiboot_get_memory_region(parser, i, &start, &end, &type) == 0) {
-            print("  [");
-            print_int((int)i);
-            print("] ");
-            print_hex64(start);
-            print(" - ");
-            print_hex64(end);
-            print(" (");
-            print_int((int)((end - start) / 1024));
-            print(" KiB) - ");
+            printf("  [%d] 0x%p - 0x%p (%d KiB) - ", 
+                   (int)i, start, end, (int)((end - start) / 1024));
             
             switch (type) {
                 case MULTIBOOT_MEMORY_AVAILABLE:
-                    print("Available\n");
+                    printf("Available\n");
                     break;
                 case MULTIBOOT_MEMORY_RESERVED:
-                    print("Reserved\n");
+                    printf("Reserved\n");
                     break;
                 case MULTIBOOT_MEMORY_ACPI_RECLAIMABLE:
-                    print("ACPI Reclaimable\n");
+                    printf("ACPI Reclaimable\n");
                     break;
                 case MULTIBOOT_MEMORY_NVS:
-                    print("ACPI NVS\n");
+                    printf("ACPI NVS\n");
                     break;
                 case MULTIBOOT_MEMORY_BADRAM:
-                    print("Bad RAM\n");
+                    printf("Bad RAM\n");
                     break;
                 default:
-                    print("Unknown (");
-                    print_int(type);
-                    print(")\n");
+                    printf("Unknown (%d)\n", type);
                     break;
             }
         }

@@ -10,7 +10,7 @@
 #include <stdbool.h>
 #include <memory/paging.h>
 #include <libc/string.h>
-#include <print.h>
+#include <vga_stdio.h>
 #include <serial.h>
 #include <multiboot2.h>
 
@@ -218,7 +218,7 @@ uint64_t reserve_required_tablespace(multiboot_parser_t* multiboot) {
 void build_physmap() {
 
     if(systemStruct.total_RAM == 0){
-        print("[ERROR] No systemStruct has been built. The required tablespace has not been reserved.");
+        printf("[ERROR] No systemStruct has been built. The required tablespace has not been reserved.");
         return;
     }
 

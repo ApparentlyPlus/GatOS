@@ -7,34 +7,34 @@
  * Author: u/ApparentlyPlus
  */
 
-#include <print.h>
+#include <vga_stdio.h>
+#include <vga_console.h>
 #include <stdint.h>
 
 /*
  * print_banner - Prints the GatOS kernel banner and metadata to the screen
  */
 void print_banner(char* KERNEL_VERSION){
-	print_set_color(PRINT_COLOR_CYAN, PRINT_COLOR_BLACK);
-	print(
-"  ____       _    ___   ____\n"
-" / ___| __ _| |_ / _ \\ / ___|\n"
-"| |  _ / _` | __| | | |\\___ \\\n"
-"| |_| | (_| | | | |_| | ___) |\n"
-" \\____|\\__,_|\\_\\ \\___/ |____/\n");
+    console_set_color(CONSOLE_COLOR_CYAN, CONSOLE_COLOR_BLACK);
+    printf(
+            "  ____       _    ___   ____\n"
+            " / ___| __ _| |_ / _ \\ / ___|\n"
+            "| |  _ / _` | __| | | |\\___ \\\n"
+            "| |_| | (_| | | | |_| | ___) |\n"
+            " \\____|\\__,_|\\_\\ \\___/ |____/\n");
 
-	print_set_color(PRINT_COLOR_MAGENTA, PRINT_COLOR_BLACK);
-	print("\nG a t O S   K e r n e l  ");
-	print(KERNEL_VERSION);
-	print("\n\n");
-	
-	print_set_color(PRINT_COLOR_YELLOW, PRINT_COLOR_BLACK);
-	print("This is a 64-bit long mode kernel!\n");
-	print("Currently in VGA text mode, for testing.\n");
-	print("Created by: u/ApparentlyPlus\n");
-	print("Name inspired by: SkylOS, a project by u/BillyZeim\n\n");
+    console_set_color(CONSOLE_COLOR_MAGENTA, CONSOLE_COLOR_BLACK);
+    printf("\nG a t O S   K e r n e l  %s\n\n", KERNEL_VERSION);
+    
+    console_set_color(CONSOLE_COLOR_YELLOW, CONSOLE_COLOR_BLACK);
+    printf(
+            "This is a 64-bit long mode kernel!\n"
+            "Currently in VGA text mode, for testing.\n"
+            "Created by: u/ApparentlyPlus\n"
+            "Name inspired by: SkylOS, a project by u/BillyZeim\n\n");
 
-	print_set_color(PRINT_COLOR_WHITE, PRINT_COLOR_BLACK);
-	print("---------------------------------------------------\n\n");
+    console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
+    printf("---------------------------------------------------\n\n");
 }
 
 /*
@@ -77,8 +77,8 @@ void check_kernel_position() {
     uintptr_t rip = get_rip();
    
     if (rip >= 0xFFFFFFFF80000000) {
-        print("[KERNEL] Running in higher-half kernel space\n");
+        printf("[KERNEL] Running in higher-half kernel space\n");
     } else {
-        print("[KERNEL] Running in lower memory\n");
+        printf("[KERNEL] Running in lower memory\n");
     }
 }
