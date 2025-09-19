@@ -20,7 +20,6 @@
 
 static char* KERNEL_VERSION = "v1.5.6";
 static uint8_t multiboot_buffer[8 * 1024]; // 8KB should be more than enough
-static multiboot_parser_t multiboot = {0}; // Should be outside the main's stack
 
 /*
  * kernel_main - Main entry point for the GatOS kernel
@@ -30,6 +29,8 @@ void kernel_main(void* mb_info) {
 
 	console_clear();
 	print_banner(KERNEL_VERSION);
+
+	multiboot_parser_t multiboot = {0};
 	
 	// Initialize multiboot parser (copies everything to higher half)
     multiboot_init(&multiboot, mb_info, multiboot_buffer, sizeof(multiboot_buffer));

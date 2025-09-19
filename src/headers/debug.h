@@ -10,7 +10,7 @@
 static int DBG_COUNTER = 0;
 
 #define DEBUG(str, total) do { \
-    char _debug_buf[64]; \
+    char _debug_buf[100]; \
     char *_debug_ptr = _debug_buf; \
     \
     *_debug_ptr++ = '['; \
