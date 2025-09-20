@@ -6,7 +6,7 @@
 GatOS is a cleanly designed, modular kernel serving as the foundational layer for building toy operating systems. It is also part of my undergraduate thesis at the [University of Macedonia](https://www.uom.gr/en/dai), and serves as the backbone of a configurable, toy-OS building toolchain called PawStack.
 
 > [!NOTE]
-> This project is currently under heavily experimental development and is by no means ready for production use or general local deployment.
+> This project is currently under heavy experimental development and is by no means ready for production use or general local deployment.
 
 The first section of this README focuses on providing some insight as to the vision of this project. If you're just interested in running GatOS in your system, skip to the [Getting Started](#getting-started) section.
 
@@ -139,7 +139,7 @@ It's not pretty, but it works for now while the core functionality is being deve
 Since there's no automated test suite, "testing" means running the kernel and checking if your debug messages appear:
 
 ```c
-#include "debug.h"
+#include <debug.h>
 #define TOTAL_DBG 2 # Number of total DEBUG calls
 
 void my_function() {
@@ -207,6 +207,7 @@ The restrictive nature is partly due to academic requirements and partly because
 - [MittOS64](https://github.com/thomasloven/mittos64) - Very good documentation that helped me through a lot of the struggles so far
 - [Simple-OS](https://github.com/httpe/simple-os) - An already self-hosted modern kernel with libc ported, plenty useful for peeking inside implementations
 - [OS-Series](https://github.com/davidcallanan/os-series/) - Helped me boostrap the entire project
+- [OSDev-Notes](https://github.com/dreamportdev/Osdev-Notes/tree/master) - A book like no other, perfect for understanding every single detail of OS development
 
 ## Note to Readers
 
