@@ -247,7 +247,8 @@ Provides a high-level graphics abstraction:
 ### 3. **Key Principles**
 
 1. **Gata Always Sees the High-Level API**
-   Gata programs never directly manipulate physical memory, paging, or devices. All such operations are abstracted behind safe, consistent APIs.
+
+   Gata programs never directly manipulate physical memory, paging, or devices. All such operations are abstracted behind safe, consistent APIs. The idea is to only expose the fundamental building blocks. Anything that ***can*** be written in Gata ***should*** be written in Gata, not GatOS.
 
 2. **Incremental Expansion**
 
