@@ -76,7 +76,7 @@ For GatOS, **the proper assembler to use is GAS for a couple of reasons:**
 
 
 > [!IMPORTANT] 
-> I initially started GatOS using **NASM**, but when I later implemented a higher-half kernel (which we’ll cover in a future document), everything fell apart. **NASM no real integration with C**, making the project a nightmare to maintain. In hindsight, I had to redo almost everything to switch to GAS. Don’t make the same mistake — choose GAS from the start. It supports Intel syntax, works seamlessly with GCC, C, and C++, and even lets you include C/C++ headers, which are properly preprocessed.
+> I initially started GatOS using **NASM**, but when I later implemented a higher-half kernel (which we’ll cover in a future document), everything fell apart. **NASM has no real integration with C**, making the project a nightmare to maintain. In hindsight, I had to redo almost everything to switch to GAS. Don’t make the same mistake — choose GAS from the start. It supports Intel syntax, works seamlessly with GCC, C, and C++, and even lets you include C/C++ headers, which are properly preprocessed.
 
 ## What is a Linker Script?
 
