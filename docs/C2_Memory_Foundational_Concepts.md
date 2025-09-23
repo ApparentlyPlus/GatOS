@@ -544,7 +544,7 @@ Okay, so what? What's the problem? Well, in **32-bit x86 NASM**,
 sub eax, 0x123456789ABCDEF0
 ```
 
-NASM will just error out — the constant doesn’t fit. So… oops? What the hell? How in the world do we actually subtract `HIGHER_HALF_BASE`?
+NASM will just error out — the constant doesn’t fit. So… oops? What the hell? How in the world do we actually subtract `KERNEL_VIRTUAL_BASE`?
 
 Well, that’s why we chose the **GNU Assembler (GAS)** over **NASM**. Yours truly told you why that coice would eventually pay off :) 
 
