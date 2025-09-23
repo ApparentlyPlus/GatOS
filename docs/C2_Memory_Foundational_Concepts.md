@@ -519,7 +519,7 @@ That means GatOS starts out in **32-bit protected mode**, so we can focus on wri
 >   * **Virtual Address (VMA):** `0xFFFFFFFF80010000`
 >   * **Physical Load Address (LMA):** `0x10000`
 >
-> ***This separation lets the kernel start executing at its physical address, then seamlessly continue at its virtual address once paging kicks in.***
+> This separation lets the kernel start executing at its physical address, then seamlessly continue at its virtual address once paging kicks in.
 
 So everything is *loaded* at low addresses but *linked* at high addresses. In practice, the kernel *thinks* it’s always running in the higher half. If you run `objdump` on the binary, you’ll see:
 
@@ -532,7 +532,7 @@ ffffffff80010018 l       .boot  0000000000000000 header_end
 
 Every symbol shows up in higher-half space. Neat, right?
 
-**Not so fast.** In 32-bit mode, our registers are only 32 bits wide. If we want to access *anything (any symbol)* where it's *actually loaded*, we’d need to subtract `KERNEL_VIRTUAL_BASE` — which is a full 64-bit constant.
+**Not so fast.** In 32-bit mode, our registers are only 32 bits wide. If we want to access *any symbol* where it's *actually loaded*, we’d need to subtract `KERNEL_VIRTUAL_BASE` from it — which is a full 64-bit constant.
 
 Okay, so what? What's the problem? Well, in **32-bit x86 NASM**,
 
