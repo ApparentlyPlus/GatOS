@@ -35,9 +35,9 @@ SECTIONS
 
 	.stack : AT(ADDR(.stack) - KERNEL_VIRTUAL_BASE) ALIGN(4K)
 	{
-		__stack_bottom = .;
+		KERNEL_STACK_TOP = .;
 		. = . + 0x8000; /* 32 KiB should be fine for now, will manage in C later */
-		__stack_top = .;
+		KERNEL_STACK_TOP = .;
 	}
 
 	. = . + 0x1000; /* Skip a 4KB block so we can safely write there */

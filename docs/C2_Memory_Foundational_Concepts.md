@@ -166,7 +166,7 @@ Suppose a program has 4 pages, and its page table looks like this:
 
 If the program accesses **page 2**, the PMT translates it to **frame 8**, and the system reads from that physical memory location. The program still sees its memory as one continuous block through pages, even though the corresponding physical memory frames are scattered.
 
->[!IMPORTANT]
+>[!TIP]
 > What we’ve been intuitively calling the program’s *pages* are, in practice, referred to as *virtual pages*.
 
 ## Virtual Pages
@@ -405,12 +405,213 @@ Let's translate the Virtual Address `0x00007FFF00402010`
 
 This demonstrates how **64-bit paging adds two extra levels** (PML4 and PDPT) to handle the vastly larger address space, while still using the same 4 KB page size.
 
-## The Identity Mapping
+>[!NOTE]
+> In the [`docs/tools`](/docs/tools/) subfolder of the project, I’ve included a Python script named [`virt_breakdown.py`](/docs/tools/virt_breakdown.py). This script takes a 64-bit virtual address as input and breaks it down into the corresponding indices for the **PML4**, **PDPT**, **PD**, and **PT** tables. These indices indicate which entries must be populated in each table to map the virtual address to a physical address.
 
->[!WARNING]
->*This section is not yet ready. Please check it out tomorrow!*
+
+## The Identity Map
+
+When our kernel is still in 32-bit protected mode before we enable paging, the CPU is executing instructions directly from **physical memory**.
+
+The moment we enable paging, the Memory Management Unit (MMU) wakes up and starts treating every single address the CPU uses as a *virtual address*.
+
+Picture this scenario: Your early boot code is running normally at a specific physical address in memory (let's call it `X`). You carefully write the logic to build your page tables and then execute the instruction that flips the switch: `cr0` is set, and paging is now enabled.
+
+Immediately, the very next instruction the CPU needs to fetch (Let's call it `X+1`) is now treated as a **virtual address**. The CPU sends this address to the MMU, which dutifully walks the page tables to find out which physical frame it corresponds to.
+
+But what if your page tables haven't created a mapping for the address `X+1` (i.e. `X+1` has not been mapped to a physical frame in your page tables)?
+
+The MMU looks up the address, finds no valid entry, and raises a **page fault**. The processor halts, and you're left with a definitive sign of failure: a blank, unresponsive screen.
+
+This is precisely why we need an **identity map** for this critical transition. An identity map establishes a one-to-one mapping for the kernel's entire physical address range — the region where the kernel's code and data (including its `.boot`, `.text`, `.data`, `.bss`, `.rodata`, and `.stack` sections) reside in physical memory.
+
+Before enabling paging, the CPU executes instructions directly from a specific physical address within this range, say `0x00100000`. The purpose of the identity map is to ensure that the moment paging is enabled, the virtual address `0x00100000` translates *directly* back to the physical address `0x00100000`.
+
+More formally, if the kernel occupies the physical memory range `[0x0, KPHYS_END]`, an identity map defines a corresponding virtual address range `[0x0, KVIRT_END] = [0x0, KPHYS_END]`, where every virtual address within it is mapped to its identical physical address. Through the page tables, we enforce the rule that for any address in this range, `virt = phys`. This guarantees that the CPU, immediately after switching to virtual memory, can continue to access the kernel's code and data at their original locations without causing a fault.
+
+Without it, the instruction pointer would immediately jump to a virtual address with no defined mapping, causing a page fault.  This provides a stable bridge, allowing the code that enabled paging to continue running without interruption before any more complex virtual memory layouts are established.
+
+>[!TIP]
+> It is good practice to *identity map* the entire range `[0x0, KPHYS_END]` rather than just `[KPHYS_START, KPHYS_END]`. The lower physical memory region, `[0x0, KPHYS_START)`, usually contains critical early boot data structures such as the GDT, or multiboot information — placed there by the bootloader. 
+>
+> If this low-memory region is not identity-mapped, the kernel will incur a page fault when it subsequently attempts to access these structures, as the MMU will find no valid translation for their addresses.
+>
+> Ideally, some kernels (like GatOS) identity map a large, fixed range (e.g, the first 1GB of physical memory) instead of just the exact kernel range (always rounded up to `4KiB`, since that's the page size we use). This provides significant memory leeway, giving your kernel a large pool of pre-mapped addresses to use later. 
+>
+> The question of how much memory to identity map is up to you, but it is critical to ensure you reserve enough page tables to accommodate the entire chosen range.
+
 
 ## A Higher Half Kernel
 
->[!WARNING]
->*This section is not yet ready. Please check it out tomorrow!*
+While an identity map is a necessary tool for the transition to paging, relying on it permanently is not ideal. A more sophisticated and robust design, used by most modern operating systems, is the **Higher Half Kernel**. In this model, the kernel is mapped into the upper region of the virtual address space (for instance, starting at virtual address `0xFFFFFFFF80000000`), while the lower portion is reserved for user-space applications.
+
+>[!NOTE]
+> Placing the kernel at `0xFFFFFFFF80000000` offers a significant advantage: it enables the use of a efficient code model for the kernel known as the `-mcmodel=kernel` code model (GCC flag). 
+>
+> This model assumes that all code and statically defined data will be located in the top 2GB of the virtual address space. The key benefit is that instructions can use 32-bit signed immediate displacements for addressing, which are smaller and faster, while still being able to reach any address within that 2GB window relative to the instruction pointer (RIP-relative addressing). 
+>
+> This is more efficient than needing to load full 64-bit addresses for every memory reference.
+
+### The Problem with a Permanent Identity Map
+
+To understand why a higher-half design is superior, consider the limitations of permanently running the kernel from an identity-mapped region in the lower addresses:
+
+1. **User Space Fragility:** In a unified address space, a user application's code, heap, and stack would also be mapped into the lower virtual addresses. A single null pointer dereference in a userspace program (attempting to access virtual address `0x0`) would actually access a valid, low physical address — likely belonging to a critical kernel data structure. This would corrupt kernel state and crash the system, violating memory protection entirely.
+2. **Wasted Virtual Space:** The virtual address space is a valuable resource. By placing the kernel in the lower gigabytes, you fragment the contiguous virtual memory available to a single large user process.
+
+### The Higher Half Solution
+
+The higher-half model elegantly solves these problems by segregating the address space:
+
+*   **Lower Half (e.g., `0x0` to `0x00007FFFFFFFFFFF`):** Reserved exclusively for user processes. Each process gets its own independent, private view of this region through its per-process page tables.
+*   **Higher Half (e.g., `0xFFFF800000000000` to `0xFFFFFFFFFFFFFFFF`):** Reserved for the kernel. This mapping is **global**, meaning it is present and identical in the page tables of *every* process.
+
+This separation yields critical benefits:
+
+*  **Strong Memory Protection:** A userspace application can only manipulate addresses in the lower half. Any attempt to access the kernel's higher half without privilege will trigger a page fault. Similarly, a null pointer dereference (`0x0`) in userspace will correctly trigger a segmentation fault, as that virtual page is unmapped, instead of silently corrupting the kernel.
+*  **Efficient Context Switching:** When switching from one user process to another, the operating system can perform a "context switch" by simply loading the new process's page directory. The kernel's mappings remain unchanged and accessible, allowing the kernel code to run uninterrupted without needing to remap itself for each process.
+*  **Simpler Virtual Memory Management:** The kernel has a single, predictable virtual address for its own code and data, regardless of which user process is currently active. This greatly simplifies memory management within the kernel itself.
+
+>[!IMPORTANT]
+> The higher-half range in the 64-bit virtual address space spans from `0xFFFF800000000000` to `0xFFFFFFFFFFFFFFFF`. This entire upper region is managed by the kernel.
+>
+> **However**, the kernel's code and data **are not** typically located at the very start of this range (`0xFFFF800000000000`). Instead, they are placed at a specific offset within it, commonly defined as `KERNEL_VIRTUAL_BASE = 0xFFFFFFFF80000000`.
+>
+> This specific placement, as previously explained, is strategic. It positions the kernel within the last 2 gigabytes of the address space, enabling efficient RIP-relative addressing with 32-bit displacements. 
+>
+> The vast portion of the higher-half range before `KERNEL_VIRTUAL_BASE` remains available for other kernel purposes, such as mapping physical memory (**physmap**), I/O spaces, or other system structures, while the kernel's core image resides at this optimized, fixed base address.
+
+### The Bootstrapping Challenge
+
+Implementing a higher-half kernel introduces a key complexity during bootstrapping. The kernel is initially loaded by the bootloader into a *physical* address in low memory (e.g., `KPHYS_START`). However, the kernel's code is ultimately intended to be linked to run from a *virtual* address in the high half (e.g., `KERNEL_VIRTUAL_BASE + KPHYS_START`).
+
+This creates a dilemma: the moment paging is enabled, the CPU expects to find the next instruction at a high virtual address, but the kernel's code is still physically located in low memory. The solution is a two-stage mapping at boot time:
+
+1.  **Temporary Identity Map:** As described in the previous section, you must create a temporary identity map for the kernel's physical location. This allows the code that enables paging to continue executing without crashing.
+2.  **Higher-Half Map:** Simultaneously, you set up the permanent higher-half mapping, linking the kernel's target virtual range (`[KERNEL_VIRTUAL_BASE + KPHYS_START, KERNEL_VIRTUAL_BASE + KPHYS_END]`) to its physical range (`[KPHYS_START, KPHYS_END]`). This is essentially the same range adjusted by adding `KERNEL_VIRTUAL_BASE`.
+
+>[!TIP]
+> Once again, for safety, it is better to map the entire physical range `[0x0, KPHYS_END]` to the virtual range `[KERNEL_VIRTUAL_BASE, KERNEL_VIRTUAL_BASE + KPHYS_END]`. We will refer to this resulting virtual address space as `[KERNEL_VIRTUAL_BASE, KVIRT_END]` from this point forward.
+
+Once paging is enabled and the CPU is successfully executing through the temporary identity map, the kernel immediately jumps to its higher-half virtual address (this jump involves adding the `KERNEL_VIRTUAL_BASE` value to all relevant registers, e.g., the instruction pointer `RIP`, the stack pointer `RSP`, and any other registers holding pointers to kernel data structures). 
+
+Since the kernel's higher-half mapping was created by adding the same `KERNEL_VIRTUAL_BASE` offset to its physical base address, adjusting these registers will cause them to resolve to the exact same physical addresses they did through the identity map, ensuring a seamless transition.
+
+After this jump, the temporary identity map can often be removed, cleaning up the virtual address space and leaving only the clean, higher-half kernel mapping.
+
+## Where the magic happens ;)
+
+Have you been paying attention? If you’ve been following along carefully, this is the moment *everything clicks*. Every little choice we made up until now, it all comes together here. Let me show you what all the setup has been leading toward. This part is pure GatOS :)
+
+>[!CAUTION]
+> Welcome to the payoff. Strap in because it's about to get **bumpy.**
+
+Remember the toolchain from the last chapter? We chose GRUB as our bootloader because it gives us the **multiboot2 struct**, which we can parse to grab critical machine info (like how much RAM we’ve got). It also saved us the headache of writing a custom bootloader.
+
+That means GatOS starts out in **32-bit protected mode**, so we can focus on writing assembly there instead of mucking around with real mode. Now think back to the linker script we broke down: it linked everything at `KERNEL_VIRTUAL_BASE`. To quote myself:
+
+> * The kernel is **linked to run at a high virtual address** (`KERNEL_VIRTUAL_BASE = 0xFFFFFFFF80000000`), but the bootloader actually loads it at a lower **physical address** (`KPHYS_START = 0x10000`).
+> * The `AT()` directive tells the linker:
+>
+>   > “Place this section in the binary at this **physical load address**, but reference it in the code using this **virtual address**.”
+> * Example (`.boot` section):
+>
+>   * **Virtual Address (VMA):** `0xFFFFFFFF80010000`
+>   * **Physical Load Address (LMA):** `0x10000`
+>
+> ***This separation lets the kernel start executing at its physical address, then seamlessly continue at its virtual address once paging kicks in.***
+
+So everything is *loaded* at low addresses but *linked* at high addresses. In practice, the kernel *thinks* it’s always running in the higher half. If you run `objdump` on the binary, you’ll see:
+
+```
+SYMBOL TABLE:
+ffffffff80010000 l       .boot  0000000000000000 header_start
+ffffffff80010018 l       .boot  0000000000000000 header_end
+...
+```
+
+Every symbol shows up in higher-half space. Neat, right?
+
+**Not so fast.** In 32-bit mode, our registers are only 32 bits wide. If we want to access *anything (any symbol)* where it's *actually loaded*, we’d need to subtract `KERNEL_VIRTUAL_BASE` — which is a full 64-bit constant.
+
+Okay, so what? What's the problem? Well, in **32-bit x86 NASM**,
+
+* Registers (`eax`, `ebx`, etc.) are only 32 bits.
+* You can’t shove a 64-bit immediate into a single instruction.
+* So something like this is illegal:
+
+```nasm
+sub eax, 0x123456789ABCDEF0
+```
+
+NASM will just error out — the constant doesn’t fit. So… oops? What the hell? How in the world do we actually subtract `HIGHER_HALF_BASE`?
+
+Well, that’s why we chose the **GNU Assembler (GAS)** over **NASM**. Yours truly told you why that coice would eventually pay off :) 
+
+Since GAS is integrated with the C preprocessor, we can just include C headers and let macros do the heavy lifting for us.
+
+For example, in `paging.h`:
+
+```c
+#define KERNEL_VIRTUAL_BASE 0xFFFFFFFF80000000
+
+#ifdef __ASSEMBLER__
+
+#define KERNEL_V2P(a) ((a) - KERNEL_VIRTUAL_BASE)
+#define KERNEL_P2V(a) ((a) + KERNEL_VIRTUAL_BASE)
+
+#else
+
+#include <stdint.h>
+#define KERNEL_V2P(a) ((uintptr_t)(a) & ~KERNEL_VIRTUAL_BASE)
+#define KERNEL_P2V(a) ((uintptr_t)(a) | KERNEL_VIRTUAL_BASE)
+
+#endif
+```
+
+And then in assembly (`.S` file):
+
+```as
+#include <paging.h>
+
+.intel_syntax noprefix
+
+.extern KERNEL_STACK_TOP # Defined in the linker
+
+start:
+    # Example: set the stack pointer to the top of the stack
+    mov esp, offset KERNEL_V2P(KERNEL_STACK_TOP)
+```
+
+And boom! The preprocessor handles the calculation for us. Instead of worrying about subtracting giant 64-bit constants in 32-bit mode, we just use the macros and get the correct *load* address from the linker’s `AT()` directive.
+
+With these in place, we can set up everything as needed in 32-bit mode, perform the long mode jump, and then, in 64-bit mode, jump directly to a higher-half-linked function. Assuming the Higher Half page mappings are correct, execution continues seamlessly.
+
+**But wait, there's more!**
+
+As mentioned earlier in this document, GatOS preallocates page tables to map the first `1GB` of physical memory. These tables create two distinct virtual mappings for the same physical range:
+
+- `[0x0, 1GB]` physical → `[0x0, 1GB]` virtual *(Identity Map)*
+- `[0x0, 1GB]` physical → `[KERNEL_VIRTUAL_BASE, KERNEL_VIRTUAL_BASE + 1GB]` virtual *(Higher Half Map)*
+
+The kernel's own range, `[KPHYS_START, KPHYS_END]`, resides within this first gigabyte of physical memory.
+
+Also rememeber how I mentioned that this `1GB` fixed mapping gives a lot of leeway for GatOS to handle memory? Well, you're about to see why.
+
+>[!NOTE]
+> For clarity, the range `[KERNEL_VIRTUAL_BASE + KPHYS_START, KERNEL_VIRTUAL_BASE + KPHYS_END]` will be referred to as `[KVIRT_START, KVIRT_END]`.
+
+All kernel sections (`.text`, `.data`, etc.) reside within the physical range `[KPHYS_START, KPHYS_END]` and, consequently, the virtual range `[KVIRT_START, KVIRT_END]`. However, our page tables have already mapped the entire larger range up to `KERNEL_VIRTUAL_BASE + 1GB`.
+
+Here is how GatOS uses this extra space:
+1. It parses the Multiboot2 structure from GRUB to determine the total size of the system's RAM.
+2. It calculates how many page tables are required to map all of this physical memory into a virtual address space, and then calculates the total memory, `X` bytes, needed to store these page tables.
+3. GatOS then internally adjusts `KVIRT_END` to `KVIRT_END + X`. This is safe because we know `KVIRT_END + X` will not exceed `KERNEL_VIRTUAL_BASE + 1GB` for any reasonable amount of RAM.
+4. Using this newly reserved space `X`, GatOS populates the page tables to map the entire physical memory (the *physmap*) into the higher half virtual address starting at `PHYSMAP_VIRTUAL_BASE = 0xFFFF800000000000`. The kernel's own mapping at `KERNEL_VIRTUAL_BASE` remains intact within this new page structure.
+5. Finally, it unmaps all virtual memory regions except for two essential ones:
+    - `[KERNEL_VIRTUAL_BASE, KVIRT_END]` for the kernel itself.
+    - `[PHYSMAP_VIRTUAL_BASE, PHYSMAP_VIRTUAL_BASE + RAM_SIZE]` for the physmap.
+
+We will see in future documents why we need this *physmap*, but it has to do with bootstrapping our *Physical Memory Allocator (PMM)* without causing page faults because the addresses aren't mapped.
+
+*Ain't ya friggin' excited?*

@@ -16,14 +16,14 @@
 .global PML4
 
 .extern long_mode_start
-.extern __stack_top
+.extern KERNEL_STACK_TOP
 
 .section .text
 .code32
 
 start:
 	# Set stack pointer to top of the stack defined by linker symbol
-	mov esp, offset KERNEL_V2P(__stack_top)
+	mov esp, offset KERNEL_V2P(KERNEL_STACK_TOP)
 
 	# I am transferring the multiboot information
 	# directly to edi which will then be zero extended 
