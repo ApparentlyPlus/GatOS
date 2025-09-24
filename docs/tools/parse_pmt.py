@@ -101,6 +101,122 @@ class PageTableParser:
             'valid': True
         }
 
+    def _build_virtual_addr(self, pml4_idx, pdpt_idx, pd_idx, pt_idx):
+        """Build a canonical virtual address from page table indices"""
+        # Build the 48-bit virtual address
+        addr_48 = (pml4_idx << 39) | (pdpt_idx << 30) | (pd_idx << 21) | (pt_idx << 12)
+        
+        # Check if this is a high-half address (bit 47 set)
+        if addr_48 & (1 << 47):
+            # Sign extend to 64 bits (upper 16 bits set to 1)
+            addr_64 = addr_48 | (0xFFFF << 48)
+        else:
+            # Lower half address (upper 16 bits set to 0)
+            addr_64 = addr_48
+        
+        return addr_64
+
+    def get_mapped_ranges(self):
+        """Get all mapped virtual to physical ranges, merging contiguous ranges"""
+        ranges = []
+        
+        # Iterate through all page table entries
+        for pml4_idx, pdpt_dict in self.pml4.items():
+            for pdpt_idx, pd_dict in pdpt_dict.items():
+                for pd_idx, pt_dict in pd_dict.items():
+                    # Sort PT entries by index
+                    pt_indices = sorted(pt_dict.keys())
+                    
+                    if not pt_indices:
+                        continue
+                    
+                    # Start with first PT entry
+                    current_virt_start = self._build_virtual_addr(pml4_idx, pdpt_idx, pd_idx, pt_indices[0])
+                    current_phys_start = pt_dict[pt_indices[0]] & ~0xFFF
+                    current_virt_end = current_virt_start + 0xFFF
+                    current_phys_end = current_phys_start + 0xFFF
+                    
+                    for i in range(1, len(pt_indices)):
+                        # Calculate current virtual and physical addresses
+                        virt_addr = self._build_virtual_addr(pml4_idx, pdpt_idx, pd_idx, pt_indices[i])
+                        phys_addr = pt_dict[pt_indices[i]] & ~0xFFF
+                        
+                        # Check if this entry is contiguous with previous
+                        if (virt_addr == current_virt_end + 1 and 
+                            phys_addr == current_phys_end + 1):
+                            # Extend current range
+                            current_virt_end = virt_addr + 0xFFF
+                            current_phys_end = phys_addr + 0xFFF
+                        else:
+                            # Save current range and start new one
+                            ranges.append({
+                                'virt_start': current_virt_start,
+                                'virt_end': current_virt_end,
+                                'phys_start': current_phys_start,
+                                'phys_end': current_phys_end
+                            })
+                            
+                            current_virt_start = virt_addr
+                            current_virt_end = virt_addr + 0xFFF
+                            current_phys_start = phys_addr
+                            current_phys_end = phys_addr + 0xFFF
+                    
+                    # Add the last range
+                    ranges.append({
+                        'virt_start': current_virt_start,
+                        'virt_end': current_virt_end,
+                        'phys_start': current_phys_start,
+                        'phys_end': current_phys_end
+                    })
+        
+        # Merge ranges that might span across different page directories/tables
+        if not ranges:
+            return ranges
+            
+        # Sort by virtual start address
+        ranges.sort(key=lambda x: x['virt_start'])
+        
+        merged_ranges = []
+        current_range = ranges[0]
+        
+        for i in range(1, len(ranges)):
+            next_range = ranges[i]
+            
+            # Check if ranges can be merged (virtually and physically contiguous)
+            if (next_range['virt_start'] == current_range['virt_end'] + 1 and
+                next_range['phys_start'] == current_range['phys_end'] + 1):
+                # Merge ranges
+                current_range['virt_end'] = next_range['virt_end']
+                current_range['phys_end'] = next_range['phys_end']
+            else:
+                # Add current range and move to next
+                merged_ranges.append(current_range)
+                current_range = next_range
+        
+        merged_ranges.append(current_range)
+        return merged_ranges
+
+    def display_mapped_ranges(self):
+        """Display all mapped ranges in the requested format"""
+        ranges = self.get_mapped_ranges()
+        
+        if not ranges:
+            print("No mapped ranges found.")
+            return
+        
+        print("\nMapped Virtual to Physical Ranges:\n")
+        
+        for i, range_info in enumerate(ranges, 1):
+            virt_start = range_info['virt_start']
+            virt_end = range_info['virt_end']
+            phys_start = range_info['phys_start']
+            phys_end = range_info['phys_end']
+            
+            print(f"[0x{virt_start:016X}, 0x{virt_end:016X}] -> "
+                  f"[0x{phys_start:016X}, 0x{phys_end:016X}]")
+        
+        print(f"\nTotal: {len(ranges)} contiguous mapping range(s)")
+
 def main():
     parser = PageTableParser()
     
@@ -111,6 +227,9 @@ def main():
         print("Error: dump.txt not found in the current directory")
         return
 
+    # Display mapped ranges before asking for user input
+    parser.display_mapped_ranges()
+
     while True:
         print("\nGive me a virtual address (or press Enter to quit): ", end='')
         try:
@@ -119,7 +238,16 @@ def main():
                 break
 
             result = parser.virtual_to_physical(addr_input)
-            print(f"\nVirtual Address: 0x{int(addr_input, 16):X}")
+            
+            # Handle canonical address formatting for display
+            if addr_input.startswith('0x') or addr_input.startswith('0X'):
+                virt_addr_int = int(addr_input[2:], 16)
+            elif addr_input.startswith('ffffffff'):
+                virt_addr_int = int(addr_input[8:], 16) | (0xffffffff << 32)
+            else:
+                virt_addr_int = int(addr_input, 16)
+            
+            print(f"\nVirtual Address: 0x{virt_addr_int:016X}")
             
             if 'valid' in result:
                 print(f"  PML4 Index : 0x{result['pml4_index']:03X}")
@@ -142,4 +270,5 @@ def main():
             break
 
 
-main()
+if __name__ == "__main__":
+    main()

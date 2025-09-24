@@ -2,11 +2,6 @@ import os
 import pyperclip
 
 def map_and_display_by_extension():
-    """
-    Maps all files recursively in the current directory and its subfolders.
-    Asks the user for desired file extensions (without the '.'),
-    outputs the contents of matching files, and copies everything to clipboard.
-    """
     script_dir = os.path.dirname(os.path.abspath(__file__))
     all_files = []
     output_content = []  # Store all output for clipboard

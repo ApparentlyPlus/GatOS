@@ -1,8 +1,8 @@
-#include "paging.h"
+#include <path/to/paging.h>
 .intel_syntax noprefix
 
 .extern PML4
-.global dbg_dump_pmt
+.global dbg_dump_pmt_asm
 
 .section .text
 .code32
@@ -103,7 +103,7 @@ serial_write_hex16:
 # Dump all present entries in PML4, PDPT, PD, PT
 # Dumps physical address and flags
 # -----------------------------------------------------------------------------
-dbg_dump_pmt:
+dbg_dump_pmt_asm:
     push eax
     push ebx
     push ecx
@@ -143,7 +143,7 @@ dbg_dump_pmt:
     call serial_write_newline
 
     # Start with PML4
-    mov esi, offset V2P(PML4)
+    mov esi, offset KERNEL_V2P(PML4)
     mov ecx, 0  # PML4 index
 
 .dump_pml4_loop:
@@ -299,8 +299,6 @@ dbg_dump_pmt:
     call serial_write_char
     call serial_write_newline
 
-    # For brevity, let's only show first few PT entries for each PD
-    # Otherwise output would be massive (512*512 = 262k entries)
     mov eax, [ebx + edx*8]  # Get PT base address
     and eax, 0xFFFFF000     # Mask off flags
     push edx                # Save PD index
