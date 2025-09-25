@@ -12,7 +12,6 @@
 .intel_syntax noprefix
 
 .global start
-.global gdt64_vpointer
 .global PML4
 
 .extern long_mode_start
@@ -41,7 +40,7 @@ start:
 	# Verify CPU supports long mode (64-bit)
 	call check_long_mode
 
-	# Verify SSE support
+	# Verify and enable SSE support
 	call check_SSE
 
 	# Set up paging structures for long mode
@@ -54,7 +53,7 @@ start:
 	lgdt [KERNEL_V2P(gdt64_pointer)]
 
 	# Far jump to 64-bit kernel entry point via code segment selector
-	jmp 0x08:KERNEL_V2P(long_mode_start)
+	jmp gdt64_code_segment:KERNEL_V2P(long_mode_start)
 
 	# Halt if for some reason jump returns
 	hlt
@@ -78,19 +77,23 @@ check_multiboot:
 # Jumps to error if invalid
 # -----------------------------------------------------------------------------
 check_SSE:
-	mov eax, 0x1
-	cpuid
-	test edx, 1<<25
-	jz .no_SSE
+    mov eax, 1
+    cpuid
+    test edx, 1<<25
+    jz .no_SSE
+	
+    # Enable SSE
+    mov eax, cr0
+    and eax, 0xFFFBFFFF       # clear CR0.EM (bit 2)
+    or  eax, 0x00000002       # set   CR0.MP (bit 1)
+    mov cr0, eax
+    mov eax, cr4
+    or  eax, (1<<9) | (1<<10) # set CR4.OSFXSR (bit 9) and CR4.OSXMMEXCPT (bit 10)
+    mov cr4, eax
+    ret
 .no_SSE:
-	mov eax, cr0
-	and ax, 0xFFFB		#clear coprocessor emulation CR0.EM
-	or ax, 0x2			#set coprocessor monitoring  CR0.MP
-	mov cr0, eax
-	mov eax, cr4
-	or ax, 3 << 9		#set CR4.OSFXSR and CR4.OSXMMEXCPT at the same time
-	mov cr4, eax
-	ret
+	mov al, 'S'    # Error code 'S'
+    jmp error
 
 
 # -----------------------------------------------------------------------------
@@ -257,6 +260,3 @@ gdt64_code_segment = . - gdt64
 gdt64_pointer:
 	.word . - gdt64 - 1  # limit (size of GDT - 1)
 	.long KERNEL_V2P(gdt64)     # base address of GDT (32-bit)
-gdt64_vpointer:
-	.word . - gdt64 - 1  # limit (size of GDT - 1)
-	.quad gdt64     # base address of GDT (64-bit)

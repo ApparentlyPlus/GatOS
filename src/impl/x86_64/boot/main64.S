@@ -5,6 +5,9 @@
 # Sets up segment registers and calls the kernel main function.
 # Halts if multiboot info is missing.
 # -----------------------------------------------------------------------------
+
+#include <memory/paging.h>
+
 .intel_syntax noprefix
 
 .global long_mode_start
@@ -35,11 +38,9 @@ long_mode_start:
 
 
 upper_memory:
-    mov rax, 0xFFFFFFFF80000000
+    mov rax, KERNEL_VIRTUAL_BASE
     add rsp, rax
 
-    movabs rax, offset gdt64_vpointer
-    lgdt [rax]
     mov rax, 0x0
     mov ss, rax
     mov ds, rax
@@ -51,11 +52,6 @@ upper_memory:
     retfq
 
 .transition_to_c:
-    //mov rax, 0
-    //movabs [PML4], rax /* Remove the lower mapping after mapping video! */
-    //mov rax, cr3
-    //mov cr3, rax  # Flush TLB
-    
     # RDI contains the multiboot information
     # which is passed from the bootloader.
     # It is handled by the kernel as an argument.
@@ -63,10 +59,3 @@ upper_memory:
     call rax
 
     hlt
-
-error:
-	mov dword ptr [0xb8000], 0x4f524f45 # "ERRO"
-	mov dword ptr [0xb8004], 0x4f3a4f52 # "R:OR"
-	mov dword ptr [0xb8008], 0x4f204f20 # " O O "
-	mov byte ptr [0xb800a], al         # error code character
-	hlt

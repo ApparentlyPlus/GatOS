@@ -1,8 +1,6 @@
 # -----------------------------------------------------------------------------
 # Multiboot2 header section
-# This section defines the Multiboot2 header that informs the bootloader
-# about the kernel's entry point, architecture, and other metadata.
-# It must be placed in a specific section and follow the Multiboot2 spec.
+# This section defines the Multiboot2 header.
 # -----------------------------------------------------------------------------
 
 .intel_syntax noprefix
