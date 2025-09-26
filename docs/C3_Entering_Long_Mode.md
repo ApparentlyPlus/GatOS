@@ -295,7 +295,7 @@ So really, to display an error, all we have to do is:
 
 ```asm
 mov al, 'G'
-call error
+jmp error
 
 # Prints "ERR: G" in the top left of the screen
 ```
