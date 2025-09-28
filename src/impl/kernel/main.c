@@ -25,7 +25,7 @@ static uint8_t multiboot_buffer[8 * 1024]; // 8KB should be more than enough
  * kernel_main - Main entry point for the GatOS kernel
  */
 void kernel_main(void* mb_info) {
-	DEBUG("Kernel main reached, normal assembly boot succeeded", TOTAL_DBG);
+	DEBUG_LOG("Kernel main reached, normal assembly boot succeeded", TOTAL_DBG);
 
 	console_clear();
 	print_banner(KERNEL_VERSION);
@@ -40,29 +40,29 @@ void kernel_main(void* mb_info) {
     	return;
     }
 
-	DEBUG("Multiboot structure parsed and copied to higher half", TOTAL_DBG);
+	DEBUG_LOG("Multiboot structure parsed and copied to higher half", TOTAL_DBG);
 
 	// Extend the kernel region to include space for the page tables to map all physical memory
 	reserve_required_tablespace(&multiboot);
 	printf("[MEM] Kernel region extended to include page tables.\n");
-	DEBUG("Reserved the required space for page tables in the kernel region", TOTAL_DBG);
+	DEBUG_LOG("Reserved the required space for page tables in the kernel region", TOTAL_DBG);
 
 	// Unmap anything besides [0, KPHYS_END] and [HH_BASE, HH_BASE + KPHYS_END]
 	cleanup_kernel_page_tables(0x0, get_kend(false));
 	printf("[MEM] Cleaned up page tables, unmapped everything besides the kernel range.\n");
-	DEBUG("Unmapped all memory besides the kernel range", TOTAL_DBG);
+	DEBUG_LOG("Unmapped all memory besides the kernel range", TOTAL_DBG);
 	
 	// Unmap [0, KPHYS_END], we only have [HH_BASE, HH_BASE + KPHYS_END] mapped
 	unmap_identity();
 	printf("[MEM] Unmapped identity mapping, only higher half remains.\n");
-	DEBUG("Unmapped identity mapping, only higher half remains", TOTAL_DBG);
+	DEBUG_LOG("Unmapped identity mapping, only higher half remains", TOTAL_DBG);
 
 	// Build the physmap (mapping of all physical RAM into virtual space)
 	build_physmap();
 	printf("[MEM] Built physmap, all physical memory is now accessible.\n");
-	DEBUG("Built physmap at PHYSMAP_VIRTUAL_BASE", TOTAL_DBG);
+	DEBUG_LOG("Built physmap at PHYSMAP_VIRTUAL_BASE", TOTAL_DBG);
 
 	// Final sanity check
 	check_kernel_position();
-	DEBUG("Reached kernel end", TOTAL_DBG);
+	DEBUG_LOG("Reached kernel end", TOTAL_DBG);
 }

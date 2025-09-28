@@ -57,17 +57,17 @@
 uintptr_t align_up(uintptr_t val, uintptr_t align);
 uint64_t get_kstart(bool virtual);
 uint64_t get_kend(bool virtual);
-uint64_t get_canonical_kend(bool virtual);
-uint64_t get_canonical_kstart(bool virtual);
+uint64_t get_linker_kend(bool virtual);
+uint64_t get_linker_kstart(bool virtual);
 uint64_t reserve_required_tablespace(multiboot_parser_t* multiboot);
 
+uint64_t* getPML4();
 
 void flush_tlb(void);
 void dbg_dump_pmt(void);
 void unmap_identity();
 void cleanup_kernel_page_tables(uintptr_t start, uintptr_t end);
 void build_physmap();
-uintptr_t get_highest_mapped_address();
 
 extern uintptr_t KPHYS_END;
 extern uintptr_t KPHYS_START;

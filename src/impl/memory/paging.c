@@ -51,19 +51,19 @@ uint64_t get_kend(bool virtual){
 }
 
 /*
- * get_canonical_kend - Gets the kernel end as defined by the linker symbol
+ * get_linker_kend - Gets the kernel end as defined by the linker symbol
  */
-uint64_t get_canonical_kend(bool virtual){
-    uint64_t canonical = (uint64_t)(uintptr_t)&KPHYS_END;
-    return virtual ? KERNEL_P2V(canonical) : canonical;
+uint64_t get_linker_kend(bool virtual){
+    uint64_t linker = (uint64_t)(uintptr_t)&KPHYS_END;
+    return virtual ? KERNEL_P2V(linker) : linker;
 }
 
 /*
- * get_kend - Gets the kernel start as defined by the linker symbol
+ * get_linker_kstart - Gets the kernel start as defined by the linker symbol
  */
-uint64_t get_canonical_kstart(bool virtual){
-    uint64_t canonical = (uint64_t)(uintptr_t)&KPHYS_START;
-    return virtual ? KERNEL_P2V(canonical) : canonical;
+uint64_t get_linker_kstart(bool virtual){
+    uint64_t linker = (uint64_t)(uintptr_t)&KPHYS_START;
+    return virtual ? KERNEL_P2V(linker) : linker;
 }
 
 /*
@@ -78,7 +78,7 @@ void flush_tlb(void) {
 /*
  * getPML4 - Retrieves current PML4 table address (virtual)
  */
-static inline uint64_t* getPML4(void) {
+uint64_t* getPML4(void) {
     uint64_t cr3;
     __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
     return (uint64_t*)KERNEL_P2V(cr3);
@@ -288,65 +288,4 @@ void build_physmap() {
 
     // For good measure, flush TLB
     flush_tlb();
-}
-
-/*
- * dbg_dump_pmt - Debug function to print page table structure
- */
-void dbg_dump_pmt(void) {
-    uint64_t* PML4 = getPML4();
-    serial_write("Page Tables:\n");
-
-    for (int pml4_i = 0; pml4_i < PAGE_ENTRIES; pml4_i++) {
-        uint64_t pml4e = PML4[pml4_i];
-        if (!(pml4e & PRESENT)) continue;
-
-        serial_write("PML4[");
-        serial_write_hex16(pml4_i);
-        serial_write("]: ");
-        serial_write_hex32((uint32_t)pml4e); // Print only lower 32 bits
-        serial_write(" -> PDPT\n");
-
-        // Convert physical address to virtual
-        uint64_t* pdpt = (uint64_t*)(KERNEL_P2V(pml4e & PAGE_MASK));
-
-        for (int pdpt_i = 0; pdpt_i < PAGE_ENTRIES; pdpt_i++) {
-            uint64_t pdpte = pdpt[pdpt_i];
-            if (!(pdpte & PRESENT)) continue;
-
-            serial_write("  PDPT[");
-            serial_write_hex16(pdpt_i);
-            serial_write("]: ");
-            serial_write_hex32((uint32_t)pdpte); // Print only lower 32 bits
-            serial_write(" -> PD\n");
-
-            // Convert physical address to virtual
-            uint64_t* pd = (uint64_t*)(KERNEL_P2V(pdpte & PAGE_MASK));
-
-            for (int pd_i = 0; pd_i < PAGE_ENTRIES; pd_i++) {
-                uint64_t pde = pd[pd_i];
-                if (!(pde & PRESENT)) continue;
-
-                serial_write("    PD[");
-                serial_write_hex16(pd_i);
-                serial_write("]: ");
-                serial_write_hex32((uint32_t)pde); // Print only lower 32 bits
-                serial_write(" -> PT\n");
-
-                // Convert physical address to virtual
-                uint64_t* pt = (uint64_t*)(KERNEL_P2V(pde & PAGE_MASK));
-
-                for (int pt_i = 0; pt_i < PAGE_ENTRIES; pt_i++) {
-                    uint64_t pte = pt[pt_i];
-                    if (!(pte & PRESENT)) continue;
-
-                    serial_write("      PT[");
-                    serial_write_hex16(pt_i);
-                    serial_write("]: ");
-                    serial_write_hex32((uint32_t)pte); // Print only lower 32 bits
-                    serial_write(" -> PHYS\n");
-                }
-            }
-        }
-    }
 }

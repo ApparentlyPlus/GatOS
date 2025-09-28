@@ -128,7 +128,7 @@ Currently, there is no formal testing suite built into the project. I'm working 
 
 The testing is done through runtime debugging and manual verification:
 
-- **Debug Output**: We use the `DEBUG(string, TOTAL_DBG)` function in C to output messages to QEMU's serial console
+- **Debug Output**: We use the `DEBUG_LOG(string, TOTAL_DBG)` function in C to output messages to QEMU's serial console
 - **Manual Verification**: Check the QEMU serial output to see if we've hit specific points in the code
 - **GitHub Actions**: There's a workflow that checks the QEMU serial output for basic functionality validation
 
@@ -143,9 +143,11 @@ Since there's no automated test suite, "testing" means running the kernel and ch
 #define TOTAL_DBG 2 # Number of total DEBUG calls
 
 void my_function() {
-    DEBUG("Made it to my_function - things are working!", TOTAL_DBG);
+    DEBUG_LOG("Made it to my_function - things are working!", TOTAL_DBG);
+    
     // Your code here
-    DEBUG("Still alive after doing stuff", TOTAL_DBG);
+    
+    DEBUG_LOG("Still alive after doing stuff", TOTAL_DBG);
 }
 ```
 
@@ -164,19 +166,21 @@ The development process follows a pretty standard Git workflow:
 
 ### Debugging
 
-The main debugging tool is the `DEBUG()` function. It's your best friend for figuring out what's happening (or not happening) in the kernel:
+The main debugging tool is the `DEBUG_LOG()` function. It's your best friend for figuring out what's happening (or not happening) in the kernel:
 
 ```c
-DEBUG("Kernel booting...", TOTAL_DBG);
+DEBUG_LOG("Kernel booting...", TOTAL_DBG);
 // ... some code ...
-DEBUG("Memory manager initialized", TOTAL_DBG);
+DEBUG_LOG("Memory manager initialized", TOTAL_DBG);
 // ... more code ...
-DEBUG("Ready to handle interrupts", TOTAL_DBG);
+DEBUG_LOG("Ready to handle interrupts", TOTAL_DBG);
 ```
+
+You can also use all functions defined in `debug.h`, such as `DEBUG_DUMP_PMT` for example, which dumps your page table structure in QEMU.
 
 ## Documentation
 
-Some documentation and writeups are available in the [`docs/`](./docs/) folder, though this is not the focus of the project. This includes development notes, architecture decisions, learning resources, and basically everything I've figured out (or struggled with) during this journey.
+A lot of documentation and writeups are available in the [`docs/`](./docs/) folder, though this is not the focus of the project. This includes development notes, architecture decisions, learning resources, and basically everything I've figured out (or struggled with) during this journey.
 
 Again, a reminder that [Skyl-OS](https://github.com/Billyzeim/Skyl-OS) is a much better resource for beginners!
 

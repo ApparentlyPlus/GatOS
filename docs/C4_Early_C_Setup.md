@@ -366,9 +366,9 @@ Earlier, we passed the Multiboot2 struct into `kernel_main` via `rdi`. Now it’
 
 I’m not going to dive into the full details of parsing the Multiboot2 struct here — that would take far too long, and it’s beyond the scope of this documentation. If you’d like to roll your own parser, I highly recommend the [GNU Multiboot2 Specification](https://www.gnu.org/software/grub/manual/multiboot2/multiboot.html). It lays everything out clearly and even provides sample code you can learn from.
 
-Instead, I’ll focus on a few key implementation details and give a high-level explanation of how our parser works.
+Instead, I’ll focus on a few key implementation details and give a high-level explanation of how our parser works. First, however, we need to look at a few dependencies.
 
-### The Dependencies
+### The Kernel Range
 
 Up until now, when talking about paging, we’ve mostly focused on the `P2V`/`V2P` macros and the page tables. But there’s another concept that GatOS tracks closely: **the kernel range**.
 
@@ -389,30 +389,391 @@ In this light, we expose 4 new functions in `paging.h`:
 ```c
 uint64_t get_kstart(bool virtual);
 uint64_t get_kend(bool virtual);
-uint64_t get_canonical_kend(bool virtual);
-uint64_t get_canonical_kstart(bool virtual);
+uint64_t get_linker_kend(bool virtual);
+uint64_t get_linker_kstart(bool virtual);
 
 extern uintptr_t KPHYS_END;
 extern uintptr_t KPHYS_START;
 ```
 
-At first glance, this might look redundant — why do we need both “normal” and “canonical” getters? Let’s break it down.
+At first glance, this might look redundant — why do we need both “normal” and “linker” getters? Let’s break it down.
 
 * **`get_kstart` / `get_kend`**
   These return the *current* kernel boundaries. They are backed by the static variables `KSTART` and `KEND`, which may be updated at runtime. For example, when GatOS builds the physmap, it shifts `KEND` forward to make room for new page tables. Calling these functions ensures you always get the *latest, adjusted values*.
 
-* **`get_canonical_kstart` / `get_canonical_kend`**
-  These return the *original values* defined by the linker symbols. In other words, they give you the “canonical” kernel range as it was at boot time, untouched by runtime adjustments. These are useful when you need the baseline, fixed reference points for the kernel’s location.
+* **`get_linker_kstart` / `get_linker_kend`**
+  These return the *original values* defined by the linker symbols. In other words, they give you the “linker” kernel range as it was at boot time, untouched by runtime adjustments. These are useful when you need the baseline, fixed reference points for the kernel’s location.
 
 Both variants take a `bool virtual` argument. If `true`, the function converts the address into its higher-half (virtual) equivalent using `KERNEL_P2V`. If `false`, you get the physical address directly.
 
 This dual system gives us flexibility:
 
-* Use **canonical values** when you need to reference the kernel’s fixed layout.
+* Use **linker values** when you need to reference the kernel’s fixed layout.
 * Use **current values** when you want the runtime-adjusted state (e.g., after physmap expansion).
 
 By centralizing this logic in `paging.c`, the rest of the kernel doesn’t need to worry about linker symbols, runtime tweaks, or physical/virtual conversions. Everything just calls these wrappers and gets the correct answer for the current context.
 
->[!CAUTION]
-> This document is **incomplete**. Please check back tomorrow for the full version.
+### Libc Considerations
 
+We've glossed over another important topic: the C standard library (`libc`). Porting a full `libc` implementation is quite cumbersome, especially when we don't yet have the underlying system calls that many `libc` functions depend on. However, we still need basic library functionality to make kernel development practical.
+
+For this reason, I've implemented a standalone [`string.c`](/src/impl/libc/string.c) and [`string.h`](/src/headers/libc/string.h) library specifically for GatOS. This gives us essential string manipulation functions like:
+
+- `memset` - Fill memory with a constant byte
+- `memcpy` - Copy memory regions  
+- `strlen` - Calculate string length
+- `strcmp` - Compare strings
+
+These functions massively accelerate our string handling development and eliminate the need to reinvent basic utilities.
+
+>[!WARNING]
+> While a full `libc` port might happen eventually, it remains irrelevant to GatOS's current goals. We're implementing only what we actually need, when we need it.
+
+### The Parser
+
+The parser’s implementation depends on both `string.h` utilities and knowledge of the kernel’s memory range. 
+
+>[!IMPORTANT]
+> In reality, it also depends on another function defined in `paging.h`:
+>```c
+>uintptr_t align_up(uintptr_t val, uintptr_t align);
+>```
+
+At boot, the multiboot structure is placed in lower memory, and we can access it only because of the lower-half identity mapping established during early initialization.
+
+To handle this safely, the kernel first parses the multiboot structure in its original, lower-half form. After parsing, each pointer inside the structure is translated to its higher-half equivalent, and all relevant data is copied into a **preallocated buffer** reserved within the kernel’s address space. Since this buffer resides in the higher half (inside the kernel range), the information remains accessible even after the lower half is unmapped.
+
+This buffer is declared in [`main.c`](/src/impl/kernel/main.c):
+
+```c
+static uint8_t multiboot_buffer[8 * 1024]; // 8KB should be more than enough
+```
+
+To initialize the parser, we declare a `multiboot_parser_t` on the stack and pass it, along with the buffer, into `multiboot_init`:
+
+```c
+static uint8_t multiboot_buffer[8 * 1024]; // 8KB should be more than enough
+
+void kernel_main(void* mb_info) {
+    // The parser object
+    multiboot_parser_t multiboot = {0};
+    
+    // Initialize multiboot parser (copies everything to higher half)
+    multiboot_init(&multiboot, mb_info, multiboot_buffer, sizeof(multiboot_buffer));
+}
+```
+
+We can then use this `multiboot_parser_t` object to access any number of functions. For example:
+
+```c
+void kernel_main(void* mb_info) {
+
+    multiboot_parser_t multiboot = {0};
+    
+    [...] // Initialization
+
+    // Dump the memory map
+    multiboot_dump_memory_map(&multiboot);
+}
+```
+
+>[!NOTE]
+>For the full list of functions that the parser supports, you can always look at [`multiboot2.h`](/src/headers/multiboot2.h).
+
+
+## Early Diagnostics
+
+Usually, the first major hurdle during early C setup is **debugging**. In bare-metal development, debugging can be frustrating — sometimes even borderline impossible. Tools like `gdb` can help, but they require specialized setup and are limited to stepping through assembly instructions, which isn’t always practical.
+
+When I was developing GatOS, the biggest issue I ran into was page faults. Tracking down the cause often felt like playing Russian roulette — would this be the day I finally figured it out, or the day my monitor didn’t survive the rage?
+
+That’s why setting up **early diagnostics** is critical. This section won’t cover building a full test suite, but it will show how to configure QEMU’s serial output so you can log kernel messages directly to `stdio` on your host OS. 
+
+With this in place, you can actually *see* what’s going on — or more importantly, what’s *not* going on — inside your kernel. And since kernel development doesn’t leave much room for traditional testing, these logs quickly become your best debugging tool.
+
+>[!IMPORTANT]
+> In reality, the best debugging tool is *Interrupt Service Routines (ISRs)*. Almost always, when a fault occurs, an interrupt is called to handle it. Therefore, if you have set up routines to capture and handle these faults, you'll likely get a lot more info on what caused them as well. We will cover this in depth in Chapter 6.
+
+Here’s a polished version of that section, structured to first give the big picture, then drill down into each function. I’ve kept the flow tutorial-style so it’s clear *why* we’re doing each step.
+
+## Talking to the QEMU Serial Output
+
+You cannot use `printf` for debugging in the kernel. If *any* fault occurs, the kernel crashes immediately, and anything printed to the screen is lost. This means that logging messages with `printf` is completely useless in this context. So, what do you do?
+
+The solution is to use the serial port: QEMU can forward all serial output directly to your host’s standard I/O, allowing you to safely log messages from inside the kernel — even if it crashes later.
+
+To enable this, always launch QEMU with the following flag:
+
+```bash
+-serial stdio
+```
+
+This will redirect COM1 output to your terminal, giving you a solid debugging channel.
+
+---
+
+### Serial Initialization
+
+The first step is to set up the COM1 port. This configures the baud rate (here fixed at 38400), disables interrupts, and sets up the FIFO buffers.
+
+```c
+void serial_init(void) {
+    outb(COM1_PORT + 1, 0x00);    // Disable interrupts
+    outb(COM1_PORT + 3, 0x80);    // Enable DLAB (set baud rate divisor)
+    outb(COM1_PORT + 0, 0x03);    // Set divisor to 3 (38400 baud)
+    outb(COM1_PORT + 1, 0x00);
+    outb(COM1_PORT + 3, 0x03);    // 8 bits, no parity, one stop bit
+    outb(COM1_PORT + 2, 0xC7);    // Enable FIFO, clear them, 14-byte threshold
+    outb(COM1_PORT + 4, 0x0B);    // IRQs enabled, RTS/DSR set
+}
+```
+
+Without this step, the port won’t behave predictably.
+
+---
+
+### Checking Readiness
+
+Before writing data, you need to ensure the port is ready. This is done by polling the Line Status Register:
+
+```c
+int serial_is_ready(void) {
+    return inb(COM1_PORT + 5) & 0x20;
+}
+```
+
+This prevents data corruption by ensuring we don’t write when the transmit buffer is full.
+
+---
+
+### Writing Characters and Strings
+
+To send a character:
+
+```c
+void serial_write_char(char c) {
+    while (!serial_is_ready());   // Wait until THR is empty
+    outb(COM1_PORT, (uint8_t)c);
+}
+```
+
+Strings are written one character at a time, with a special case: when `\n` is encountered, a carriage return (`\r`) is also sent for compatibility with most terminals:
+
+```c
+void serial_write(const char* str) {
+    while (*str) {
+        if (*str == '\n')
+            serial_write_char('\r');
+        serial_write_char(*str++);
+    }
+}
+```
+
+There’s also a length-based variant:
+
+```c
+void serial_write_len(const char* str, size_t len);
+```
+
+Useful when dealing with non-null-terminated buffers.
+
+---
+
+### Writing Hexadecimal Values
+
+Kernel developers often need to log raw numbers (e.g., register states, memory addresses). To support this, the implementation includes helpers for printing values in hex.
+
+Each function breaks down the number into nibbles (4-bit chunks) and writes them using a shared helper:
+
+```c
+static void serial_write_hex_digit(uint8_t val);
+void serial_write_hex8(uint8_t value);
+void serial_write_hex16(uint16_t value);
+void serial_write_hex32(uint32_t value);
+void serial_write_hex64(uint64_t value);
+```
+
+For example, `serial_write_hex32(0xCAFEBABE);` would print:
+
+```
+CAFEBABE
+```
+
+>[!NOTE]
+> All of the above functionality is implemented and available through [`serial.h`](/src/headers/serial.h)/[`serial.c`](/src/impl/kernel/serial.c).
+
+
+## Debugging on Top of Serial Output
+
+With serial I/O in place, we can finally build higher-level debugging utilities for GatOS. Rather than writing raw strings directly to the serial port, the kernel provides structured debug functions that log messages, track execution progress, and even dump the state of the page tables.
+
+This approach makes debugging much more manageable in a bare-metal environment, where traditional debuggers are impractical. When combined with QEMU’s `-serial stdio` option, all debug logs can be streamed into your terminal, redirected to a file, or piped into external tools for analysis.
+
+
+### Logging with Counters
+
+The first utility is `DEBUG_LOG`, which makes it easier to trace execution flow by attaching a counter to each log entry.
+
+```c
+void DEBUG_LOG(const char* msg, int total);
+```
+
+* **Counter**: Each log entry is prefixed with `[X/Y]`, where `X` increments per call and `Y` is a caller-specified total.
+* **Message**: The provided string is appended after the counter.
+* **Output**: Written directly to the serial output.
+
+For example:
+
+```c
+DEBUG_LOG("Parsing multiboot structure", 5);
+```
+
+Might produce:
+
+```
+[1/5] Parsing multiboot structure
+```
+
+This is invaluable for tracking initialization sequences step by step. For example:
+
+```c
+#include <debug.h>
+#define TOTAL_DBG 2 # Number of total DEBUG_LOG calls
+
+void my_function() {
+    DEBUG_LOG("Made it to my_function - things are working!", TOTAL_DBG);
+    
+    // Your code here
+
+    DEBUG_LOG("Still alive after doing stuff", TOTAL_DBG);
+}
+```
+
+If the kernel dies in between the two logs, you know where to look.
+
+### Dumping the Page Table Structure
+
+The second utility, `DEBUG_DUMP_PMT`, provides a recursive walk of the kernel’s paging hierarchy.
+
+```c
+void DEBUG_DUMP_PMT(void);
+```
+
+This function traverses all levels of the x86_64 4-level paging structure:
+
+* **PML4** → **PDPT** → **PD** → **PT** → **Physical Pages**
+
+At each level, it prints the index and entry contents (lower 32 bits for brevity). This produces a tree-like structure that shows exactly which virtual pages are mapped and where they point in physical memory.
+
+Example (truncated for clarity):
+
+```
+Page Tables:
+PML4[0001]: 0000A003 -> PDPT
+  PDPT[0002]: 00123003 -> PD
+    PD[0040]: 00ABF003 -> PT
+      PT[0010]: 04567003 -> PHYS
+```
+
+We can use this to see what's mapped and where it points to after we make changes to the page tables.
+
+>[!IMPORTANT]
+> The function `DEBUG_DUMP_PMT` relies on a few definitions we haven't yet discussed about, that GatOS declares in `paging.h`:
+>
+>```c
+> #define PRESENT         (1ULL << 0)
+> #define WRITABLE        (1ULL << 1)
+> #define USER            (1ULL << 2)
+>#define NO_EXECUTE      (1ULL << 63)
+>#define ADDR_MASK       0x000FFFFFFFFFF000UL
+>#define PAGE_SIZE       0x1000UL
+>#define PAGE_ENTRIES    512
+>#define PAGE_MASK       0xFFFFF000
+>```
+
+The raw output of `DEBUG_DUMP_PMT` can be overwhelming, especially on large systems. Fortunately, QEMU makes it easy to redirect serial output into a file:
+
+```bash
+qemu-system-x86_64 [...] -serial stdio > dump.txt
+```
+
+The resulting `dump.txt` can then be parsed using [`parse_pmt.py`](tools/parse_pmt.py), which provides an interactive environment for you to play around with your mappings.
+
+>[!TIP]
+>For more information on helper tools and how to use them, check out the README in the [`tools`](tools) directory.
+
+## Removing the Identity Map
+
+Now that the kernel is fully running in the higher half, the multiboot structure has been parsed and copied there, all debugging tools are linked within the kernel range and accessible from the higher half, and the VGA buffer operates in the higher half as well, there is no longer any need to maintain the lower-half identity mapping.
+
+Removing the identity map is straightforward if you’ve followed the page table setup in Chapter 3 and understand the memory concepts from Chapter 2. Before doing so, it’s helpful — but not strictly necessary — to create a small helper function for flushing the TLB. This ensures that any cached mappings are refreshed after we alter the page tables.
+
+Flushing the TLB is simple: just reload the `cr3` register, which holds the address of our `PML4` table:
+
+```c
+void flush_tlb(void) {
+    uint64_t cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
+    __asm__ volatile("mov %0, %%cr3" : : "r"(cr3));
+}
+```
+
+We also need a function to retrieve the current PML4. We can use inline assembly for that as well:
+
+```c
+uint64_t* getPML4(void) {
+    uint64_t cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
+    return (uint64_t*)KERNEL_P2V(cr3);
+}
+```
+
+>[!IMPORTANT]
+> Remember that `cr3` always holds the physical address of our *PML4*. Therefore, we use `P2V` to access it from higher memory.
+
+We can now remove the identity mapping. Recall from Chapter 3 that our `PML4` and `PDPT` entries eventually point to the same `PD`, but through different indices:
+
+* `PML4[511] -> PDPT[510] -> PD` for the higher half
+* `PML4[0] -> PDPT[0] -> PD` for the lower half (identity)
+
+Since our `PD` covers `1 GB` of memory, removing the lower half mapping is as simple as clearing the corresponding entries:
+
+```c
+PML4[0] = 0;
+PDPT[0] = 0;
+```
+
+This unlinks the lower-half path from the `PD`, making the lower `1 GB` range inaccessible in virtual memory.
+
+Putting it all together:
+
+```c
+void flush_tlb(void) {
+    uint64_t cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
+    __asm__ volatile("mov %0, %%cr3" : : "r"(cr3));
+}
+
+uint64_t* getPML4(void) {
+    uint64_t cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
+    return (uint64_t*)KERNEL_P2V(cr3);
+}
+
+void unmap_identity(){
+    int64_t* PML4 = getPML4();
+    uint64_t* PDPT = PML4 + 512 * PREALLOC_PML4s;
+    PML4[0] = 0;
+    PDPT[0] = 0;
+    flush_tlb();
+}
+```
+
+Finally, in `paging.h`, we define the sizes of our preallocated page tables:
+
+```c
+#define PREALLOC_PML4s  1
+#define PREALLOC_PDPTs  1
+#define PREALLOC_PDs    1
+#define PREALLOC_PTs    512
+```
