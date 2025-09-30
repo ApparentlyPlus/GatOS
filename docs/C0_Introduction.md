@@ -4,7 +4,7 @@ Welcome to GatOS’s documentation! This is your guide to the internals of GatOS
 
 The road to a working kernel is messy, full of rabbit holes, and rarely well-documented. What you’ll find here are the notes from that journey — clear explanations of how GatOS works, written both as a reference for its design and as a record of the process.
 
-What you will find here is a record of trying to build a serious kernel. Think of this as part technical guide, part personal log. It’s here to make the tough parts a little easier, and maybe a bit more fun. I hope it proves to be a valuable resource for your own explorations into the foundations of computing.
+Think of this as part technical guide, part personal log. It’s here to make the tough parts a little easier, and maybe a bit more fun. I hope it proves to be a valuable resource for your own explorations into the foundations of computing.
 
 And if something doesn’t make sense, feel free to reach out — I don’t bite.
 
