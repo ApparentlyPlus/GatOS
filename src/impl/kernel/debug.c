@@ -12,14 +12,13 @@
 #include <serial.h>
 #include <misc.h>
 
-// Global debug counter
 static int dbg_counter = 0;
 
 /*
  * DEBUG_LOG - Debug function to log messages to qemu serial with counter
  */
 void DEBUG_LOG(const char* msg, int total) {
-    char buf[128];  // bigger than before, safe for long messages
+    char buf[128];
     char* ptr = buf;
 
     *ptr++ = '[';
@@ -48,7 +47,7 @@ void DEBUG_DUMP_PMT(void) {
 
     for (int pml4_i = 0; pml4_i < PAGE_ENTRIES; pml4_i++) {
         uint64_t pml4e = PML4[pml4_i];
-        if (!(pml4e & PRESENT)) continue;
+        if (!(pml4e & PAGE_PRESENT)) continue;
 
         serial_write("PML4[");
         serial_write_hex16(pml4_i);
@@ -61,7 +60,7 @@ void DEBUG_DUMP_PMT(void) {
 
         for (int pdpt_i = 0; pdpt_i < PAGE_ENTRIES; pdpt_i++) {
             uint64_t pdpte = pdpt[pdpt_i];
-            if (!(pdpte & PRESENT)) continue;
+            if (!(pdpte & PAGE_PRESENT)) continue;
 
             serial_write("  PDPT[");
             serial_write_hex16(pdpt_i);
@@ -74,7 +73,7 @@ void DEBUG_DUMP_PMT(void) {
 
             for (int pd_i = 0; pd_i < PAGE_ENTRIES; pd_i++) {
                 uint64_t pde = pd[pd_i];
-                if (!(pde & PRESENT)) continue;
+                if (!(pde & PAGE_PRESENT)) continue;
 
                 serial_write("    PD[");
                 serial_write_hex16(pd_i);
@@ -87,7 +86,7 @@ void DEBUG_DUMP_PMT(void) {
 
                 for (int pt_i = 0; pt_i < PAGE_ENTRIES; pt_i++) {
                     uint64_t pte = pt[pt_i];
-                    if (!(pte & PRESENT)) continue;
+                    if (!(pte & PAGE_PRESENT)) continue;
 
                     serial_write("      PT[");
                     serial_write_hex16(pt_i);

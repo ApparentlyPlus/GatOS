@@ -32,14 +32,14 @@
 
 #endif
 
-#define PRESENT         (1ULL << 0)
-#define WRITABLE        (1ULL << 1)
-#define USER            (1ULL << 2)
-#define NO_EXECUTE      (1ULL << 63)
-#define ADDR_MASK       0x000FFFFFFFFFF000UL
-#define PAGE_SIZE       0x1000UL
-#define PAGE_ENTRIES    512
-#define PAGE_MASK       0xFFFFF000
+#define PAGE_PRESENT        (1ULL << 0)
+#define PAGE_WRITABLE       (1ULL << 1)
+#define PAGE_USER           (1ULL << 2)
+#define PAGE_NO_EXECUTE     (1ULL << 63)
+#define PAGE_SIZE           0x1000UL
+#define PAGE_ENTRIES        512
+#define PAGE_MASK           0xFFFFF000
+#define ADDR_MASK           0x000FFFFFFFFFF000UL
 
 #define PREALLOC_PML4s  1
 #define PREALLOC_PDPTs  1
@@ -69,6 +69,21 @@ void unmap_identity();
 void cleanup_kernel_page_tables(uintptr_t start, uintptr_t end);
 void build_physmap();
 
+typedef struct{
+    uint64_t total_RAM;
+    uint64_t total_pages;
+    uintptr_t tables_base;
+    uint64_t total_PTs;
+    uint64_t total_PDs;
+    uint64_t total_PDPTs;
+    uint64_t total_PML4s;
+} physmapInfo;
+
 extern uintptr_t KPHYS_END;
 extern uintptr_t KPHYS_START;
+
+static uint64_t KSTART = (uint64_t)&KPHYS_START;
+static uint64_t KEND = (uint64_t)&KPHYS_END;
+
+static physmapInfo physmapStruct = {0};
 #endif
