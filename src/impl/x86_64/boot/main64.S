@@ -12,6 +12,7 @@
 
 .global long_mode_start
 .extern kernel_main
+.extern gdt64_virt_pointer
 
 .section .text
 .code64
@@ -46,6 +47,10 @@ upper_memory:
     mov ds, rax
     mov es, rax
 
+    # Reload the GDT from its virtual address
+    # because we will need to access it in long mode.
+    lgdt [gdt64_virt_pointer]
+
     pushq 0x8
     movabs rax, offset .transition_to_c
     push rax
@@ -58,4 +63,9 @@ upper_memory:
     movabs rax, offset kernel_main
     call rax
 
+    # Halt shoud be a loop due to interrupts
+    jmp .halt
+
+.halt:
     hlt
+    jmp .halt
