@@ -39,6 +39,23 @@ void DEBUG_LOG(const char* msg, int total) {
 }
 
 /*
+ * DEBUG_GENERIC_LOG - Debug function to log messages to qemu serial without counter
+ */
+void DEBUG_GENERIC_LOG(const char* msg) {
+    char buf[128];
+    char* ptr = buf;
+
+    size_t msg_len = strlen(msg);
+    memcpy(ptr, msg, msg_len);
+    ptr += msg_len;
+
+    *ptr++ = '\n';
+    *ptr = '\0';
+
+    serial_write(buf);
+}
+
+/*
  * DEBUG_DUMP_PMT - Debug function to print page table structure
  */
 void DEBUG_DUMP_PMT(void) {
