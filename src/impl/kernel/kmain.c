@@ -7,6 +7,7 @@
  * Author: u/ApparentlyPlus
  */
 
+#include <sys/interrupts.h>
 #include <memory/paging.h>
 #include <libc/string.h>
 #include <multiboot2.h>
@@ -16,9 +17,9 @@
 #include <serial.h>
 #include <debug.h>
 
-#define TOTAL_DBG 7
+#define TOTAL_DBG 9
 
-static char* KERNEL_VERSION = "v1.5.7";
+static char* KERNEL_VERSION = "v1.5.8";
 static uint8_t multiboot_buffer[8 * 1024]; // 8KB should be more than enough
 
 /*
@@ -61,6 +62,14 @@ void kernel_main(void* mb_info) {
 	build_physmap();
 	printf("[MEM] Built physmap, all physical memory is now accessible.\n");
 	DEBUG_LOG("Built physmap at PHYSMAP_VIRTUAL_BASE", TOTAL_DBG);
+
+	idt_init();
+	printf("[IDT] The IDT was set-up successfully.\n");
+	DEBUG_LOG("Initialized the IDT", TOTAL_DBG);
+
+	enable_interrupts();
+	printf("[IDT] Enabled interrupts.\n");
+	DEBUG_LOG("Enabled interrupts using asm(\"sti\")", TOTAL_DBG);
 
 	// Final sanity check
 	check_kernel_position();
