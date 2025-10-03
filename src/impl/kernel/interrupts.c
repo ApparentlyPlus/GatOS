@@ -7,9 +7,12 @@
  * Author: u/ApparentlyPlus
  */
 
+#include <misc.h>
 #include <debug.h>
+#include <libc/string.h>
 #include <sys/interrupts.h>
 #include <vga_stdio.h>
+#include <sys/panic.h>
 
 /*
  * enable_interrupts - Enable CPU interrupts.
@@ -105,67 +108,106 @@ void idt_init(void)
  */
 cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
 {
-    switch(context->vector_number){
+    switch (context->vector_number) {
         case INT_DIVIDE_ERROR:
-            printf("[EXCEPTION] Divide by zero error!\n");
+            DEBUG_GENERIC_LOG("[EXCEPTION] Divide by zero error!\n");
+            panic_c("Attempted to divide by zero", context);
             break;
+
         case INT_DEBUG:
-            printf("[EXCEPTION] Debug exception!\n");
+            DEBUG_GENERIC_LOG("[EXCEPTION] Debug exception!\n");
+            panic_c("Triggered a debug trap", context);
             break;
+
         case INT_NMI:
-            printf("[EXCEPTION] Non-maskable interrupt!\n");
+            DEBUG_GENERIC_LOG("[EXCEPTION] Non-maskable interrupt!\n");
+            panic_c("Crazy, you got a non-maskable interrupt", context);
             break;
+
         case INT_BREAKPOINT:
-            printf("[EXCEPTION] Breakpoint exception!\n");
+            DEBUG_GENERIC_LOG("[EXCEPTION] Breakpoint exception!\n");
+            panic_c("Breakpoint triggered", context);
             break;
-        case INT_OVERFLOW:  
-            printf("[EXCEPTION] Overflow exception!\n");
+
+        case INT_OVERFLOW:
+            DEBUG_GENERIC_LOG("[EXCEPTION] Overflow exception!\n");
+            panic_c("Arithmetic overflow", context);
             break;
+
         case INT_BOUND_RANGE:
-            printf("[EXCEPTION] Bound range exceeded exception!\n");
+            DEBUG_GENERIC_LOG("[EXCEPTION] Bound range exceeded exception!\n");
+            panic_c("Bound range exceeded", context);
             break;
+
         case INT_INVALID_OPCODE:
-            printf("[EXCEPTION] Invalid opcode exception!\n");
+            DEBUG_GENERIC_LOG("[EXCEPTION] Invalid opcode exception!\n");
+            panic_c("Invalid instruction opcode", context);
             break;
+
         case INT_DEVICE_NOT_AVAILABLE:
-            printf("[EXCEPTION] Device not available exception!\n");
+            DEBUG_GENERIC_LOG("[EXCEPTION] Device not available exception!\n");
+            panic_c("Device not available", context);
             break;
+
         case INT_DOUBLE_FAULT:
-            printf("[EXCEPTION] Double fault exception!\n");
+            DEBUG_GENERIC_LOG("[EXCEPTION] Double fault exception!\n");
+            panic_c("A double fault occured. Sorry to hear that.", context);
             break;
+
         case INT_COPROCESSOR_SEGMENT:
-            printf("[EXCEPTION] Coprocessor segment overrun exception!\n");
+            DEBUG_GENERIC_LOG("[EXCEPTION] Coprocessor segment overrun exception!\n");
+            panic_c("Coprocessor segment overrun", context);
             break;
+
         case INT_INVALID_TSS:
-            printf("[EXCEPTION] Invalid TSS exception!\n");
+            DEBUG_GENERIC_LOG("[EXCEPTION] Invalid TSS exception!\n");
+            panic_c("Invalid task state segment", context);
             break;
+
         case INT_SEGMENT_NOT_PRESENT:
-            printf("[EXCEPTION] Segment not present exception!\n");
+            DEBUG_GENERIC_LOG("[EXCEPTION] Segment not present exception!\n");
+            panic_c("Segment not present", context);
             break;
+
         case INT_STACK_SEGMENT_FAULT:
-            printf("[EXCEPTION] Stack segment fault exception!\n");
+            DEBUG_GENERIC_LOG("[EXCEPTION] Stack segment fault exception!\n");
+            panic_c("A stack segment fault occured", context);
             break;
+
         case INT_GENERAL_PROTECTION:
-            printf("[EXCEPTION] General protection fault exception!\n");
+            DEBUG_GENERIC_LOG("[EXCEPTION] General protection fault exception!\n");
+            panic_c("A general protection fault occured", context);
             break;
+
         case INT_PAGE_FAULT:
-            printf("[EXCEPTION] Page fault exception!\n");
+            DEBUG_GENERIC_LOG("[EXCEPTION] Page fault exception!\n");
+            panic_c("A page fault occured", context);
             break;
+
         case INT_X87_FPU_ERROR:
-            printf("[EXCEPTION] x87 FPU error exception!\n");
+            DEBUG_GENERIC_LOG("[EXCEPTION] x87 FPU error exception!\n");
+            panic_c("An x87 floating point error occured", context);
             break;
+
         case INT_ALIGNMENT_CHECK:
-            printf("[EXCEPTION] Alignment check exception!\n");
+            DEBUG_GENERIC_LOG("[EXCEPTION] Alignment check exception!\n");
+            panic_c("Memory alignment check failed", context);
             break;
+
         case INT_MACHINE_CHECK:
-            printf("[EXCEPTION] Machine check exception!\n");
+            DEBUG_GENERIC_LOG("[EXCEPTION] Machine check exception!\n");
+            panic_c("Machine check", context);
             break;
+
         case INT_SIMD_ERROR:
-            printf("[EXCEPTION] SIMD error exception!\n");
+            DEBUG_GENERIC_LOG("[EXCEPTION] SIMD error exception!\n");
+            panic_c("A SIMD floating point erroroccured, check SSE", context);
             break;
+
         default:
-            printf("[EXCEPTION] Unknown exception! Vector number: %lu\n", context->vector_number);
-            break;  
+            DEBUG_GENERIC_LOG("[EXCEPTION] Unknown exception!\n");
+            panic_c("Unknown interrupt vector", context);
+            break;
     }
 
     return context;
