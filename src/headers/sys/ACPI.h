@@ -1,5 +1,7 @@
 /*
  * ACPI.h - ACPI (Advanced Configuration and Power Interface) related definitions.
+ *
+ * Author: u/ApparentlyPlus
  */
 
 #ifndef ACPI_H
@@ -7,27 +9,31 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <multiboot2.h>
 
-typedef	struct {
-	char Signature[8];
+/* RSDP 1.0 */
+typedef struct {
+    char Signature[8];
     uint8_t Checksum;
     char OEMID[6];
     uint8_t Revision;
     uint32_t RsdtAddress;
 } __attribute__ ((packed)) RSDPDescriptor;
 
-typedef struct  {
+/* RSDP 2.0+ */
+typedef struct {
     char Signature[8];
     uint8_t Checksum;
     char OEMID[6];
     uint8_t Revision;
     uint32_t RsdtAddress;
     uint32_t Length;
-    uint64_t XSDTAddress;
+    uint64_t XsdtAddress;
     uint8_t ExtendedChecksum;
     uint8_t Reserved[3];
 } __attribute__ ((packed)) RSDP2Descriptor;
 
+/* ACPI SDT header */
 typedef struct {
     char Signature[4];
     uint32_t Length;
@@ -40,21 +46,27 @@ typedef struct {
     uint32_t CreatorRevision;
 } __attribute__ ((packed)) ACPISDTHeader;
 
+/* RSDT and XSDT structures */
 typedef struct {
-    ACPISDTHeader sdtHeader; //signature "RSDT"
-    uint32_t sdtAddresses[];
+    ACPISDTHeader sdt_header; // signature "RSDT"
+    uint32_t sdt_addresses[];
 } __attribute__ ((packed)) RSDT;
 
 typedef struct {
-    ACPISDTHeader sdtHeader; //signature "XSDT"
-    uint64_t sdtAddresses[];
+    ACPISDTHeader sdt_header; // signature "XSDT"
+    uint64_t sdt_addresses[];
 } __attribute__ ((packed)) XSDT;
 
-RSDP2Descriptor* getRSDP(multiboot_parser_t* parser);
-bool acpi_init(multiboot_parser_t* parser);
-RSDP2Descriptor* acpi_get_rsdp();
-void* acpi_get_root_sdt();
-bool acpi_is_xsdt_supported();
-ACPISDTHeader* get_nth_sdt(void* root_sdt, size_t n);
 
-#endif 
+bool acpi_validate_rsdp(RSDP2Descriptor* rsdp);
+RSDP2Descriptor* acpi_find_rsdp(multiboot_parser_t* parser);
+void* acpi_find_root_sdt(RSDP2Descriptor* rsdp);
+ACPISDTHeader* acpi_get_nth_sdt_from_root(void* root_sdt, size_t index);
+
+
+bool acpi_init(multiboot_parser_t* parser);
+RSDP2Descriptor* acpi_get_rsdp(void);
+void* acpi_get_root_sdt(void);
+bool acpi_is_xsdt_supported(void);
+
+#endif
