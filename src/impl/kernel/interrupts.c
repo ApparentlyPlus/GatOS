@@ -1,8 +1,5 @@
 /*
  * interrupts.c - Functions for managing CPU interrupts
- * 
- * This file contains functions to enable and disable CPU interrupts,
- * as well as to check the current interrupt status.
  *
  * Author: u/ApparentlyPlus
  */

@@ -182,7 +182,7 @@ multiboot_module_t* multiboot_get_module(multiboot_parser_t* parser, int index);
 // Hardware information
 multiboot_framebuffer_t* multiboot_get_framebuffer(multiboot_parser_t* parser);
 multiboot_elf_sections_t* multiboot_get_elf_sections(multiboot_parser_t* parser);
-void* multiboot_get_acpi_rsdp(multiboot_parser_t* parser);
+multiboot_acpi_t* multiboot_get_acpi_rsdp(multiboot_parser_t* parser);
 
 // Utilities
 void multiboot_get_kernel_range(uintptr_t* start, uintptr_t* end);

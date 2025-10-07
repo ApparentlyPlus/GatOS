@@ -9,6 +9,7 @@
 
 #include <sys/interrupts.h>
 #include <memory/paging.h>
+#include <sys/ACPI.h>
 #include <libc/string.h>
 #include <multiboot2.h>
 #include <vga_console.h>
@@ -17,7 +18,7 @@
 #include <serial.h>
 #include <debug.h>
 
-#define TOTAL_DBG 9
+#define TOTAL_DBG 10
 
 static char* KERNEL_VERSION = "v1.5.8";
 static uint8_t multiboot_buffer[8 * 1024]; // 8KB should be more than enough
@@ -72,6 +73,11 @@ void kernel_main(void* mb_info) {
 	build_physmap();
 	printf("[MEM] Built physmap, all physical memory is now accessible.\n");
 	DEBUG_LOG("Built physmap at PHYSMAP_VIRTUAL_BASE", TOTAL_DBG);
+
+	// Initialize ACPI
+	acpi_init(&multiboot);
+	printf("[ACPI] Revision %u detected (%s supported)\n", acpi_get_rsdp()->Revision, acpi_is_xsdt_supported() ? "XSDT" : "RSDT");
+	DEBUG_LOG("Initialized ACPI subsystem", TOTAL_DBG);
 
 	// Final sanity check
 	check_kernel_position();
