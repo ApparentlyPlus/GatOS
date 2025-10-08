@@ -95,6 +95,22 @@ typedef struct
 #define INT_FIRST_INTERRUPT      32
 #define INT_LAST_INTERRUPT       255
 
+// PIC Constants
+
+#define PIC_MASTER_CMD    0x20
+#define PIC_MASTER_DATA   0x21
+#define PIC_SLAVE_CMD     0xA0
+#define PIC_SLAVE_DATA    0xA1
+
+#define ICW1_INIT         0x11   // Start initialization sequence
+#define ICW4_8086         0x01   // 8086/88 (MCS-80/85) mode
+
+#define ICW2_MASTER       0x20   // Master PIC vector offset (IRQs 0–7 → IDT 0x20–0x27)
+#define ICW2_SLAVE        0x28   // Slave PIC vector offset (IRQs 8–15 → IDT 0x28–0x2F)
+
+#define ICW3_MASTER       0x04   // Tell Master PIC that there is a slave at IRQ2 (bitmask)
+#define ICW3_SLAVE        0x02   // Tell Slave PIC its cascade identity (connected to IRQ2)
+
 
 static interrupt_descriptor idt[IDT_SIZE] = {0};
 

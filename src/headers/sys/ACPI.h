@@ -58,12 +58,13 @@ typedef struct {
 } __attribute__ ((packed)) XSDT;
 
 
+// Internal functions - not to be used outside ACPI.c
 bool acpi_validate_rsdp(RSDP2Descriptor* rsdp);
 RSDP2Descriptor* acpi_find_rsdp(multiboot_parser_t* parser);
 void* acpi_find_root_sdt(RSDP2Descriptor* rsdp);
 ACPISDTHeader* acpi_get_nth_sdt_from_root(void* root_sdt, size_t index);
 
-
+// Public API
 bool acpi_init(multiboot_parser_t* parser);
 RSDP2Descriptor* acpi_get_rsdp(void);
 void* acpi_get_root_sdt(void);

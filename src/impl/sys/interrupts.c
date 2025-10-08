@@ -30,11 +30,27 @@ void disable_interrupts()
 /*
  * disable_pics - Disable the legacy PICs (Programmable Interrupt Controllers)
  */
-void disable_pics()
+void disable_pics(void)
 {
-    // Mask all interrupts on both PICs
-    __asm__ volatile("outb %0, %1" :: "a"((uint8_t)0xFF), "Nd"((uint16_t)0xA1));
-    __asm__ volatile("outb %0, %1" :: "a"((uint8_t)0xFF), "Nd"((uint16_t)0x21));
+    // --- Begin initialization (ICW1)
+    __asm__ volatile ("outb %0, %1" :: "a"((uint8_t)ICW1_INIT), "Nd"((uint16_t)PIC_MASTER_CMD));
+    __asm__ volatile ("outb %0, %1" :: "a"((uint8_t)ICW1_INIT), "Nd"((uint16_t)PIC_SLAVE_CMD));
+
+    // --- Set vector offsets (ICW2)
+    __asm__ volatile ("outb %0, %1" :: "a"((uint8_t)ICW2_MASTER), "Nd"((uint16_t)PIC_MASTER_DATA));
+    __asm__ volatile ("outb %0, %1" :: "a"((uint8_t)ICW2_SLAVE),  "Nd"((uint16_t)PIC_SLAVE_DATA));
+
+    // --- Configure cascade identity (ICW3)
+    __asm__ volatile ("outb %0, %1" :: "a"((uint8_t)ICW3_MASTER), "Nd"((uint16_t)PIC_MASTER_DATA));
+    __asm__ volatile ("outb %0, %1" :: "a"((uint8_t)ICW3_SLAVE),  "Nd"((uint16_t)PIC_SLAVE_DATA));
+
+    // --- Set operation mode (ICW4)
+    __asm__ volatile ("outb %0, %1" :: "a"((uint8_t)ICW4_8086), "Nd"((uint16_t)PIC_MASTER_DATA));
+    __asm__ volatile ("outb %0, %1" :: "a"((uint8_t)ICW4_8086), "Nd"((uint16_t)PIC_SLAVE_DATA));
+
+    // --- Mask all interrupts (disable all IRQ lines)
+    __asm__ volatile ("outb %0, %1" :: "a"((uint8_t)0xFF), "Nd"((uint16_t)PIC_MASTER_DATA));
+    __asm__ volatile ("outb %0, %1" :: "a"((uint8_t)0xFF), "Nd"((uint16_t)PIC_SLAVE_DATA));
 }
 
 /*
