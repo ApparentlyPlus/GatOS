@@ -20,7 +20,7 @@
 
 #define TOTAL_DBG 10
 
-static char* KERNEL_VERSION = "v1.5.8";
+static char* KERNEL_VERSION = "v1.6.0";
 static uint8_t multiboot_buffer[8 * 1024]; // 8KB should be more than enough
 
 /*
