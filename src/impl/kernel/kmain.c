@@ -7,7 +7,9 @@
  * Author: u/ApparentlyPlus
  */
 
+#include <sys/interrupts.h>
 #include <memory/paging.h>
+#include <sys/ACPI.h>
 #include <libc/string.h>
 #include <multiboot2.h>
 #include <vga_console.h>
@@ -16,19 +18,29 @@
 #include <serial.h>
 #include <debug.h>
 
-#define TOTAL_DBG 7
+#define TOTAL_DBG 10
 
-static char* KERNEL_VERSION = "v1.5.7";
+static char* KERNEL_VERSION = "v1.6.0";
 static uint8_t multiboot_buffer[8 * 1024]; // 8KB should be more than enough
 
 /*
  * kernel_main - Main entry point for the GatOS kernel
  */
 void kernel_main(void* mb_info) {
-	DEBUG_LOG("Kernel main reached, normal assembly boot succeeded", TOTAL_DBG);
 
 	console_clear();
 	print_banner(KERNEL_VERSION);
+
+	serial_init();
+	DEBUG_LOG("Kernel main reached, normal assembly boot succeeded", TOTAL_DBG);
+
+	idt_init();
+	printf("[IDT] The IDT was set-up successfully.\n");
+	DEBUG_LOG("Initialized the IDT", TOTAL_DBG);
+
+	enable_interrupts();
+	printf("[IDT] Enabled interrupts.\n");
+	DEBUG_LOG("Enabled interrupts using asm(\"sti\")", TOTAL_DBG);
 
 	multiboot_parser_t multiboot = {0};
 	
@@ -61,6 +73,11 @@ void kernel_main(void* mb_info) {
 	build_physmap();
 	printf("[MEM] Built physmap, all physical memory is now accessible.\n");
 	DEBUG_LOG("Built physmap at PHYSMAP_VIRTUAL_BASE", TOTAL_DBG);
+
+	// Initialize ACPI
+	acpi_init(&multiboot);
+	printf("[ACPI] Revision %u detected (%s supported)\n", acpi_get_rsdp()->Revision, acpi_is_xsdt_supported() ? "XSDT" : "RSDT");
+	DEBUG_LOG("Initialized ACPI subsystem", TOTAL_DBG);
 
 	// Final sanity check
 	check_kernel_position();

@@ -13,6 +13,8 @@
 
 .global start
 .global PML4
+.global gdt64_code_segment
+.global gdt64_virt_pointer
 
 .extern long_mode_start
 .extern KERNEL_STACK_TOP
@@ -260,3 +262,6 @@ gdt64_code_segment = . - gdt64
 gdt64_pointer:
 	.word . - gdt64 - 1  # limit (size of GDT - 1)
 	.long KERNEL_V2P(gdt64)     # base address of GDT (32-bit)
+gdt64_virt_pointer:
+	.word . - gdt64 - 1  # limit (size of GDT - 1)
+	.quad gdt64          # base address of GDT (64-bit)

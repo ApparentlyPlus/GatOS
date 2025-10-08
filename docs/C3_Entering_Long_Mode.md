@@ -171,7 +171,7 @@ ENTRY(start)
 
 This means we need to create an assembly file that defines this `start` symbol, which will serve as the gateway to our kernel's bootstrapping process. 
 
-We therefore create a new file called [`main.S`](/src/impl/x86_64/boot/main.S) inside the [`impl/x86_64/boot`](/src/impl/x86_64/boot/) directory:
+We therefore create a new file called [`boot32.S`](/src/impl/x86_64/boot/boot32.S) inside the [`impl/x86_64/boot`](/src/impl/x86_64/boot/) directory:
 
 ```asm
 .intel_syntax noprefix
@@ -236,7 +236,7 @@ GatOS defines the following macros in `paging.h`:
 #endif
 ```
 
-Therefore, we can include `paging.h` in our `main.S` and call `KERNEL_V2P` to convert the Higher Half *link* address into the correct lower half *load* address:
+Therefore, we can include `paging.h` in our `boot32.S` and call `KERNEL_V2P` to convert the Higher Half *link* address into the correct lower half *load* address:
 
 ```asm
 #include <memory/paging.h>
@@ -870,7 +870,7 @@ After executing these instructions:
 
 Are you tired of all the setup so far and ready for the big payoff? I know I am! This is where all our preparation culminates in the actual transition to 64-bit mode.
 
-First, we need to create a new assembly file, [`main64.S`](/src/impl/x86_64/boot/main64.S), specifically designed for 64-bit code. This will be our landing point after the architecture switch from our current 32-bit code in [`main.S`](/src/impl/x86_64/boot/main.S).
+First, we need to create a new assembly file, [`boot64.S`](/src/impl/x86_64/boot/boot64.S), specifically designed for 64-bit code. This will be our landing point after the architecture switch from our current 32-bit code in [`boot32.S`](/src/impl/x86_64/boot/boot32.S).
 
 ### Setting Up the 64-bit Code Environment
 
@@ -904,7 +904,7 @@ This tells the 32-bit assembler that `long_mode_start` is defined elsewhere but 
 
 ### The Actual Transition Code
 
-Back in our 32-bit `main.S`, we perform all the previous steps discussed to jump into 64-bit mode:
+Back in our 32-bit `boot32.S`, we perform all the previous steps discussed to jump into 64-bit mode:
 
 ```asm
 #include <memory/paging.h>
@@ -963,8 +963,8 @@ This far jump is critical because:
 ### Why This Architecture Matters
 
 This two-file approach separates concerns cleanly:
-- **`main.S`**: Handles the 32-bit bootstrapping process
-- **`main64.S`**: Contains pure 64-bit kernel code
+- **`boot32.S`**: Handles the 32-bit bootstrapping process
+- **`boot64.S`**: Contains pure 64-bit kernel code
 - **The far jump**: Acts as a clean architectural boundary between the two worlds
 
 Once we land in `long_mode_start`, we're finally executing genuine 64-bit code with our higher-half memory mapping active. This means we can start using virtual addresses like `0xFFFFFFFF80000000` and leave the physical addressing constraints of the boot process behind us. 
@@ -1126,7 +1126,7 @@ void kernel_main(void* mb_info) {
 
 This function serves as the architectural boundary between low-level assembly setup and high-level kernel code. The single parameter `mb_info` contains the Multiboot information structure pointer that was carefully preserved in the RDI register throughout our boot process.
 
-To access this C function from our assembly code, we need to declare it as an external symbol in `main64.S`:
+To access this C function from our assembly code, we need to declare it as an external symbol in `boot64.S`:
 
 ```asm
 .extern kernel_main

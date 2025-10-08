@@ -380,12 +380,12 @@ multiboot_elf_sections_t* multiboot_get_elf_sections(multiboot_parser_t* parser)
 /*
  * multiboot_get_acpi_rsdp - Returns ACPI RSDP pointer
  */
-void* multiboot_get_acpi_rsdp(multiboot_parser_t* parser) {
+multiboot_acpi_t* multiboot_get_acpi_rsdp(multiboot_parser_t* parser) {
     multiboot_tag_t* tag = find_tag(parser, MULTIBOOT_TAG_TYPE_ACPI_NEW);
     if (!tag) {
         tag = find_tag(parser, MULTIBOOT_TAG_TYPE_ACPI_OLD);
     }
-    return tag ? ((multiboot_acpi_t*)tag)->rsdp : NULL;
+    return tag ? (multiboot_acpi_t*)tag : NULL;
 }
 
 /*
