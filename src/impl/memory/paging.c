@@ -22,6 +22,13 @@ uintptr_t align_up(uintptr_t val, uintptr_t align) {
 }
 
 /*
+ * align_down - Aligns address down to specified boundary
+ */
+uintptr_t align_down(uintptr_t val, uintptr_t align) {
+    return val & ~(align - 1);
+}
+
+/*
  * get_kstart - Gets the (current) kernel start
  */
 uint64_t get_kstart(bool virtual){
@@ -49,6 +56,20 @@ uint64_t get_linker_kend(bool virtual){
 uint64_t get_linker_kstart(bool virtual){
     uint64_t linker = (uint64_t)(uintptr_t)&KPHYS_START;
     return virtual ? KERNEL_P2V(linker) : linker;
+}
+
+/*
+ * get_physmap_start - Gets the start address of the physmap region (virtual)
+ */
+uint64_t get_physmap_start(void) {
+    return PHYSMAP_VIRTUAL_BASE;
+}
+
+/*
+ * get_physmap_end - Gets the end address of the physmap region (virtual)
+ */
+uint64_t get_physmap_end(void) {
+    return PHYSMAP_VIRTUAL_BASE + physmapStruct.total_RAM;
 }
 
 /*

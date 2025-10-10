@@ -55,10 +55,15 @@
 #define CEIL_DIV(x, y) (((x) + (y) - 1) / (y)) // this is hacky and must be removed eventually
 
 uintptr_t align_up(uintptr_t val, uintptr_t align);
+uintptr_t align_down(uintptr_t val, uintptr_t align);
+
 uint64_t get_kstart(bool virtual);
 uint64_t get_kend(bool virtual);
 uint64_t get_linker_kend(bool virtual);
 uint64_t get_linker_kstart(bool virtual);
+uint64_t get_physmap_start(void);
+uint64_t get_physmap_end(void);
+
 uint64_t reserve_required_tablespace(multiboot_parser_t* multiboot);
 
 uint64_t* getPML4();
