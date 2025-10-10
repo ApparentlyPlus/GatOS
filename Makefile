@@ -3,7 +3,8 @@ CC := x86_64-elf-gcc
 LD := x86_64-elf-ld
 
 # Compilation and preprocessing flags
-CFLAGS := -m64 -ffreestanding -nostdlib -fno-pic -mcmodel=kernel -I src/headers -g
+CFLAGS_FAST := -O3 -fomit-frame-pointer -fpredictive-commoning -fstrict-aliasing
+CFLAGS := -m64 -ffreestanding -nostdlib -fno-pic -mcmodel=kernel -I src/headers
 CPPFLAGS := -I src/headers -D__ASSEMBLER__
 LDFLAGS := -n -nostdlib -T targets/x86_64/linker.ld --no-relax -g
 
