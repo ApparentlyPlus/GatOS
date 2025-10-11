@@ -21,7 +21,7 @@
 
 #define TOTAL_DBG 11
 
-static char* KERNEL_VERSION = "v1.6.2-alpha";
+static char* KERNEL_VERSION = "v1.6.3-alpha";
 static uint8_t multiboot_buffer[8 * 1024]; // 8KB should be more than enough
 
 /*
@@ -76,7 +76,7 @@ void kernel_main(void* mb_info) {
 	
 	// Unmap [0, KPHYS_END], we only have [HH_BASE, HH_BASE + KPHYS_END] mapped
 
-	unmap_identity();
+	//unmap_identity();
 	printf("[MEM] Unmapped identity mapping, only higher half remains.\n");
 	DEBUG_LOG("Unmapped identity mapping, only higher half remains", TOTAL_DBG);
 
