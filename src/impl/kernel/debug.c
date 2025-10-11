@@ -73,7 +73,7 @@ void DEBUG_DUMP_PMT(void) {
         serial_write(" -> PDPT\n");
 
         // Convert physical address to virtual
-        uint64_t* pdpt = (uint64_t*)(KERNEL_P2V(pml4e & PAGE_MASK));
+        uint64_t* pdpt = (uint64_t*)(KERNEL_P2V(pml4e & FRAME_MASK));
 
         for (int pdpt_i = 0; pdpt_i < PAGE_ENTRIES; pdpt_i++) {
             uint64_t pdpte = pdpt[pdpt_i];
@@ -86,7 +86,7 @@ void DEBUG_DUMP_PMT(void) {
             serial_write(" -> PD\n");
 
             // Convert physical address to virtual
-            uint64_t* pd = (uint64_t*)(KERNEL_P2V(pdpte & PAGE_MASK));
+            uint64_t* pd = (uint64_t*)(KERNEL_P2V(pdpte & FRAME_MASK));
 
             for (int pd_i = 0; pd_i < PAGE_ENTRIES; pd_i++) {
                 uint64_t pde = pd[pd_i];
@@ -99,7 +99,7 @@ void DEBUG_DUMP_PMT(void) {
                 serial_write(" -> PT\n");
 
                 // Convert physical address to virtual
-                uint64_t* pt = (uint64_t*)(KERNEL_P2V(pde & PAGE_MASK));
+                uint64_t* pt = (uint64_t*)(KERNEL_P2V(pde & FRAME_MASK));
 
                 for (int pt_i = 0; pt_i < PAGE_ENTRIES; pt_i++) {
                     uint64_t pte = pt[pt_i];
