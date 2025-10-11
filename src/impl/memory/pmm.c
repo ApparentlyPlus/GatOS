@@ -42,17 +42,19 @@ static inline uint64_t order_to_size(uint32_t order) {
 
 /* 
  * read_next_word - read the next pointer stored at the start of a free block
+ * Always use the PHYSMAP_P2V macro to access physical memory.
  */
 static inline uint64_t read_next_word(uint64_t block_phys) {
-    uint64_t *ptr = (uint64_t *)(uintptr_t)block_phys;
+    uint64_t *ptr = (uint64_t *)PHYSMAP_P2V(block_phys);
     return *ptr;
 }
 
 /* 
  * write_next_word - write the next pointer stored at the start of a free block
+ * Always use the PHYSMAP_P2V macro to access physical memory.
  */
 static inline void write_next_word(uint64_t block_phys, uint64_t next_phys) {
-    uint64_t *ptr = (uint64_t *)(uintptr_t)block_phys;
+    uint64_t *ptr = (uint64_t *)PHYSMAP_P2V(block_phys);
     *ptr = next_phys;
 }
 
@@ -62,8 +64,11 @@ static inline void write_next_word(uint64_t block_phys, uint64_t next_phys) {
 static uint64_t pop_head(uint32_t order) {
     uint64_t head = g_free_heads[order];
     if (head == EMPTY_SENTINEL) return EMPTY_SENTINEL;
-    uint64_t next = read_next_word(head); // next may be 0, which means NULL
-    g_free_heads[order] = (next == 0 ? EMPTY_SENTINEL : next);
+    uint64_t next = read_next_word(head);
+    g_free_heads[order] = (next == EMPTY_SENTINEL ? EMPTY_SENTINEL : next);
+    
+    // Eh, I'm clearing the next pointer in the popped block just to be sure
+    write_next_word(head, EMPTY_SENTINEL);
     return head;
 }
 
@@ -72,8 +77,7 @@ static uint64_t pop_head(uint32_t order) {
  */
 static void push_head(uint32_t order, uint64_t block_phys) {
     uint64_t head = g_free_heads[order];
-    // store (head==EMPTY_SENTINEL ? 0 : head) as the next pointer
-    write_next_word(block_phys, (head == EMPTY_SENTINEL) ? 0ULL : head);
+    write_next_word(block_phys, (head == EMPTY_SENTINEL) ? EMPTY_SENTINEL : head);
     g_free_heads[order] = block_phys;
 }
 
@@ -235,7 +239,7 @@ void pmm_shutdown(void) {
     if (!g_inited) return;
 
     // clear metadata region (we store next pointers at starts of free blocks)
-    uint8_t *ptr = (uint8_t *)(uintptr_t)g_range_start;
+    uint8_t *ptr = (uint8_t *)PHYSMAP_P2V(g_range_start);
     uint64_t size = pmm_managed_size();
     for (uint64_t i = 0; i < size; ++i) ptr[i] = 0;
 
@@ -271,6 +275,11 @@ static pmm_status_t alloc_block_of_order(uint32_t req_order, uint64_t *out_phys)
         push_head(o, buddy);
     }
 
+    // Clean metadata in the allocated block
+    // NOTE: We could also memset, but it's wasteful to zero the entire block
+    // since we only use the first 8 bytes for metadata.
+    write_next_word(block, 0);
+
     *out_phys = block;
     return PMM_OK;
 }
@@ -283,7 +292,7 @@ pmm_status_t pmm_alloc(size_t size_bytes, uint64_t *out_phys) {
     if (!g_inited) return PMM_ERR_NOT_INIT;
     if (size_bytes == 0) return PMM_ERR_INVALID;
 
-    /* Round up to multiple of g_min_block */
+    // Round up to multiple of g_min_block
     uint64_t rounded = (uint64_t)size_bytes;
     if (rounded & (g_min_block - 1)) rounded = align_up(rounded, g_min_block);
 
@@ -338,7 +347,7 @@ pmm_status_t pmm_free(uint64_t phys, size_t size_bytes) {
         block_size <<= 1;
     }
 
-    /* push the resulting (possibly coalesced) block */
+    // push the resulting (possibly coalesced) block
     push_head(order, block_addr);
     return PMM_OK;
 }

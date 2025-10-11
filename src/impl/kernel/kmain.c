@@ -98,7 +98,7 @@ void kernel_main(void* mb_info) {
 
 	// Initialize physical memory manager
 
-	pmm_status_t pmm_status = pmm_init(PHYSMAP_P2V(get_kend(false)) + PAGE_SIZE, get_physmap_end(), PAGE_SIZE);
+	pmm_status_t pmm_status = pmm_init(get_kend(false) + PAGE_SIZE, PHYSMAP_V2P(get_physmap_end()), PAGE_SIZE);
 	if(pmm_status == PMM_OK){
 		printf("[PMM] Physical memory manager range: 0x%llx - 0x%llx (%d MiB)\n", 
 			get_kend(false) + PAGE_SIZE, 
