@@ -33,7 +33,6 @@ typedef enum {
 } pmm_status_t;
 
 typedef struct {
-    uint64_t total_blocks[PMM_MAX_ORDERS];      // Total blocks per order
     uint64_t free_blocks[PMM_MAX_ORDERS];       // Free blocks per order
     uint64_t alloc_calls;                       // Number of allocation calls
     uint64_t free_calls;                        // Number of free calls

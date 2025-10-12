@@ -1,5 +1,5 @@
 /*
- * pmm.c - Range-based physical memory manager (buddy allocator) - IMPROVED
+ * pmm.c - Range-based physical memory manager (buddy allocator)
  *
  * This implementation uses an explicit [start, end) physical range stored
  * in g_range_start/g_range_end. The public init takes a range (start,end)
@@ -257,7 +257,6 @@ static void partition_range_into_blocks(uint64_t range_start, uint64_t range_end
         }
         
         push_head(chosen, cur);
-        g_stats.total_blocks[chosen]++;
         
         cur += order_to_size(chosen);
     }
@@ -397,7 +396,6 @@ static pmm_status_t alloc_block_of_order(uint32_t req_order, uint64_t *out_phys)
         
         // Push buddy into freelist at order o
         push_head(o, buddy);
-        g_stats.total_blocks[o]++;
     }
 
     *out_phys = block;
@@ -478,7 +476,6 @@ pmm_status_t pmm_free(uint64_t phys, size_t size_bytes) {
 
         // Buddy removed successfully - coalesce
         g_stats.coalesce_success++;
-        g_stats.total_blocks[order]--;  // Merged two blocks into one larger block
         
         // Merged block is min(block_addr, buddy)
         if (buddy < block_addr) block_addr = buddy;
@@ -596,47 +593,52 @@ void pmm_dump_stats(void) {
     }
     
     DEBUGF("=== PMM Statistics ===\n");
-    DEBUGF("Managed range: [0x%lx - 0x%lx) (0x%lx bytes)\n",
-           g_range_start, g_range_end, g_range_end - g_range_start);
+    DEBUGF("Managed range: [0x%lx - 0x%lx) (0x%lx bytes, %.2f MiB)\n",
+           g_range_start, g_range_end, g_range_end - g_range_start,
+           (g_range_end - g_range_start) / (1024.0 * 1024.0));
     DEBUGF("Min block size: 0x%lx, Max order: %u\n", g_min_block, g_max_order);
+    
     DEBUGF("\nOperation counts:\n");
     DEBUGF("  Allocations:      %lu\n", g_stats.alloc_calls);
     DEBUGF("  Frees:            %lu\n", g_stats.free_calls);
     DEBUGF("  Coalesces:        %lu\n", g_stats.coalesce_success);
     DEBUGF("  Corruptions:      %lu\n", g_stats.corruption_detected);
     
-    DEBUGF("\nBlock distribution:\n");
-    DEBUGF("Order  Size         Total  Free   Used   Utilization\n");
-    DEBUGF("-----  -----------  -----  -----  -----  -----------\n");
+    DEBUGF("\nFree block distribution:\n");
+    DEBUGF("Order  Size         Free Blocks\n");
+    DEBUGF("-----  -----------  -----------\n");
     
-    uint64_t total_bytes = 0;
-    uint64_t free_bytes = 0;
+    uint64_t total_free_bytes = 0;
+    bool has_free_blocks = false;
     
     for (uint32_t o = 0; o <= g_max_order; o++) {
         uint64_t size = order_to_size(o);
-        uint64_t total = g_stats.total_blocks[o];
-        uint64_t free = g_stats.free_blocks[o];
-        uint64_t used = total > free ? total - free : 0;
+        uint64_t count = g_stats.free_blocks[o];
         
-        if (total > 0) {
-            double util = total > 0 ? (double)used / total * 100.0 : 0.0;
-            DEBUGF("%-5u  0x%-9lx  %-5lu  %-5lu  %-5lu  %.1f%%\n",
-                   o, size, total, free, used, util);
-            
-            total_bytes += total * size;
-            free_bytes += free * size;
+        if (count > 0) {
+            uint64_t bytes = count * size;
+            total_free_bytes += bytes;
+            DEBUGF("%-5u  0x%-9lx  %-5lu\n", o, size, count);
+            has_free_blocks = true;
         }
     }
     
+    if (!has_free_blocks) {
+        DEBUGF("  (no free blocks - all memory allocated)\n");
+    }
+    
+    uint64_t total_managed = pmm_managed_size();
+    uint64_t used_bytes = total_managed - total_free_bytes;
+    
     DEBUGF("\nMemory summary:\n");
     DEBUGF("  Total managed: %lu bytes (%.2f MiB)\n", 
-           total_bytes, total_bytes / (1024.0 * 1024.0));
+           total_managed, total_managed / (1024.0 * 1024.0));
     DEBUGF("  Free:          %lu bytes (%.2f MiB)\n",
-           free_bytes, free_bytes / (1024.0 * 1024.0));
+           total_free_bytes, total_free_bytes / (1024.0 * 1024.0));
     DEBUGF("  Used:          %lu bytes (%.2f MiB)\n",
-           total_bytes - free_bytes, (total_bytes - free_bytes) / (1024.0 * 1024.0));
+           used_bytes, used_bytes / (1024.0 * 1024.0));
     DEBUGF("  Utilization:   %.1f%%\n",
-           total_bytes > 0 ? (double)(total_bytes - free_bytes) / total_bytes * 100.0 : 0.0);
+           total_managed > 0 ? (double)used_bytes / total_managed * 100.0 : 0.0);
     DEBUGF("======================\n");
 }
 
@@ -659,6 +661,7 @@ bool pmm_verify_integrity(void) {
     for (uint32_t order = 0; order <= g_max_order; order++) {
         uint64_t cur = g_free_heads[order];
         int count = 0;
+        uint64_t size = order_to_size(order);
         
         while (cur != EMPTY_SENTINEL) {
             count++;
@@ -678,11 +681,12 @@ bool pmm_verify_integrity(void) {
                 break;
             }
             
-            // Check alignment
-            uint64_t size = order_to_size(order);
-            if ((cur & (size - 1)) != 0) {
-                DEBUGF("[PMM] Order %u: Block 0x%lx not aligned to 0x%lx\n",
-                       order, cur, size);
+            // Check alignment relative to block size
+            // A block is properly aligned if its offset from rangeStart is aligned
+            uint64_t offset = cur - g_range_start;
+            if ((offset & (size - 1)) != 0) {
+                DEBUGF("[PMM] Order %u: Block 0x%lx offset 0x%lx not aligned to size 0x%lx\n",
+                       order, cur, offset, size);
                 all_ok = false;
             }
             
