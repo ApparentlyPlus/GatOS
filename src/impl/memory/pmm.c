@@ -373,8 +373,6 @@ void pmm_shutdown(void) {
         g_free_heads[i] = EMPTY_SENTINEL;
     
     memset(&g_stats, 0, sizeof(pmm_stats_t));
-    
-    printf("[PMM] Shutdown complete\n");
 }
 
 /*
@@ -463,12 +461,10 @@ pmm_status_t pmm_free(uint64_t phys, size_t size_bytes) {
     // Coalesce upwards where possible
     while (order < g_max_order) {
         uint64_t buddy = buddy_of(block_addr, order);
+        uint64_t buddy_size = order_to_size(order);
         
-        // FIXED: Use order_to_size(order) consistently
-        uint64_t current_block_size = order_to_size(order);
-
-        // If buddy is outside managed range, stop
-        if (buddy < g_range_start || (buddy + current_block_size) > g_range_end) {
+        // Check if buddy is valid
+        if (buddy < g_range_start || (buddy + buddy_size) > g_range_end) {
             break;
         }
 
@@ -565,10 +561,10 @@ pmm_status_t pmm_mark_free_range(uint64_t start, uint64_t end) {
     // Round start up and end down to min_block
     uint64_t orig_start = start, orig_end = end;
     start = align_up(start, g_min_block);
-    end   = align_down(end, g_min_block);
+    end = align_down(end, g_min_block);
     
     if (start >= end) {
-        printf("[PMM WARNING] After alignment, free range [0x%lx, 0x%lx) became empty\n",
+        printf("[PMM] After alignment, free range [0x%lx, 0x%lx) became empty\n",
                orig_start, orig_end);
         return PMM_ERR_INVALID;
     }
