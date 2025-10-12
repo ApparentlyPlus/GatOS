@@ -1,17 +1,9 @@
 /*
- * vmm.c - Virtual Memory Manager Implementation (Improved)
+ * vmm.c - Virtual Memory Manager Implementation
  * 
  * This implementation manages multiple virtual address spaces using vmm_t instances.
  * Each instance maintains its own page table and vm_object list. A special kernel VMM
- * can be accessed by passing NULL to most functions.
- * 
- * Now supports:
- * - Magic number validation for corruption detection
- * - Better error handling with proper rollback
- * - In-place permission changes for vmm_protect
- * - PAGE_USER flag handling for non-kernel VMMs
- * - Address space layout documentation
- * - Red-zone detection for vm_objects
+ * can be accessed by passing NULL to most functions. This was hell to write :D
  * 
  * Author: u/ApparentlyPlus
  */
@@ -20,7 +12,7 @@
 #include <memory/pmm.h>
 #include <memory/paging.h>
 #include <libc/string.h>
-#include <vga_stdio.h>
+#include <debug.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
@@ -32,17 +24,19 @@
 
 // Extended vm_object with validation
 typedef struct vm_object_internal {
-    uint32_t magic;         // VM_OBJECT_MAGIC
-    uint32_t red_zone_pre;  // VM_OBJECT_RED_ZONE
-    vm_object public;       // Public interface
-    uint32_t red_zone_post; // VM_OBJECT_RED_ZONE
+    uint32_t magic;                             // VM_OBJECT_MAGIC
+    uint32_t red_zone_pre;                      // VM_OBJECT_RED_ZONE
+    vm_object public;                           // Public interface
+    uint32_t red_zone_post;                     // VM_OBJECT_RED_ZONE
+    struct vm_object_internal* next_internal;   // Point to full structure
 } vm_object_internal;
 
 // Extended VMM with validation
 typedef struct {
-    uint32_t magic;         // VMM_MAGIC
-    vmm_t public;           // Public interface
-    bool is_kernel;         // True if this is the kernel VMM
+    uint32_t magic;                             // VMM_MAGIC
+    vmm_t public;                               // Public interface
+    bool is_kernel;                             // True if this is the kernel VMM
+    vm_object_internal* objects_internal;       // Track internal objects
 } vmm_internal;
 
 // Global kernel VMM
@@ -56,7 +50,7 @@ static vmm_internal* g_kernel_vmm = NULL;
 static inline bool vmm_validate(vmm_internal* vmm) {
     if (!vmm) return false;
     if (vmm->magic != VMM_MAGIC) {
-        printf("[VMM ERROR] Invalid VMM magic: 0x%x (expected 0x%x)\n", 
+        DEBUGF("[VMM ERROR] Invalid VMM magic: 0x%x (expected 0x%x)\n", 
                vmm->magic, VMM_MAGIC);
         return false;
     }
@@ -69,17 +63,17 @@ static inline bool vmm_validate(vmm_internal* vmm) {
 static inline bool vm_object_validate(vm_object_internal* obj) {
     if (!obj) return false;
     if (obj->magic != VM_OBJECT_MAGIC) {
-        printf("[VMM ERROR] Invalid vm_object magic: 0x%x (expected 0x%x)\n",
+        DEBUGF("[VMM ERROR] Invalid vm_object magic: 0x%x (expected 0x%x)\n",
                obj->magic, VM_OBJECT_MAGIC);
         return false;
     }
     if (obj->red_zone_pre != VM_OBJECT_RED_ZONE) {
-        printf("[VMM ERROR] vm_object pre-red-zone corrupted: 0x%x\n",
+        DEBUGF("[VMM ERROR] vm_object pre-red-zone corrupted: 0x%x\n",
                obj->red_zone_pre);
         return false;
     }
     if (obj->red_zone_post != VM_OBJECT_RED_ZONE) {
-        printf("[VMM ERROR] vm_object post-red-zone corrupted: 0x%x\n",
+        DEBUGF("[VMM ERROR] vm_object post-red-zone corrupted: 0x%x\n",
                obj->red_zone_post);
         return false;
     }
@@ -347,6 +341,7 @@ vm_object_internal* vmm_alloc_vm_object(void) {
     obj->magic = VM_OBJECT_MAGIC;
     obj->red_zone_pre = VM_OBJECT_RED_ZONE;
     obj->red_zone_post = VM_OBJECT_RED_ZONE;
+    obj->next_internal = NULL;
     
     return obj;
 }
@@ -359,7 +354,7 @@ void vmm_free_vm_object(vm_object_internal* obj) {
     
     // Validate before freeing
     if (!vm_object_validate(obj)) {
-        printf("[VMM ERROR] Attempted to free corrupted vm_object at %p\n", obj);
+        DEBUGF("[VMM ERROR] Attempted to free corrupted vm_object at %p\n", obj);
         return;
     }
     
@@ -425,14 +420,6 @@ static vmm_status_t vmm_copy_kernel_mappings(uint64_t dest_pt_root) {
 
 /*
  * vmm_alloc - Allocate a virtual memory range and back it with physical memory
- * 
- * This function:
- * 1. Finds a suitable gap in the virtual address space
- * 2. Creates a vm_object to track the allocation
- * 3. Allocates physical memory (or uses provided MMIO address)
- * 4. Maps the physical memory to the virtual range
- * 
- * If any step fails, all previous steps are rolled back properly.
  */
 vmm_status_t vmm_alloc(vmm_t* vmm_pub, size_t length, size_t flags, void* arg, void** out_addr) {
     vmm_internal* vmm = vmm_get_instance(vmm_pub);
@@ -446,7 +433,7 @@ vmm_status_t vmm_alloc(vmm_t* vmm_pub, size_t length, size_t flags, void* arg, v
     if (flags & VM_FLAG_MMIO) {
         uint64_t mmio_phys = (uint64_t)arg;
         if (mmio_phys & (PAGE_SIZE - 1)) {
-            printf("[VMM ERROR] MMIO address 0x%lx is not page-aligned\n", mmio_phys);
+            DEBUGF("[VMM ERROR] MMIO address 0x%lx is not page-aligned\n", mmio_phys);
             return VMM_ERR_NOT_ALIGNED;
         }
     }
@@ -454,8 +441,8 @@ vmm_status_t vmm_alloc(vmm_t* vmm_pub, size_t length, size_t flags, void* arg, v
     // Align length to page size
     length = align_up(length, PAGE_SIZE);
     
-    // Find space for the new object
-    vm_object_internal* current = (vm_object_internal*)vmm->public.objects;
+    // Find space for the new object using internal list
+    vm_object_internal* current = vmm->objects_internal;
     vm_object_internal* prev = NULL;
     uintptr_t found = 0;
     
@@ -474,7 +461,7 @@ vmm_status_t vmm_alloc(vmm_t* vmm_pub, size_t length, size_t flags, void* arg, v
         }
         
         prev = current;
-        current = (vm_object_internal*)current->public.next;
+        current = current->next_internal;
     }
     
     // If no gap found, try after the last object
@@ -495,12 +482,15 @@ vmm_status_t vmm_alloc(vmm_t* vmm_pub, size_t length, size_t flags, void* arg, v
     obj->public.length = length;
     obj->public.flags = flags;
     obj->public.next = current ? &current->public : NULL;
+    obj->next_internal = current;
     
     // Insert into linked list
     if (prev) {
         prev->public.next = &obj->public;
+        prev->next_internal = obj;
     } else {
         vmm->public.objects = &obj->public;
+        vmm->objects_internal = obj;
     }
     
     // Back with physical memory (immediate backing)
@@ -515,8 +505,10 @@ vmm_status_t vmm_alloc(vmm_t* vmm_pub, size_t length, size_t flags, void* arg, v
             // Allocation failed, clean up vm_object
             if (prev) {
                 prev->public.next = current ? &current->public : NULL;
+                prev->next_internal = current;
             } else {
                 vmm->public.objects = current ? &current->public : NULL;
+                vmm->objects_internal = current;
             }
             vmm_free_vm_object(obj);
             return VMM_ERR_NO_MEMORY;
@@ -543,7 +535,7 @@ vmm_status_t vmm_alloc(vmm_t* vmm_pub, size_t length, size_t flags, void* arg, v
                 arch_unmap_page(vmm->public.pt_root, (void*)(obj->public.base + rollback));
             }
 
-            // 2. Free the entire original allocation (PMM allocated it as one block)
+            // Free the entire original allocation (PMM allocated it as one block)
             if (!(flags & VM_FLAG_MMIO)) {
                 pmm_free(phys_base, length);
             }
@@ -551,8 +543,10 @@ vmm_status_t vmm_alloc(vmm_t* vmm_pub, size_t length, size_t flags, void* arg, v
             // Remove vm_object from list
             if (prev) {
                 prev->public.next = current ? &current->public : NULL;
+                prev->next_internal = current;
             } else {
                 vmm->public.objects = current ? &current->public : NULL;
+                vmm->objects_internal = current;
             }
             vmm_free_vm_object(obj);
             
@@ -576,7 +570,7 @@ vmm_status_t vmm_free(vmm_t* vmm_pub, void* addr) {
     
     uintptr_t target = (uintptr_t)addr;
     vm_object_internal* prev = NULL;
-    vm_object_internal* current = (vm_object_internal*)vmm->public.objects;
+    vm_object_internal* current = vmm->objects_internal;
     
     // Find the object with matching base address
     while (current) {
@@ -588,7 +582,7 @@ vmm_status_t vmm_free(vmm_t* vmm_pub, void* addr) {
             break;
         }
         prev = current;
-        current = (vm_object_internal*)current->public.next;
+        current = current->next_internal;
     }
     
     if (!current) {
@@ -612,8 +606,10 @@ vmm_status_t vmm_free(vmm_t* vmm_pub, void* addr) {
     // Remove from linked list
     if (prev) {
         prev->public.next = current->public.next;
+        prev->next_internal = current->next_internal;
     } else {
         vmm->public.objects = current->public.next;
+        vmm->objects_internal = current->next_internal;
     }
     
     // Free the vm_object
@@ -654,6 +650,7 @@ vmm_t* vmm_create(uintptr_t alloc_base, uintptr_t alloc_end) {
     
     vmm->magic = VMM_MAGIC;
     vmm->is_kernel = false;
+    vmm->objects_internal = NULL;
     
     // Create page table root
     uint64_t pt_root = vmm_alloc_page_table();
@@ -689,19 +686,19 @@ void vmm_destroy(vmm_t* vmm_pub) {
     
     // Cannot destroy kernel VMM
     if (vmm == g_kernel_vmm) {
-        printf("[VMM ERROR] Cannot destroy kernel VMM\n");
+        DEBUGF("[VMM ERROR] Cannot destroy kernel VMM\n");
         return;
     }
     
     // Free all vm_objects
-    vm_object_internal* current = (vm_object_internal*)vmm->public.objects;
+    vm_object_internal* current = vmm->objects_internal;
     while (current) {
         if (!vm_object_validate(current)) {
-            printf("[VMM ERROR] Corrupted vm_object during destroy\n");
+            DEBUGF("[VMM ERROR] Corrupted vm_object during destroy\n");
             break;
         }
         
-        vm_object_internal* next = (vm_object_internal*)current->public.next;
+        vm_object_internal* next = current->next_internal;
         
         // Free physical memory if not MMIO
         if (!(current->public.flags & VM_FLAG_MMIO)) {
@@ -766,6 +763,7 @@ vmm_status_t vmm_kernel_init(uintptr_t alloc_base, uintptr_t alloc_end) {
     
     vmm->magic = VMM_MAGIC;
     vmm->is_kernel = true;
+    vmm->objects_internal = NULL;
     
     // Use current page table as kernel page table
     vmm->public.pt_root = (uint64_t)KERNEL_V2P(getPML4());
@@ -850,18 +848,18 @@ vm_object* vmm_find_mapped_object(vmm_t* vmm_pub, void* addr) {
     if (!vmm || !addr) return NULL;
     
     uintptr_t target = (uintptr_t)addr;
-    vm_object_internal* current = (vm_object_internal*)vmm->public.objects;
+    vm_object_internal* current = vmm->objects_internal;
     
     while (current) {
         if (!vm_object_validate(current)) {
-            printf("[VMM ERROR] Corrupted vm_object in list\n");
+            DEBUGF("[VMM ERROR] Corrupted vm_object in list\n");
             return NULL;
         }
         
         if (target >= current->public.base && target < current->public.base + current->public.length) {
             return &current->public;
         }
-        current = (vm_object_internal*)current->public.next;
+        current = current->next_internal;
     }
     
     return NULL;
@@ -1005,7 +1003,7 @@ vmm_status_t vmm_protect(vmm_t* vmm_pub, void* addr, size_t new_flags) {
     
     // Must match base address exactly
     if (obj->base != (uintptr_t)addr) {
-        printf("[VMM ERROR] vmm_protect requires exact base address match\n");
+        DEBUGF("[VMM ERROR] vmm_protect requires exact base address match\n");
         return VMM_ERR_INVALID;
     }
     
@@ -1019,7 +1017,7 @@ vmm_status_t vmm_protect(vmm_t* vmm_pub, void* addr, size_t new_flags) {
     for (uintptr_t virt = obj->base; virt < obj->base + obj->length; virt += PAGE_SIZE) {
         vmm_status_t status = arch_update_page_flags(vmm->public.pt_root, (void*)virt, pt_flags);
         if (status != VMM_OK) {
-            printf("[VMM WARNING] Failed to update flags for page at 0x%lx\n", virt);
+            DEBUGF("[VMM WARNING] Failed to update flags for page at 0x%lx\n", virt);
         }
     }
     
@@ -1040,44 +1038,36 @@ void vmm_dump(vmm_t* vmm_pub) {
     vmm_internal* vmm = vmm_get_instance(vmm_pub);
     if (!vmm) return;
     
-    printf("=== VMM Dump ===\n");
-    printf("VMM at %p (magic: 0x%x, is_kernel: %d)\n", 
+    DEBUGF("=== VMM Dump ===\n");
+    DEBUGF("VMM at %p (magic: 0x%x, is_kernel: %d)\n", 
            vmm, vmm->magic, vmm->is_kernel);
-    printf("Alloc range: 0x%lx - 0x%lx (size: 0x%lx)\n",
+    DEBUGF("Alloc range: 0x%lx - 0x%lx (size: 0x%lx)\n",
            vmm->public.alloc_base, vmm->public.alloc_end,
            vmm->public.alloc_end - vmm->public.alloc_base);
-    printf("Page table root (phys): 0x%lx\n", vmm->public.pt_root);
-    printf("\nVM Objects:\n");
+    DEBUGF("Page table root (phys): 0x%lx\n", vmm->public.pt_root);
+    DEBUGF("\nVM Objects:\n");
     
-    vm_object_internal* current = (vm_object_internal*)vmm->public.objects;
+    vm_object_internal* current = vmm->objects_internal;
     int count = 0;
     
     while (current) {
         if (!vm_object_validate(current)) {
-            printf("[CORRUPTED OBJECT AT INDEX %d]\n", count);
+            DEBUGF("[CORRUPTED OBJECT AT INDEX %d]\n", count);
             break;
         }
         
-        printf("  [%d] base=0x%016lx, length=0x%08lx, flags=0x%02lx",
+        DEBUGF("  [%d] base=0x%016lx, length=0x%08lx, flags=0x%02lx",
                count, current->public.base, current->public.length, current->public.flags);
         
-        // Decode flags
-        printf(" (");
-        if (current->public.flags & VM_FLAG_WRITE) printf("W");
-        if (current->public.flags & VM_FLAG_EXEC) printf("X");
-        if (current->public.flags & VM_FLAG_USER) printf("U");
-        if (current->public.flags & VM_FLAG_MMIO) printf("M");
-        printf(")\n");
-        
         count++;
-        current = (vm_object_internal*)current->public.next;
+        current = current->next_internal;
     }
     
     if (count == 0) {
-        printf("  (no objects)\n");
+        DEBUGF("  (no objects)\n");
     }
-    printf("Total objects: %d\n", count);
-    printf("================\n");
+    DEBUGF("Total objects: %d\n", count);
+    DEBUGF("================\n");
 }
 
 /*
@@ -1091,10 +1081,10 @@ void vmm_stats(vmm_t* vmm_pub, size_t* out_total, size_t* out_resident) {
     size_t total = 0;
     size_t resident = 0;
     
-    vm_object_internal* current = (vm_object_internal*)vmm->public.objects;
+    vm_object_internal* current = vmm->objects_internal;
     while (current) {
         if (!vm_object_validate(current)) {
-            printf("[VMM ERROR] Corrupted vm_object during stats\n");
+            DEBUGF("[VMM ERROR] Corrupted vm_object during stats\n");
             break;
         }
         
@@ -1110,7 +1100,7 @@ void vmm_stats(vmm_t* vmm_pub, size_t* out_total, size_t* out_resident) {
             }
         }
         
-        current = (vm_object_internal*)current->public.next;
+        current = current->next_internal;
     }
     
     if (out_total) *out_total = total;
@@ -1125,12 +1115,12 @@ void vmm_dump_pte_chain(uint64_t pt_root, void* virt) {
     uint64_t v = (uint64_t)virt;
     uint64_t *pml4 = (uint64_t *)PHYSMAP_P2V(pt_root);
 
-    printf("Dumping PTE chain for virt=0x%lx (pt_root phys=0x%lx)\n", v, pt_root);
+    DEBUGF("Dumping PTE chain for virt=0x%lx (pt_root phys=0x%lx)\n", v, pt_root);
     size_t i;
 
     i = PML4_INDEX(virt);
     uint64_t e = pml4[i];
-    printf("PML4[%3zu] = 0x%016lx\n", i, e);
+    DEBUGF("PML4[%3zu] = 0x%016lx\n", i, e);
     if (!(e & PAGE_PRESENT)) return;
 
     uint64_t pdpt_phys = PT_ENTRY_ADDR(e);
@@ -1138,7 +1128,7 @@ void vmm_dump_pte_chain(uint64_t pt_root, void* virt) {
 
     i = PDPT_INDEX(virt);
     e = pdpt[i];
-    printf("PDPT[%3zu] = 0x%016lx\n", i, e);
+    DEBUGF("PDPT[%3zu] = 0x%016lx\n", i, e);
     if (!(e & PAGE_PRESENT)) return;
 
     uint64_t pd_phys = PT_ENTRY_ADDR(e);
@@ -1146,7 +1136,7 @@ void vmm_dump_pte_chain(uint64_t pt_root, void* virt) {
 
     i = PD_INDEX(virt);
     e = pd[i];
-    printf("PD  [%3zu] = 0x%016lx\n", i, e);
+    DEBUGF("PD  [%3zu] = 0x%016lx\n", i, e);
     if (!(e & PAGE_PRESENT)) return;
 
     uint64_t pt_phys = PT_ENTRY_ADDR(e);
@@ -1154,12 +1144,12 @@ void vmm_dump_pte_chain(uint64_t pt_root, void* virt) {
 
     i = PT_INDEX(virt);
     e = pt[i];
-    printf("PT  [%3zu] = 0x%016lx\n", i, e);
+    DEBUGF("PT  [%3zu] = 0x%016lx\n", i, e);
     
     if (e & PAGE_PRESENT) {
         uint64_t phys = PT_ENTRY_ADDR(e);
         uint64_t offset = (uintptr_t)virt & 0xFFF;
-        printf("Physical address: 0x%lx\n", phys + offset);
+        DEBUGF("Physical address: 0x%lx\n", phys + offset);
     }
 }
 
@@ -1170,11 +1160,11 @@ void vmm_dump_pte_chain(uint64_t pt_root, void* virt) {
 bool vmm_verify_integrity(vmm_t* vmm_pub) {
     vmm_internal* vmm = vmm_get_instance(vmm_pub);
     if (!vmm) {
-        printf("[VMM VERIFY] Failed to get VMM instance\n");
+        DEBUGF("[VMM VERIFY] Failed to get VMM instance\n");
         return false;
     }
     
-    printf("[VMM VERIFY] Checking VMM at %p\n", vmm);
+    DEBUGF("[VMM VERIFY] Checking VMM at %p\n", vmm);
     
     // Check VMM magic
     if (!vmm_validate(vmm)) {
@@ -1183,38 +1173,38 @@ bool vmm_verify_integrity(vmm_t* vmm_pub) {
     
     // Check allocation range sanity
     if (vmm->public.alloc_end <= vmm->public.alloc_base) {
-        printf("[VMM VERIFY] Invalid alloc range: 0x%lx - 0x%lx\n",
+        DEBUGF("[VMM VERIFY] Invalid alloc range: 0x%lx - 0x%lx\n",
                vmm->public.alloc_base, vmm->public.alloc_end);
         return false;
     }
     
     // Check page table root
     if (!vmm->public.pt_root) {
-        printf("[VMM VERIFY] NULL page table root\n");
+        DEBUGF("[VMM VERIFY] NULL page table root\n");
         return false;
     }
     
     // Verify all vm_objects
-    vm_object_internal* current = (vm_object_internal*)vmm->public.objects;
+    vm_object_internal* current = vmm->objects_internal;
     vm_object_internal* prev = NULL;
     int count = 0;
     
     while (current) {
         // Validate object structure
         if (!vm_object_validate(current)) {
-            printf("[VMM VERIFY] Object %d failed validation\n", count);
+            DEBUGF("[VMM VERIFY] Object %d failed validation\n", count);
             return false;
         }
         
         // Check alignment
         if (current->public.base & (PAGE_SIZE - 1)) {
-            printf("[VMM VERIFY] Object %d: unaligned base 0x%lx\n",
+            DEBUGF("[VMM VERIFY] Object %d: unaligned base 0x%lx\n",
                    count, current->public.base);
             return false;
         }
         
         if (current->public.length & (PAGE_SIZE - 1)) {
-            printf("[VMM VERIFY] Object %d: unaligned length 0x%lx\n",
+            DEBUGF("[VMM VERIFY] Object %d: unaligned length 0x%lx\n",
                    count, current->public.length);
             return false;
         }
@@ -1222,7 +1212,7 @@ bool vmm_verify_integrity(vmm_t* vmm_pub) {
         // Check bounds
         if (current->public.base < vmm->public.alloc_base ||
             current->public.base + current->public.length > vmm->public.alloc_end) {
-            printf("[VMM VERIFY] Object %d: out of bounds (0x%lx - 0x%lx)\n",
+            DEBUGF("[VMM VERIFY] Object %d: out of bounds (0x%lx - 0x%lx)\n",
                    count, current->public.base, current->public.base + current->public.length);
             return false;
         }
@@ -1231,24 +1221,24 @@ bool vmm_verify_integrity(vmm_t* vmm_pub) {
         if (prev) {
             uintptr_t prev_end = prev->public.base + prev->public.length;
             if (current->public.base < prev_end) {
-                printf("[VMM VERIFY] Object %d overlaps with previous (0x%lx < 0x%lx)\n",
+                DEBUGF("[VMM VERIFY] Object %d overlaps with previous (0x%lx < 0x%lx)\n",
                        count, current->public.base, prev_end);
                 return false;
             }
         }
         
         prev = current;
-        current = (vm_object_internal*)current->public.next;
+        current = current->next_internal;
         count++;
         
         // Sanity check: prevent infinite loop
         if (count > 10000) {
-            printf("[VMM VERIFY] Too many objects (possible loop)\n");
+            DEBUGF("[VMM VERIFY] Too many objects (possible loop)\n");
             return false;
         }
     }
     
-    printf("[VMM VERIFY] All checks passed (%d objects)\n", count);
+    DEBUGF("[VMM VERIFY] All checks passed (%d objects)\n", count);
     return true;
 }
 
