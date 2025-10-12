@@ -13,6 +13,22 @@
 // This is the base address of the physmap (mapping of the entirety of RAM into virtual space)
 #define PHYSMAP_VIRTUAL_BASE 0xFFFF800000000000
 
+/*
+ * x86_64 Canonical Address Space Layout (48-bit addressing):
+ * 
+ * 0x0000000000000000 - 0x00007FFFFFFFFFFF : Lower half (user space)
+ * 0x0000800000000000 - 0xFFFF7FFFFFFFFFFF : Non-canonical (causes #GP)
+ * 0xFFFF800000000000 - 0xFFFFFFFFFFFFFFFF : Higher half (kernel space)
+ * 
+ * Kernel Virtual Memory Map:
+ * 0xFFFF800000000000 - PHYSMAP_VIRTUAL_BASE : Physical memory map (physmap)
+ * 0xFFFFFFFF80000000 - KERNEL_VIRTUAL_BASE  : Kernel code/data
+ * 
+ * The physmap allows direct access to all physical RAM via:
+ *   virtual_addr = physical_addr + PHYSMAP_VIRTUAL_BASE
+ */
+
+
 #ifdef __ASSEMBLER__
 
 #define KERNEL_V2P(a) ((a) - KERNEL_VIRTUAL_BASE)

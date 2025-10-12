@@ -9,6 +9,7 @@
 
 #include <stdbool.h>
 #include <memory/paging.h>
+#include <sys/panic.h>
 #include <libc/string.h>
 #include <vga_stdio.h>
 #include <serial.h>
@@ -285,6 +286,9 @@ void build_physmap() {
 
     // place physmap
     size_t physmap_index = PML4_INDEX(PHYSMAP_VIRTUAL_BASE);
+
+    PANIC_ASSERT(kernel_index != physmap_index);
+    
     PML4[0][physmap_index] = KERNEL_V2P(&PDPTs[0]) | (PAGE_PRESENT | PAGE_WRITABLE);
 
     // activate new PML4 (load CR3 with *physical* address)
