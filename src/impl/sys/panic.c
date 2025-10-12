@@ -118,7 +118,7 @@ void panic_c(const char* message, cpu_context_t* context)
         
     }
     else{
-        printf("[-] No CPU context available, that's usually bad...\n");
+        printf("\n[-] No CPU context available\n");
     }
     
     printf("\n                                 SYSTEM HALTED                                  ");
