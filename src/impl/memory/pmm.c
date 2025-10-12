@@ -1,5 +1,5 @@
 /*
- * pmm.c - Range-based physical memory manager (buddy allocator).
+ * pmm.c - Range-based physical memory manager (buddy allocator) - IMPROVED
  *
  * This implementation uses an explicit [start, end) physical range stored
  * in g_range_start/g_range_end. The public init takes a range (start,end)
@@ -14,6 +14,10 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include <libc/string.h>
+#include <vga_stdio.h>
+
+// Magic number for validating free block headers
+#define PMM_FREE_BLOCK_MAGIC 0x46524545
 
 static bool g_inited = false;
 static uint64_t g_range_start = 0;
@@ -25,6 +29,9 @@ static uint32_t g_order_count = 0;
 // Free list heads per order. Store physical address of first free block, or EMPTY_SENTINEL for empty.
 static uint64_t g_free_heads[PMM_MAX_ORDERS];
 static const uint64_t EMPTY_SENTINEL = UINT64_MAX;
+
+// Statistics
+static pmm_stats_t g_stats;
 
 /* 
  * is_pow2_u64 - check if x is a power of two
@@ -40,22 +47,97 @@ static inline uint64_t order_to_size(uint32_t order) {
     return g_min_block << order; 
 }
 
+/*
+ * validate_block_in_range - Check if a block is within managed range
+ */
+static inline bool validate_block_in_range(uint64_t block_phys, uint32_t order) {
+    uint64_t block_size = order_to_size(order);
+    
+    if (block_phys < g_range_start) {
+        printf("[PMM ERROR] Block 0x%lx below managed range (start: 0x%lx)\n",
+               block_phys, g_range_start);
+        return false;
+    }
+    
+    if (block_phys + block_size > g_range_end) {
+        printf("[PMM ERROR] Block 0x%lx + 0x%lx exceeds managed range (end: 0x%lx)\n",
+               block_phys, block_size, g_range_end);
+        return false;
+    }
+    
+    return true;
+}
+
+/*
+ * validate_free_header - Validate free block header for corruption
+ */
+static inline bool validate_free_header(uint64_t block_phys, uint32_t expected_order) {
+    if (!validate_block_in_range(block_phys, expected_order)) {
+        return false;
+    }
+    
+    pmm_free_header_t *header = (pmm_free_header_t *)PHYSMAP_P2V(block_phys);
+    
+    if (header->magic != PMM_FREE_BLOCK_MAGIC) {
+        printf("[PMM ERROR] Invalid magic at 0x%lx: 0x%x (expected 0x%x)\n",
+               block_phys, header->magic, PMM_FREE_BLOCK_MAGIC);
+        g_stats.corruption_detected++;
+        return false;
+    }
+    
+    if (header->order != expected_order) {
+        printf("[PMM ERROR] Order mismatch at 0x%lx: %u (expected %u)\n",
+               block_phys, header->order, expected_order);
+        g_stats.corruption_detected++;
+        return false;
+    }
+    
+    // Validate next pointer
+    if (header->next_phys != EMPTY_SENTINEL && header->next_phys != 0) {
+        if (header->next_phys < g_range_start || header->next_phys >= g_range_end) {
+            printf("[PMM ERROR] Invalid next pointer at 0x%lx: 0x%lx (range: 0x%lx-0x%lx)\n",
+                   block_phys, header->next_phys, g_range_start, g_range_end);
+            g_stats.corruption_detected++;
+            return false;
+        }
+    }
+    
+    return true;
+}
+
 /* 
  * read_next_word - read the next pointer stored at the start of a free block
  * Always use the PHYSMAP_P2V macro to access physical memory.
  */
-static inline uint64_t read_next_word(uint64_t block_phys) {
-    uint64_t *ptr = (uint64_t *)PHYSMAP_P2V(block_phys);
-    return *ptr;
+static inline uint64_t read_next_word(uint64_t block_phys, uint32_t order) {
+    if (!validate_free_header(block_phys, order)) {
+        // Corruption detected - return EMPTY_SENTINEL to break the chain safely
+        return EMPTY_SENTINEL;
+    }
+    
+    pmm_free_header_t *header = (pmm_free_header_t *)PHYSMAP_P2V(block_phys);
+    return header->next_phys;
 }
 
 /* 
  * write_next_word - write the next pointer stored at the start of a free block
  * Always use the PHYSMAP_P2V macro to access physical memory.
  */
-static inline void write_next_word(uint64_t block_phys, uint64_t next_phys) {
-    uint64_t *ptr = (uint64_t *)PHYSMAP_P2V(block_phys);
-    *ptr = next_phys;
+static inline void write_next_word(uint64_t block_phys, uint64_t next_phys, uint32_t order) {
+    pmm_free_header_t *header = (pmm_free_header_t *)PHYSMAP_P2V(block_phys);
+    header->magic = PMM_FREE_BLOCK_MAGIC;
+    header->order = order;
+    header->next_phys = next_phys;
+}
+
+/* 
+ * clear_free_header - Clear header when allocating (detect use-after-free)
+ */
+static inline void clear_free_header(uint64_t block_phys) {
+    pmm_free_header_t *header = (pmm_free_header_t *)PHYSMAP_P2V(block_phys);
+    header->magic = 0;
+    header->order = 0xFFFFFFFF;
+    header->next_phys = 0xDEADBEEFDEADBEEF;
 }
 
 /*
@@ -64,11 +146,16 @@ static inline void write_next_word(uint64_t block_phys, uint64_t next_phys) {
 static uint64_t pop_head(uint32_t order) {
     uint64_t head = g_free_heads[order];
     if (head == EMPTY_SENTINEL) return EMPTY_SENTINEL;
-    uint64_t next = read_next_word(head);
-    g_free_heads[order] = (next == EMPTY_SENTINEL ? EMPTY_SENTINEL : next);
     
-    // Eh, I'm clearing the next pointer in the popped block just to be sure
-    write_next_word(head, EMPTY_SENTINEL);
+    uint64_t next = read_next_word(head, order);
+    g_free_heads[order] = (next == EMPTY_SENTINEL || next == 0) ? EMPTY_SENTINEL : next;
+    
+    // Clear the header to detect use-after-free
+    clear_free_header(head);
+    
+    // Update statistics
+    g_stats.free_blocks[order]--;
+    
     return head;
 }
 
@@ -77,8 +164,11 @@ static uint64_t pop_head(uint32_t order) {
  */
 static void push_head(uint32_t order, uint64_t block_phys) {
     uint64_t head = g_free_heads[order];
-    write_next_word(block_phys, (head == EMPTY_SENTINEL) ? EMPTY_SENTINEL : head);
+    write_next_word(block_phys, (head == EMPTY_SENTINEL) ? EMPTY_SENTINEL : head, order);
     g_free_heads[order] = block_phys;
+    
+    // Update statistics
+    g_stats.free_blocks[order]++;
 }
 
 /*
@@ -87,20 +177,39 @@ static void push_head(uint32_t order, uint64_t block_phys) {
 static bool remove_specific(uint32_t order, uint64_t target_phys) {
     uint64_t prev = EMPTY_SENTINEL;
     uint64_t cur = g_free_heads[order];
+    
     while (cur != EMPTY_SENTINEL) {
-        uint64_t next = read_next_word(cur); /* 0 means NULL */
+        // Validate before reading next
+        if (!validate_free_header(cur, order)) {
+            printf("[PMM] Corruption in remove_specific at 0x%lx\n", cur);
+            return false;
+        }
+        
+        uint64_t next = read_next_word(cur, order);
+        
         if (cur == target_phys) {
+            // Found it, remove from list
             if (prev == EMPTY_SENTINEL) {
-                g_free_heads[order] = (next == 0 ? EMPTY_SENTINEL : next);
+                // Removing head
+                g_free_heads[order] = (next == 0 || next == EMPTY_SENTINEL) ? EMPTY_SENTINEL : next;
             } else {
-                // write prev->next = next
-                write_next_word(prev, next);
+                // Removing middle/end - update previous node
+                write_next_word(prev, next, order);
             }
+            
+            // Clear the removed block's header
+            clear_free_header(cur);
+            
+            // Update statistics
+            g_stats.free_blocks[order]--;
+            
             return true;
         }
+        
         prev = cur;
-        cur = (next == 0 ? EMPTY_SENTINEL : next);
+        cur = (next == 0 || next == EMPTY_SENTINEL) ? EMPTY_SENTINEL : next;
     }
+    
     return false;
 }
 
@@ -122,7 +231,6 @@ static uint32_t size_to_order(uint64_t size_bytes) {
     while (need < size_bytes) {
         need <<= 1;
         ++order;
-        // guaranteed to stop because g_max_order bounds allocations
     }
     return order;
 }
@@ -137,6 +245,7 @@ static void partition_range_into_blocks(uint64_t range_start, uint64_t range_end
 
     while (cur < range_end) {
         uint64_t remain = range_end - cur;
+        
         /* choose largest order o such that order_to_size(o) <= remain and cur is aligned to that size */
         uint32_t chosen = 0;
         for (int32_t o = (int32_t)g_max_order; o >= 0; --o) {
@@ -146,12 +255,13 @@ static void partition_range_into_blocks(uint64_t range_start, uint64_t range_end
             chosen = (uint32_t)o;
             break;
         }
+        
         push_head(chosen, cur);
+        g_stats.total_blocks[chosen]++;
+        
         cur += order_to_size(chosen);
     }
 }
-
-/* ----------------------------------------------------------------- */
 
 /*
  * pmm_is_initialized - Returns whether the PMM has been initialized
@@ -188,7 +298,6 @@ uint64_t pmm_min_block_size(void) {
     return g_min_block; 
 }
 
-
 /*
  * pmm_init - Initialize the physical memory manager to manage
  * the physical address range [range_start_phys, range_end_phys).
@@ -197,7 +306,11 @@ pmm_status_t pmm_init(uint64_t range_start_phys, uint64_t range_end_phys, uint64
     if (g_inited) return PMM_ERR_ALREADY_INIT;
     if (range_end_phys <= range_start_phys) return PMM_ERR_INVALID;
     if (min_block_size == 0 || !is_pow2_u64(min_block_size)) return PMM_ERR_INVALID;
-    if (min_block_size < sizeof(uint64_t)) return PMM_ERR_INVALID;
+    if (min_block_size < sizeof(pmm_free_header_t)) {
+        printf("[PMM] min_block_size (%lu) too small for header (%lu)\n",
+               min_block_size, sizeof(pmm_free_header_t));
+        return PMM_ERR_INVALID;
+    }
 
     g_min_block = min_block_size;
 
@@ -205,8 +318,10 @@ pmm_status_t pmm_init(uint64_t range_start_phys, uint64_t range_end_phys, uint64
     uint64_t start_aligned = (uint64_t)align_up(range_start_phys, g_min_block);
     uint64_t end_aligned = (uint64_t)align_down(range_end_phys, g_min_block);
 
-    if (end_aligned <= start_aligned)
+    if (end_aligned <= start_aligned) {
+        printf("[PMM] After alignment, range is empty\n");
         return PMM_ERR_INVALID;
+    }
 
     g_range_start = start_aligned;
     g_range_end = end_aligned;
@@ -222,8 +337,12 @@ pmm_status_t pmm_init(uint64_t range_start_phys, uint64_t range_end_phys, uint64
     g_max_order = max_order;
     g_order_count = g_max_order + 1;
 
+    // Initialize free lists
     for (uint32_t i = 0; i < PMM_MAX_ORDERS; ++i)
         g_free_heads[i] = EMPTY_SENTINEL;
+
+    // Initialize statistics
+    memset(&g_stats, 0, sizeof(pmm_stats_t));
 
     // Partition the range into blocks
     partition_range_into_blocks(g_range_start, g_range_end);
@@ -238,10 +357,10 @@ pmm_status_t pmm_init(uint64_t range_start_phys, uint64_t range_end_phys, uint64
 void pmm_shutdown(void) {
     if (!g_inited) return;
 
-    // clear metadata region (we store next pointers at starts of free blocks)
+    // Clear all free block headers in the managed range
     uint8_t *ptr = (uint8_t *)PHYSMAP_P2V(g_range_start);
     uint64_t size = pmm_managed_size();
-    for (uint64_t i = 0; i < size; ++i) ptr[i] = 0;
+    memset(ptr, 0, size);
 
     g_inited = false;
     g_range_start = 0;
@@ -249,7 +368,13 @@ void pmm_shutdown(void) {
     g_min_block = PMM_MIN_ORDER_PAGE_SIZE;
     g_max_order = 0;
     g_order_count = 0;
-    for (uint32_t i = 0; i < PMM_MAX_ORDERS; ++i) g_free_heads[i] = EMPTY_SENTINEL;
+    
+    for (uint32_t i = 0; i < PMM_MAX_ORDERS; ++i) 
+        g_free_heads[i] = EMPTY_SENTINEL;
+    
+    memset(&g_stats, 0, sizeof(pmm_stats_t));
+    
+    printf("[PMM] Shutdown complete\n");
 }
 
 /*
@@ -264,21 +389,18 @@ static pmm_status_t alloc_block_of_order(uint32_t req_order, uint64_t *out_phys)
     if (o > g_max_order) return PMM_ERR_OOM;
 
     uint64_t block = pop_head(o);
-    if (block == EMPTY_SENTINEL) return PMM_ERR_OOM; // paranoia
+    if (block == EMPTY_SENTINEL) return PMM_ERR_OOM;
 
     // split until we reach requested order
     while (o > req_order) {
         --o;
         uint64_t half = order_to_size(o);
         uint64_t buddy = block + half;
-        //push buddy into freelist at order o
+        
+        // Push buddy into freelist at order o
         push_head(o, buddy);
+        g_stats.total_blocks[o]++;
     }
-
-    // Clean metadata in the allocated block
-    // NOTE: We could also memset, but it's wasteful to zero the entire block
-    // since we only use the first 8 bytes for metadata.
-    write_next_word(block, 0);
 
     *out_phys = block;
     return PMM_OK;
@@ -299,6 +421,7 @@ pmm_status_t pmm_alloc(size_t size_bytes, uint64_t *out_phys) {
     uint32_t order = size_to_order(rounded);
     if (order > g_max_order) return PMM_ERR_OOM;
 
+    g_stats.alloc_calls++;
     return alloc_block_of_order(order, out_phys);
 }
 
@@ -309,11 +432,17 @@ pmm_status_t pmm_free(uint64_t phys, size_t size_bytes) {
     if (!g_inited) return PMM_ERR_NOT_INIT;
     if (size_bytes == 0) return PMM_ERR_INVALID;
 
-    // basic range check against [g_range_start, g_range_end)
-    if (phys < g_range_start) return PMM_ERR_OUT_OF_RANGE;
-    if (phys >= g_range_end) return PMM_ERR_OUT_OF_RANGE;
+    // Basic range check against [g_range_start, g_range_end)
+    if (phys < g_range_start) {
+        printf("[PMM ERROR] Free: address 0x%lx below managed range\n", phys);
+        return PMM_ERR_OUT_OF_RANGE;
+    }
+    if (phys >= g_range_end) {
+        printf("[PMM ERROR] Free: address 0x%lx above managed range\n", phys);
+        return PMM_ERR_OUT_OF_RANGE;
+    }
 
-    // round size in the same manner as allocation
+    // Round size in the same manner as allocation
     uint64_t rounded = (uint64_t)size_bytes;
     if (rounded & (g_min_block - 1)) rounded = align_up(rounded, g_min_block);
 
@@ -323,31 +452,44 @@ pmm_status_t pmm_free(uint64_t phys, size_t size_bytes) {
     uint64_t block_addr = phys;
     uint64_t block_size = order_to_size(order);
 
-    if ((block_addr & (block_size - 1)) != 0) return PMM_ERR_NOT_ALIGNED;
+    if ((block_addr & (block_size - 1)) != 0) {
+        printf("[PMM ERROR] Free: address 0x%lx not aligned to size 0x%lx\n",
+               block_addr, block_size);
+        return PMM_ERR_NOT_ALIGNED;
+    }
+
+    g_stats.free_calls++;
 
     // Coalesce upwards where possible
     while (order < g_max_order) {
         uint64_t buddy = buddy_of(block_addr, order);
+        
+        // FIXED: Use order_to_size(order) consistently
+        uint64_t current_block_size = order_to_size(order);
 
-        // if buddy is outside managed range, stop
-        if (buddy < g_range_start || (buddy + block_size) > g_range_end) {
+        // If buddy is outside managed range, stop
+        if (buddy < g_range_start || (buddy + current_block_size) > g_range_end) {
             break;
         }
 
         // If buddy is free at this order, remove it and coalesce
         bool found = remove_specific(order, buddy);
         if (!found) {
-            push_head(order, block_addr); // buddy not free, push current and exit
+            // Buddy not free, push current block and exit
+            push_head(order, block_addr);
             return PMM_OK;
         }
 
-        // buddy removed, merged block is min(block_addr, buddy)
+        // Buddy removed successfully - coalesce
+        g_stats.coalesce_success++;
+        g_stats.total_blocks[order]--;  // Merged two blocks into one larger block
+        
+        // Merged block is min(block_addr, buddy)
         if (buddy < block_addr) block_addr = buddy;
         ++order;
-        block_size <<= 1;
     }
 
-    // push the resulting (possibly coalesced) block
+    // Push the resulting (possibly coalesced) block
     push_head(order, block_addr);
     return PMM_OK;
 }
@@ -360,22 +502,28 @@ pmm_status_t pmm_mark_reserved_range(uint64_t start, uint64_t end) {
     if (!g_inited) return PMM_ERR_NOT_INIT;
     if (end <= start) return PMM_ERR_INVALID;
 
-    // clamp to managed range
+    // Clamp to managed range
     if (start < g_range_start) start = g_range_start;
     if (end > g_range_end) end = g_range_end;
     if (start >= end) return PMM_ERR_INVALID;
 
-    // align to min block for safe handling
+    // Align to min block for safe handling
+    uint64_t orig_start = start, orig_end = end;
     start = align_down(start, g_min_block);
     end   = align_up(end, g_min_block);
+    
+    if (start != orig_start || end != orig_end) {
+        printf("[PMM] Adjusted reserved range [0x%lx, 0x%lx) to [0x%lx, 0x%lx)\n",
+               orig_start, orig_end, start, end);
+    }
 
-    // for each order from max to min, scan free lists and remove overlapping blocks
+    // For each order from max to min, scan free lists and remove overlapping blocks
     for (int32_t o = (int32_t)g_max_order; o >= 0; --o) {
         uint64_t block_size = order_to_size((uint32_t)o);
         uint64_t cur = g_free_heads[o];
 
         while (cur != EMPTY_SENTINEL) {
-            uint64_t next = read_next_word(cur);
+            uint64_t next = read_next_word(cur, (uint32_t)o);
             uint64_t block_start = cur;
             uint64_t block_end = cur + block_size;
 
@@ -394,7 +542,7 @@ pmm_status_t pmm_mark_reserved_range(uint64_t start, uint64_t end) {
                 }
             }
 
-            cur = next == 0 ? EMPTY_SENTINEL : next;
+            cur = (next == 0 || next == EMPTY_SENTINEL) ? EMPTY_SENTINEL : next;
         }
     }
 
@@ -409,16 +557,159 @@ pmm_status_t pmm_mark_free_range(uint64_t start, uint64_t end) {
     if (!g_inited) return PMM_ERR_NOT_INIT;
     if (end <= start) return PMM_ERR_INVALID;
 
-    // clamp to managed range
+    // Clamp to managed range
     if (start < g_range_start) start = g_range_start;
     if (end > g_range_end) end = g_range_end;
     if (start >= end) return PMM_ERR_INVALID;
 
     // Round start up and end down to min_block
+    uint64_t orig_start = start, orig_end = end;
     start = align_up(start, g_min_block);
     end   = align_down(end, g_min_block);
-    if (start >= end) return PMM_ERR_INVALID;
+    
+    if (start >= end) {
+        printf("[PMM WARNING] After alignment, free range [0x%lx, 0x%lx) became empty\n",
+               orig_start, orig_end);
+        return PMM_ERR_INVALID;
+    }
+    
+    if (start != orig_start || end != orig_end) {
+        printf("[PMM] Adjusted free range [0x%lx, 0x%lx) to [0x%lx, 0x%lx)\n",
+               orig_start, orig_end, start, end);
+    }
 
     partition_range_into_blocks(start, end);
     return PMM_OK;
+}
+
+/*
+ * pmm_get_stats - Get current PMM statistics
+ */
+void pmm_get_stats(pmm_stats_t* out_stats) {
+    if (!out_stats) return;
+    *out_stats = g_stats;
+}
+
+/*
+ * pmm_dump_stats - Print detailed PMM statistics
+ */
+void pmm_dump_stats(void) {
+    if (!g_inited) {
+        printf("[PMM] Not initialized\n");
+        return;
+    }
+    
+    printf("=== PMM Statistics ===\n");
+    printf("Managed range: [0x%lx - 0x%lx) (0x%lx bytes)\n",
+           g_range_start, g_range_end, g_range_end - g_range_start);
+    printf("Min block size: 0x%lx, Max order: %u\n", g_min_block, g_max_order);
+    printf("\nOperation counts:\n");
+    printf("  Allocations:      %lu\n", g_stats.alloc_calls);
+    printf("  Frees:            %lu\n", g_stats.free_calls);
+    printf("  Coalesces:        %lu\n", g_stats.coalesce_success);
+    printf("  Corruptions:      %lu\n", g_stats.corruption_detected);
+    
+    printf("\nBlock distribution:\n");
+    printf("Order  Size         Total  Free   Used   Utilization\n");
+    printf("-----  -----------  -----  -----  -----  -----------\n");
+    
+    uint64_t total_bytes = 0;
+    uint64_t free_bytes = 0;
+    
+    for (uint32_t o = 0; o <= g_max_order; o++) {
+        uint64_t size = order_to_size(o);
+        uint64_t total = g_stats.total_blocks[o];
+        uint64_t free = g_stats.free_blocks[o];
+        uint64_t used = total > free ? total - free : 0;
+        
+        if (total > 0) {
+            double util = total > 0 ? (double)used / total * 100.0 : 0.0;
+            printf("%-5u  0x%-9lx  %-5lu  %-5lu  %-5lu  %.1f%%\n",
+                   o, size, total, free, used, util);
+            
+            total_bytes += total * size;
+            free_bytes += free * size;
+        }
+    }
+    
+    printf("\nMemory summary:\n");
+    printf("  Total managed: %lu bytes (%.2f MiB)\n", 
+           total_bytes, total_bytes / (1024.0 * 1024.0));
+    printf("  Free:          %lu bytes (%.2f MiB)\n",
+           free_bytes, free_bytes / (1024.0 * 1024.0));
+    printf("  Used:          %lu bytes (%.2f MiB)\n",
+           total_bytes - free_bytes, (total_bytes - free_bytes) / (1024.0 * 1024.0));
+    printf("  Utilization:   %.1f%%\n",
+           total_bytes > 0 ? (double)(total_bytes - free_bytes) / total_bytes * 100.0 : 0.0);
+    printf("======================\n");
+}
+
+/*
+ * pmm_verify_integrity - Verify free-list integrity
+ * Returns true if all checks pass, false otherwise
+ */
+bool pmm_verify_integrity(void) {
+    if (!g_inited) {
+        printf("[PMM] Not initialized\n");
+        return false;
+    }
+    
+    printf("[PMM] Checking free-list integrity...\n");
+    
+    bool all_ok = true;
+    uint64_t counted_free[PMM_MAX_ORDERS] = {0};
+    
+    // Walk each free list and verify
+    for (uint32_t order = 0; order <= g_max_order; order++) {
+        uint64_t cur = g_free_heads[order];
+        int count = 0;
+        
+        while (cur != EMPTY_SENTINEL) {
+            count++;
+            counted_free[order]++;
+            
+            // Prevent infinite loops
+            if (count > 100000) {
+                printf("[PMM] Order %u: Possible infinite loop detected\n", order);
+                all_ok = false;
+                break;
+            }
+            
+            // Validate the header
+            if (!validate_free_header(cur, order)) {
+                printf("[PMM] Order %u: Invalid header at block 0x%lx\n", order, cur);
+                all_ok = false;
+                break;
+            }
+            
+            // Check alignment
+            uint64_t size = order_to_size(order);
+            if ((cur & (size - 1)) != 0) {
+                printf("[PMM] Order %u: Block 0x%lx not aligned to 0x%lx\n",
+                       order, cur, size);
+                all_ok = false;
+            }
+            
+            // Move to next
+            uint64_t next = read_next_word(cur, order);
+            cur = (next == 0 || next == EMPTY_SENTINEL) ? EMPTY_SENTINEL : next;
+        }
+    }
+    
+    // Compare counted blocks with statistics
+    for (uint32_t order = 0; order <= g_max_order; order++) {
+        if (counted_free[order] != g_stats.free_blocks[order]) {
+            printf("[PMM] Order %u: Statistics mismatch (counted: %lu, stats: %lu)\n",
+                   order, counted_free[order], g_stats.free_blocks[order]);
+            all_ok = false;
+        }
+    }
+    
+    if (all_ok) {
+        printf("[PMM] All checks passed\n");
+    } else {
+        printf("[PMM] FAILED - integrity compromised!\n");
+    }
+    
+    return all_ok;
 }

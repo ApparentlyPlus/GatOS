@@ -32,19 +32,47 @@ typedef enum {
     PMM_ERR_NOT_FOUND      // expected buddy not found during coalescing (internal)
 } pmm_status_t;
 
-// Public API
-pmm_status_t pmm_init(uint64_t base_phys, uint64_t span_bytes, uint64_t min_block_size);
+typedef struct {
+    uint64_t total_blocks[PMM_MAX_ORDERS];      // Total blocks per order
+    uint64_t free_blocks[PMM_MAX_ORDERS];       // Free blocks per order
+    uint64_t alloc_calls;                       // Number of allocation calls
+    uint64_t free_calls;                        // Number of free calls
+    uint64_t coalesce_success;                  // Successful coalesces
+    uint64_t corruption_detected;               // Free-list corruption events
+} pmm_stats_t;
+
+// Free block header stored at the start of each free block
+typedef struct {
+    uint32_t magic;        // PMM_FREE_BLOCK_MAGIC
+    uint32_t order;        // Block order (for validation)
+    uint64_t next_phys;    // Physical address of next free block
+} pmm_free_header_t;
+
+
+// Initialization and shutdown
+
+pmm_status_t pmm_init(uint64_t range_start_phys, uint64_t range_end_phys, uint64_t min_block_size);
 void pmm_shutdown(void);
+
+// Allocation/Deallocation
+
 pmm_status_t pmm_alloc(size_t size_bytes, uint64_t *out_phys);
 pmm_status_t pmm_free(uint64_t phys, size_t size_bytes);
-pmm_status_t pmm_mark_free_range(uint64_t start, uint64_t end);
 pmm_status_t pmm_mark_reserved_range(uint64_t start, uint64_t end);
+pmm_status_t pmm_mark_free_range(uint64_t start, uint64_t end);
 
 // Introspection helpers
+
 bool pmm_is_initialized(void);
 uint64_t pmm_managed_base(void);
-uint64_t pmm_managed_size(void);
 uint64_t pmm_managed_end(void);
+uint64_t pmm_managed_size(void);
 uint64_t pmm_min_block_size(void);
+
+// Stats
+
+void pmm_get_stats(pmm_stats_t* out_stats);
+void pmm_dump_stats(void);
+bool pmm_verify_integrity(void);
 
 #endif
