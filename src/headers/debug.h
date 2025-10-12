@@ -10,3 +10,4 @@
 void DEBUG_LOG(const char* msg, int total);
 void DEBUG_GENERIC_LOG(const char* msg);
 void DEBUG_DUMP_PMT(void);
+void DEBUGF(const char* fmt, ...);

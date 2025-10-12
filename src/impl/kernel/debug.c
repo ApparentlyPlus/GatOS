@@ -11,6 +11,8 @@
 #include <stddef.h>
 #include <serial.h>
 #include <misc.h>
+#include <stdarg.h>
+#include <vga_stdio.h>
 
 static int dbg_counter = 0;
 
@@ -53,6 +55,18 @@ void DEBUG_GENERIC_LOG(const char* msg) {
     *ptr = '\0';
 
     serial_write(buf);
+}
+
+void DEBUGF(const char* fmt, ...)
+{
+    char buffer[512];
+    va_list args;
+    
+    va_start(args, fmt);
+    vsnprintf(buffer, sizeof(buffer), fmt, args);
+    va_end(args);
+    
+    DEBUG_GENERIC_LOG(buffer);
 }
 
 /*
