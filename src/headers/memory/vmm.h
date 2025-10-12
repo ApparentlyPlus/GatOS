@@ -20,12 +20,12 @@
 
 // Return codes
 typedef enum {
-    VMM_OK = 0,
+    VMM_OK = 0,             // Success
     VMM_ERR_INVALID,        // Invalid arguments
     VMM_ERR_OOM,            // Out of memory (virtual address space)
     VMM_ERR_NOT_INIT,       // Kernel VMM not initialized
     VMM_ERR_ALREADY_INIT,   // Kernel VMM already initialized
-    VMM_ERR_NOT_FOUND,      // VM object not found
+    VMM_ERR_NOT_FOUND,      // VM object or mapping not found
     VMM_ERR_NOT_ALIGNED,    // Address not page-aligned
     VMM_ERR_NO_MEMORY,      // Physical memory allocation failed
     VMM_ERR_ALREADY_MAPPED, // Page is already mapped
@@ -34,6 +34,7 @@ typedef enum {
 typedef struct vm_object vm_object;
 
 // VM Object - represents a virtual memory range
+// Note: This is the public interface. Internal implementation adds validation fields.
 struct vm_object{
     uintptr_t base;        // Virtual base address (page-aligned)
     size_t length;         // Length in bytes (page-aligned)
@@ -42,6 +43,7 @@ struct vm_object{
 };
 
 // VMM Instance - manages one address space
+// Note: This is the public interface. Internal implementation adds validation fields.
 typedef struct {
     uint64_t pt_root;      // Page table root (physical address)
     vm_object* objects;    // Linked list of vm_objects
@@ -60,7 +62,7 @@ vmm_t* vmm_create(uintptr_t alloc_base, uintptr_t alloc_end);
 void vmm_destroy(vmm_t* vmm);
 void vmm_switch(vmm_t* vmm);
 
-// Kernel VMM
+// Kernel VMM Management
 
 vmm_status_t vmm_kernel_init(uintptr_t alloc_base, uintptr_t alloc_end);
 vmm_t* vmm_kernel_get(void);
