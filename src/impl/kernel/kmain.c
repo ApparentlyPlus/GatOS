@@ -9,6 +9,7 @@
 
 #include <sys/interrupts.h>
 #include <memory/pmm.h>
+#include <memory/slab.h>
 #include <memory/paging.h>
 #include <sys/ACPI.h>
 #include <libc/string.h>
@@ -21,7 +22,7 @@
 
 #define TOTAL_DBG 11
 
-static char* KERNEL_VERSION = "v1.6.4-alpha";
+static char* KERNEL_VERSION = "v1.6.5-alpha";
 static uint8_t multiboot_buffer[8 * 1024]; // 8KB should be more than enough
 
 /*
