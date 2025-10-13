@@ -1,6 +1,19 @@
 /*
- * pmm.h - Physical Memory Manager (Buddy Allocator)
- * 
+ * pmm.h - Physical Memory Manager
+ *
+ * The Physical Memory Manager (PMM) is responsible for managing all physical memory
+ * in the system, excluding the kernel region. It tracks free and allocated memory frames,
+ * handles allocation requests, and manages memory deallocation. The PMM implements
+ * a buddy allocation algorithm, organizing memory into free-lists of power-of-two sized
+ * blocks for efficient memory management.
+ *
+ * Memory blocks are managed through the kernel's PHYSMAP region, which provides direct
+ * access to physical memory from the higher-half kernel address space. While internal
+ * operations use virtual addresses via PHYSMAP, all public interfaces return physical
+ * addresses to maintain abstraction.
+ *
+ * The PMM *must* be initialized FIRST, before the Slab allocator and the VMM.
+ *
  * Author: u/ApparentlyPlus
  */
 
@@ -19,8 +32,7 @@
 #define PMM_MAX_ORDERS 32
 #endif
 
-// Return type
-
+// Return codes
 typedef enum {
     PMM_OK = 0,
     PMM_ERR_OOM,           // out of memory (no block large enough)
