@@ -1,6 +1,19 @@
 /*
  * vmm.h - Virtual Memory Manager
- * 
+ *
+ * The Virtual Memory Manager (VMM) provides comprehensive virtual memory management
+ * for the operating system, serving as the highest-level abstraction over hardware
+ * memory management units. It manages multiple address spaces, page table structures,
+ * and virtual memory objects while providing a unified interface for memory allocation,
+ * protection, and mapping operations.
+ *
+ * Each VMM instance manages a complete address space with its own page table hierarchy
+ * and maintains a linked list of VM objects representing contiguous virtual memory regions.
+ * The kernel VMM instance is initialized first and manages the kernel's address space,
+ * while additional instances can be created for user processes.
+ *
+ * The VMM should be initialized LAST, as it relies on both the PMM and the Slab Allocator.
+ *
  * Author: u/ApparentlyPlus
  */
 

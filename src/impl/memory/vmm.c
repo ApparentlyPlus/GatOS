@@ -10,6 +10,7 @@
 
 #include <memory/vmm.h>
 #include <memory/pmm.h>
+#include <memory/slab.h>
 #include <memory/paging.h>
 #include <libc/string.h>
 #include <debug.h>
@@ -41,6 +42,10 @@ typedef struct {
 
 // Global kernel VMM
 static vmm_internal* g_kernel_vmm = NULL;
+
+// Slab caches for VMM internal structures
+static slab_cache_t* g_vmm_internal_cache = NULL;
+static slab_cache_t* g_vm_object_internal_cache = NULL;
 
 #pragma region Validation Helpers
 
@@ -329,21 +334,20 @@ bool vmm_get_mapped_phys(uint64_t pt_root, void* virt, uint64_t* out_phys) {
  * vmm_alloc_vm_object - Allocate a vm_object structure with validation
  */
 vm_object_internal* vmm_alloc_vm_object(void) {
-    uint64_t phys;
-    if (pmm_alloc(sizeof(vm_object_internal), &phys) != PMM_OK) {
+    void* obj;
+    if (slab_alloc(g_vm_object_internal_cache, &obj) != SLAB_OK)
         return NULL;
-    }
     
-    vm_object_internal* obj = (vm_object_internal *)PHYSMAP_P2V(phys);
-    memset(obj, 0, sizeof(vm_object_internal));
+    vm_object_internal* internal = (vm_object_internal*)obj;
+    memset(internal, 0, sizeof(vm_object_internal));
     
-    // Initialize validation fields
-    obj->magic = VM_OBJECT_MAGIC;
-    obj->red_zone_pre = VM_OBJECT_RED_ZONE;
-    obj->red_zone_post = VM_OBJECT_RED_ZONE;
-    obj->next_internal = NULL;
+    // Initialize validation fields...
+    internal->magic = VM_OBJECT_MAGIC;
+    internal->red_zone_pre = VM_OBJECT_RED_ZONE;
+    internal->red_zone_post = VM_OBJECT_RED_ZONE;
+    internal->next_internal = NULL;
     
-    return obj;
+    return internal;
 }
 
 /*
@@ -352,7 +356,6 @@ vm_object_internal* vmm_alloc_vm_object(void) {
 void vmm_free_vm_object(vm_object_internal* obj) {
     if (!obj) return;
     
-    // Validate before freeing
     if (!vm_object_validate(obj)) {
         DEBUGF("[VMM ERROR] Attempted to free corrupted vm_object at %p\n", obj);
         return;
@@ -363,8 +366,7 @@ void vmm_free_vm_object(vm_object_internal* obj) {
     obj->red_zone_pre = 0;
     obj->red_zone_post = 0;
     
-    uint64_t phys = PHYSMAP_V2P((uint64_t)obj);
-    pmm_free(phys, sizeof(vm_object_internal));
+    slab_free(g_vm_object_internal_cache, obj);
 }
 
 /*
@@ -636,16 +638,22 @@ vmm_t* vmm_create(uintptr_t alloc_base, uintptr_t alloc_end) {
 
     // Ensure PMM is initialized
     if(!pmm_is_initialized()) {
+        DEBUGF("[VMM] The PMM must be online first\n");
+        return NULL;
+    }
+
+    if(!slab_is_initialized()){
+        DEBUGF("[VMM] The Slab Allocator must be online first\n");
         return NULL;
     }
     
     // Allocate VMM structure
-    uint64_t vmm_phys;
-    if (pmm_alloc(sizeof(vmm_internal), &vmm_phys) != PMM_OK) {
+    void* vmm_mem;
+    if (slab_alloc(g_vmm_internal_cache, &vmm_mem) != SLAB_OK) {
         return NULL;
     }
     
-    vmm_internal* vmm = (vmm_internal *)PHYSMAP_P2V(vmm_phys);
+    vmm_internal* vmm = (vmm_internal *)vmm_mem;
     memset(vmm, 0, sizeof(vmm_internal));
     
     vmm->magic = VMM_MAGIC;
@@ -655,7 +663,7 @@ vmm_t* vmm_create(uintptr_t alloc_base, uintptr_t alloc_end) {
     // Create page table root
     uint64_t pt_root = vmm_alloc_page_table();
     if (!pt_root) {
-        pmm_free(vmm_phys, sizeof(vmm_internal));
+        slab_free(g_vmm_internal_cache, vmm_mem);
         return NULL;
     }
 
@@ -664,7 +672,7 @@ vmm_t* vmm_create(uintptr_t alloc_base, uintptr_t alloc_end) {
         vmm_status_t status = vmm_copy_kernel_mappings(pt_root);
         if (status != VMM_OK) {
             pmm_free(pt_root, PAGE_SIZE);
-            pmm_free(vmm_phys, sizeof(vmm_internal));
+            slab_free(g_vmm_internal_cache, vmm_mem);
             return NULL;
         }
     }
@@ -747,8 +755,15 @@ void vmm_switch(vmm_t* vmm_pub) {
 vmm_status_t vmm_kernel_init(uintptr_t alloc_base, uintptr_t alloc_end) {
     if (g_kernel_vmm) return VMM_ERR_ALREADY_INIT;
     
-    // Ensure PMM is initialized
+    // Ensure PMM is online
     if (!pmm_is_initialized()) {
+        DEBUGF("[VMM] The PMM must be online first\n");
+        return VMM_ERR_NOT_INIT;
+    }
+
+    // Ensure slab is online
+    if(!slab_is_initialized()){
+        DEBUGF("[VMM] The Slab allocator must be online first\n");
         return VMM_ERR_NOT_INIT;
     }
     
@@ -772,6 +787,24 @@ vmm_status_t vmm_kernel_init(uintptr_t alloc_base, uintptr_t alloc_end) {
     vmm->public.alloc_end = alloc_end;
     
     g_kernel_vmm = vmm;
+
+    // Create slab caches for VMM structures
+    g_vmm_internal_cache = slab_cache_create(
+        "vmm_internal",
+        sizeof(vmm_internal),
+        _Alignof(vmm_internal) // cool little trick this one, hehe
+    );
+
+    g_vm_object_internal_cache = slab_cache_create(
+        "vm_object_internal", 
+        sizeof(vm_object_internal),
+        _Alignof(vm_object_internal)
+    );
+
+    if (!g_vmm_internal_cache || !g_vm_object_internal_cache) {
+        DEBUGF("[VMM] Failed to create slab caches\n");
+        return VMM_ERR_NO_MEMORY;
+    }
     
     return VMM_OK;
 }
