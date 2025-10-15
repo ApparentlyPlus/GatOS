@@ -7,6 +7,8 @@
  * Author: u/ApparentlyPlus
  */
 
+#pragma once
+
 // This is the base address of all the kernel code. Kernel execution happens here.
 #define KERNEL_VIRTUAL_BASE 0xFFFFFFFF80000000
 

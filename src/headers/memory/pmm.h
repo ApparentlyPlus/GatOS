@@ -17,8 +17,7 @@
  * Author: u/ApparentlyPlus
  */
 
-#ifndef PMM_H
-#define PMM_H
+#pragma once
 
 #include <stdint.h>
 #include <stddef.h>
@@ -85,5 +84,3 @@ uint64_t pmm_min_block_size(void);
 void pmm_get_stats(pmm_stats_t* out_stats);
 void pmm_dump_stats(void);
 bool pmm_verify_integrity(void);
-
-#endif

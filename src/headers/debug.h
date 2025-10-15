@@ -6,6 +6,7 @@
  * Author: u/ApparentlyPlus
  */
 
+#pragma once
 
 void DEBUG_LOG(const char* msg, int total);
 void DEBUG_GENERIC_LOG(const char* msg);

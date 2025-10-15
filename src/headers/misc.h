@@ -7,6 +7,8 @@
  * Author: u/ApparentlyPlus
  */
 
+#pragma once
+
 #include <stdint.h>
 
 void print_banner(char* KERNEL_VERSION);

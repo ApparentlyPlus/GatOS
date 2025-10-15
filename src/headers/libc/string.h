@@ -7,8 +7,7 @@
  * Author: u/ApparentlyPlus
  */
  
-#ifndef STRING_H
-#define STRING_H
+#pragma once
 
 #include <stddef.h>
 
@@ -26,5 +25,3 @@ char *strchr(const char *s, int c);
 char *strrchr(const char *s, int c);
 char *strcat(char *dest, const char *src);
 char *strncat(char *dest, const char *src, size_t n);
-
-#endif

@@ -18,8 +18,7 @@
  * Author: u/ApparentlyPlus
  */
 
-#ifndef SLAB_H
-#define SLAB_H
+#pragma once
 
 #include <stdint.h>
 #include <stddef.h>
@@ -100,5 +99,3 @@ bool slab_verify_integrity(void);
 
 size_t slab_cache_obj_size(slab_cache_t* cache);
 const char* slab_cache_name(slab_cache_t* cache);
-
-#endif

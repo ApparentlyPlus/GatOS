@@ -17,8 +17,7 @@
  * Author: u/ApparentlyPlus
  */
 
-#ifndef VMM_H
-#define VMM_H
+#pragma once
 
 #include <stdint.h>
 #include <stddef.h>
@@ -110,5 +109,3 @@ void vmm_dump(vmm_t* vmm);
 void vmm_stats(vmm_t* vmm, size_t* out_total, size_t* out_resident);
 void vmm_dump_pte_chain(uint64_t pt_root, void* virt);
 bool vmm_verify_integrity(vmm_t* vmm_pub);
-
-#endif
