@@ -109,3 +109,43 @@ void vmm_dump(vmm_t* vmm);
 void vmm_stats(vmm_t* vmm, size_t* out_total, size_t* out_resident);
 void vmm_dump_pte_chain(uint64_t pt_root, void* virt);
 bool vmm_verify_integrity(vmm_t* vmm_pub);
+
+
+/*
+
+Notes on improving the VMM in the future:
+
+1. Add Lazy Allocation Support
+
+Currently we use immediate backing. I should add a flag for demand paging:
+
+#define VM_FLAG_LAZY (1 << 4)  // Don't back immediately
+
+In vmm_alloc(), skip the mapping loop if VM_FLAG_LAZY. Later, handle page faults to back on-demand.
+This would be crucial for efficient mmap() implementation later.
+
+2. Range Operations Could Be Optimized
+
+vmm_map_range maps page by page. For large contiguous ranges, we could potentially use 
+larger page sizes (2MB/1GB pages).
+
+3. Add Copy on Write Support
+
+For fork() later, we'll want CoW:
+
+#define VM_FLAG_COW (1 << 5)
+
+In page fault handler:
+
+if (fault_address has VM_FLAG_COW) {
+    Allocate new page
+    Copy content
+    Remap with write permissions
+}
+
+4. Add vmm_resize()
+
+Heap will need to grow, so good to have a function to handle that
+
+
+*/

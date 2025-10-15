@@ -79,6 +79,12 @@
 #define PD_INDEX(addr)   (((uintptr_t)(addr) >> 21) & PT_ENTRY_MASK)
 #define PT_INDEX(addr)   (((uintptr_t)(addr) >> 12) & PT_ENTRY_MASK)
 
+
+#define MEASUREMENT_UNIT_BYTES                 1
+#define MEASUREMENT_UNIT_KB                    1024
+#define MEASUREMENT_UNIT_MB                    1024*1024
+#define MEASUREMENT_UNIT_GB                    1024*1024*1024
+
 #ifndef __ASSEMBLER__
 
 #include <multiboot2.h>
@@ -126,3 +132,36 @@ static uint64_t KEND = (uint64_t)&KPHYS_END;
 
 static physmapInfo physmapStruct = {0};
 #endif
+
+
+/*
+
+Notes on improving Paging in the future:
+
+1. Memory Barriers for TLB Flushes
+
+flush_tlb() should include memory barriers for SMP safety:
+
+cvoid flush_tlb(void) {
+    __asm__ volatile("mfence" ::: "memory");  // Serialize
+    uint64_t cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(cr3) :: "memory");
+    __asm__ volatile("mov %0, %%cr3" :: "r"(cr3) : "memory");
+    __asm__ volatile("mfence" ::: "memory");  // Serialize
+}
+
+2. We should consider invlpg() instead of full TLB flush
+
+3. Consider PAT Support
+
+For MMIO regions, Page Attribute Table entries would give us finer control:
+
+#define PAGE_PAT          (1ULL << 7)
+#define PAGE_PAT_UC       0  // Uncacheable
+#define PAGE_PAT_WC       1  // Write-combining (good for framebuffers)
+#define PAGE_PAT_WT       4  // Write-through
+#define PAGE_PAT_WB       6  // Write-back
+
+4. Enable NX support by checking CPUID
+
+*/

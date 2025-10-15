@@ -45,11 +45,6 @@
 #define MULTIBOOT_TAG_TYPE_EFI64_IH            20
 #define MULTIBOOT_TAG_TYPE_LOAD_BASE_ADDR      21
 
-#define MEASUREMENT_UNIT_BYTES                 1
-#define MEASUREMENT_UNIT_KB                    1024
-#define MEASUREMENT_UNIT_MB                    1024*1024
-#define MEASUREMENT_UNIT_GB                    1024*1024*1024
-
 // Maximum number of memory ranges we can store
 #define MAX_MEMORY_RANGES 64
 

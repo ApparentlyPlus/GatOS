@@ -84,3 +84,18 @@ uint64_t pmm_min_block_size(void);
 void pmm_get_stats(pmm_stats_t* out_stats);
 void pmm_dump_stats(void);
 bool pmm_verify_integrity(void);
+
+
+
+/*
+
+Notes on improving the PMM in the future:
+
+1. Coalescing Could Be More Aggressive
+
+The buddy allocator only coalesces upward during free. Consider checking 
+if the block being freed can be merged with its buddy even when the buddy is in a higher-order list.
+
+Can't think of anything else now ~u/ApparentlyPlus
+
+*/

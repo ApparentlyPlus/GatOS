@@ -99,3 +99,33 @@ bool slab_verify_integrity(void);
 
 size_t slab_cache_obj_size(slab_cache_t* cache);
 const char* slab_cache_name(slab_cache_t* cache);
+
+
+/*
+
+Notes on improving the Slab Alloc in the future:
+
+1. Per CPU Caches
+
+When we add SMP, per-CPU slab caches will be critical:
+
+typedef struct {
+    void* freelist;           // Per-CPU freelist
+    uint32_t available;       // Objects available
+    slab_t* current_slab;     // Active slab for this CPU
+} slab_cpu_cache_t;
+
+// In slab_cache:
+slab_cpu_cache_t cpu_caches[MAX_CPUS];
+
+2. Timestamp in allocations 
+
+The alloc_timestamp in slab is 0 - consider using RDTSC:
+
+cstatic inline uint64_t rdtsc(void) {
+    uint32_t lo, hi;
+    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((uint64_t)hi << 32) | lo;
+}
+
+*/
