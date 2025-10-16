@@ -366,8 +366,6 @@ slab_status_t slab_init(void) {
     
     g_slab_initialized = true;
     
-    DEBUGF("[SLAB] Initialized with dynamic cache allocation\n");
-    
     return SLAB_OK;
 }
 
@@ -471,9 +469,6 @@ slab_cache_t* slab_cache_create(const char* name, size_t obj_size, size_t align)
     cache->next = g_caches;
     g_caches = cache;
     g_stats.cache_count++;
-    
-    DEBUGF("[SLAB] Created cache '%s' (user_size=%zu, obj_size=%zu, align=%zu)\n",
-           name, cache->user_size, cache->obj_size, cache->align);
     
     return cache;
 }
