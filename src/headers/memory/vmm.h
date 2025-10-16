@@ -66,6 +66,8 @@ typedef struct {
 // Core Allocation/Deallocation
 
 vmm_status_t vmm_alloc(vmm_t* vmm, size_t length, size_t flags, void* arg, void** out_addr);
+vmm_status_t vmm_alloc_at(vmm_t* vmm_pub, void* desired_addr, size_t length, 
+                          size_t flags, void* arg, void** out_addr);
 vmm_status_t vmm_free(vmm_t* vmm, void* addr);
 
 // Non-kernel VMM Instance Management
@@ -98,6 +100,7 @@ vmm_status_t vmm_map_page(vmm_t* vmm, uint64_t phys, void* virt, size_t flags);
 vmm_status_t vmm_unmap_page(vmm_t* vmm, void* virt);
 vmm_status_t vmm_map_range(vmm_t* vmm, uint64_t phys, void* virt, size_t length, size_t flags);
 vmm_status_t vmm_unmap_range(vmm_t* vmm, void* virt, size_t length);
+vmm_status_t vmm_resize(vmm_t* vmm_pub, void* addr, size_t new_length);
 
 // Protection & Permissions
 

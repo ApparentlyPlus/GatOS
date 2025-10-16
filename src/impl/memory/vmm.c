@@ -563,6 +563,158 @@ vmm_status_t vmm_alloc(vmm_t* vmm_pub, size_t length, size_t flags, void* arg, v
 }
 
 /*
+ * vmm_alloc_at - Allocate virtual memory at a specific address
+ */
+vmm_status_t vmm_alloc_at(vmm_t* vmm_pub, void* desired_addr, size_t length, 
+                          size_t flags, void* arg, void** out_addr) {
+    vmm_internal* vmm = vmm_get_instance(vmm_pub);
+    if (!vmm) return VMM_ERR_NOT_INIT;
+    if (length == 0) return VMM_ERR_INVALID;
+    if (!out_addr) return VMM_ERR_INVALID;
+    if (!desired_addr) return VMM_ERR_INVALID;
+    
+    *out_addr = NULL;
+    
+    // Align to page boundary
+    uintptr_t desired = (uintptr_t)desired_addr;
+    if (desired & (PAGE_SIZE - 1)) {
+        DEBUGF("[VMM] vmm_alloc_at: address 0x%lx not page-aligned\n", desired);
+        return VMM_ERR_NOT_ALIGNED;
+    }
+    
+    // Align length
+    length = align_up(length, PAGE_SIZE);
+    
+    // Check if desired range is within allocatable space
+    if (desired < vmm->public.alloc_base || 
+        desired + length > vmm->public.alloc_end) {
+        DEBUGF("[VMM] vmm_alloc_at: range 0x%lx-0x%lx outside allocatable space\n",
+               desired, desired + length);
+        return VMM_ERR_OOM;
+    }
+    
+    // Validate MMIO alignment if needed
+    if (flags & VM_FLAG_MMIO) {
+        uint64_t mmio_phys = (uint64_t)arg;
+        if (mmio_phys & (PAGE_SIZE - 1)) {
+            DEBUGF("[VMM] vmm_alloc_at: MMIO address 0x%lx not page-aligned\n", mmio_phys);
+            return VMM_ERR_NOT_ALIGNED;
+        }
+    }
+    
+    // Check if the range is available (no overlap with existing objects)
+    vm_object_internal* current = vmm->objects_internal;
+    vm_object_internal* insert_after = NULL;
+    
+    while (current) {
+        if (!vm_object_validate(current)) {
+            return VMM_ERR_INVALID;
+        }
+        
+        uintptr_t obj_start = current->public.base;
+        uintptr_t obj_end = current->public.base + current->public.length;
+        uintptr_t desired_end = desired + length;
+        
+        // Check for overlap
+        if (!(desired_end <= obj_start || desired >= obj_end)) {
+            DEBUGF("[VMM] vmm_alloc_at: range 0x%lx-0x%lx overlaps with existing object\n",
+                   desired, desired_end);
+            return VMM_ERR_ALREADY_MAPPED;
+        }
+        
+        // Track where to insert (maintain sorted order)
+        if (obj_start < desired) {
+            insert_after = current;
+        }
+        
+        current = current->next_internal;
+    }
+    
+    // Create new vm_object
+    vm_object_internal* obj = vmm_alloc_vm_object();
+    if (!obj) return VMM_ERR_NO_MEMORY;
+    
+    obj->public.base = desired;
+    obj->public.length = length;
+    obj->public.flags = flags;
+    
+    // Insert into linked list at the correct position
+    if (insert_after) {
+        obj->public.next = insert_after->public.next;
+        obj->next_internal = insert_after->next_internal;
+        insert_after->public.next = &obj->public;
+        insert_after->next_internal = obj;
+    } else {
+        // Insert at head
+        obj->public.next = vmm->public.objects;
+        obj->next_internal = vmm->objects_internal;
+        vmm->public.objects = &obj->public;
+        vmm->objects_internal = obj;
+    }
+    
+    // Allocate and map physical memory
+    uint64_t phys_base;
+    if (flags & VM_FLAG_MMIO) {
+        phys_base = (uint64_t)arg;
+    } else {
+        pmm_status_t pmm_status = pmm_alloc(length, &phys_base);
+        if (pmm_status != PMM_OK) {
+            // Remove from list and free
+            if (insert_after) {
+                insert_after->public.next = obj->public.next;
+                insert_after->next_internal = obj->next_internal;
+            } else {
+                vmm->public.objects = obj->public.next;
+                vmm->objects_internal = obj->next_internal;
+            }
+            vmm_free_vm_object(obj);
+            return VMM_ERR_NO_MEMORY;
+        }
+    }
+    
+    // Map pages with rollback on failure
+    bool is_user_vmm = !vmm->is_kernel;
+    uint64_t pt_flags = vmm_convert_vm_flags(flags, vmm->is_kernel);
+    
+    for (size_t offset = 0; offset < length; offset += PAGE_SIZE) {
+        vmm_status_t map_status = arch_map_page(
+            vmm->public.pt_root,
+            phys_base + offset,
+            (void*)(desired + offset),
+            pt_flags,
+            is_user_vmm
+        );
+        
+        if (map_status != VMM_OK) {
+            // Rollback mappings
+            for (size_t rollback = 0; rollback < offset; rollback += PAGE_SIZE) {
+                arch_unmap_page(vmm->public.pt_root, (void*)(desired + rollback));
+            }
+            
+            // Free physical memory
+            if (!(flags & VM_FLAG_MMIO)) {
+                pmm_free(phys_base, length);
+            }
+            
+            // Remove from list
+            if (insert_after) {
+                insert_after->public.next = obj->public.next;
+                insert_after->next_internal = obj->next_internal;
+            } else {
+                vmm->public.objects = obj->public.next;
+                vmm->objects_internal = obj->next_internal;
+            }
+            vmm_free_vm_object(obj);
+            
+            return map_status;
+        }
+    }
+    
+    *out_addr = desired_addr;
+    return VMM_OK;
+}
+
+/*
  * vmm_free - Free a previously allocated virtual memory range
  */
 vmm_status_t vmm_free(vmm_t* vmm_pub, void* addr) {
