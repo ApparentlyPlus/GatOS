@@ -698,7 +698,7 @@ void vmm_destroy(vmm_t* vmm_pub) {
         return;
     }
     
-    // Free all vm_objects
+    // Free all vm_objects and their backing memory
     vm_object_internal* current = vmm->objects_internal;
     while (current) {
         if (!vm_object_validate(current)) {
@@ -724,16 +724,34 @@ void vmm_destroy(vmm_t* vmm_pub) {
         current = next;
     }
     
-    // Destroy page tables from level 4 (PML4)
-    vmm_destroy_page_table(vmm->public.pt_root, true, 4);
+    // Free userspace page tables (PML4 entries 0-255 only)
+    // DO NOT touch kernel mappings (entries 256-511)
+    uint64_t* pml4 = (uint64_t *)PHYSMAP_P2V(vmm->public.pt_root);
+    
+    // Only free userspace portion (lower half)
+    for (size_t i = 0; i < 256; i++) {
+        uint64_t entry = pml4[i];
+        if (!(entry & PAGE_PRESENT)) continue;
+        
+        uint64_t pdpt_phys = PT_ENTRY_ADDR(entry);
+        
+        // Recursively destroy PDPT and everything below it
+        vmm_destroy_page_table(pdpt_phys, true, 3);
+        
+        // Clear the PML4 entry
+        pml4[i] = 0;
+    }
+    
+    // Now free the PML4 itself
+    pmm_free(vmm->public.pt_root, PAGE_SIZE);
     
     // Clear magic before freeing
     vmm->magic = 0;
     
-    // Free VMM structure itself
-    uint64_t vmm_phys = PHYSMAP_V2P((uint64_t)vmm);
-    pmm_free(vmm_phys, sizeof(vmm_internal));
+    // Free VMM structure itself using slab allocator
+    slab_free(g_vmm_internal_cache, vmm);
 }
+
 
 /*
  * vmm_switch - Switch to a different address space
@@ -1013,6 +1031,144 @@ vmm_status_t vmm_unmap_range(vmm_t* vmm_pub, void* virt, size_t length) {
     flush_tlb();
     
     return VMM_OK;
+}
+
+/*
+ * vmm_resize - Resize an existing virtual memory region
+ */
+vmm_status_t vmm_resize(vmm_t* vmm_pub, void* addr, size_t new_length) {
+    vmm_internal* vmm = vmm_get_instance(vmm_pub);
+    if (!vmm) return VMM_ERR_NOT_INIT;
+    if (!addr) return VMM_ERR_INVALID;
+    if (new_length == 0) return VMM_ERR_INVALID;
+    
+    // Align new length to page size
+    new_length = align_up(new_length, PAGE_SIZE);
+    
+    uintptr_t target = (uintptr_t)addr;
+    vm_object_internal* prev = NULL;
+    vm_object_internal* current = vmm->objects_internal;
+    
+    // Find the object with matching base address
+    while (current) {
+        if (!vm_object_validate(current)) {
+            return VMM_ERR_INVALID;
+        }
+        
+        if (current->public.base == target) {
+            break;
+        }
+        prev = current;
+        current = current->next_internal;
+    }
+    
+    if (!current) {
+        DEBUGF("[VMM ERROR] vmm_resize: No object found at address 0x%lx\n", target);
+        return VMM_ERR_NOT_FOUND;
+    }
+    
+    // Cannot resize MMIO regions
+    if (current->public.flags & VM_FLAG_MMIO) {
+        DEBUGF("[VMM ERROR] vmm_resize: Cannot resize MMIO region\n");
+        return VMM_ERR_INVALID;
+    }
+    
+    size_t old_length = current->public.length;
+    
+    // No change needed
+    if (new_length == old_length) {
+        return VMM_OK;
+    }
+    
+    // Growing the region
+    if (new_length > old_length) {
+        size_t growth = new_length - old_length;
+        uintptr_t new_end = current->public.base + new_length;
+        
+        // Check if we have space (either before next object or before alloc_end)
+        if (current->next_internal) {
+            if (new_end > current->next_internal->public.base) {
+                DEBUGF("[VMM ERROR] vmm_resize: Growth would overlap with next object\n");
+                return VMM_ERR_OOM;
+            }
+        } else {
+            if (new_end > vmm->public.alloc_end) {
+                DEBUGF("[VMM ERROR] vmm_resize: Growth exceeds allocation range\n");
+                return VMM_ERR_OOM;
+            }
+        }
+        
+        // Allocate physical memory for the new pages
+        uint64_t phys_base;
+        pmm_status_t pmm_status = pmm_alloc(growth, &phys_base);
+        if (pmm_status != PMM_OK) {
+            DEBUGF("[VMM ERROR] vmm_resize: Failed to allocate %zu bytes of physical memory\n", growth);
+            return VMM_ERR_NO_MEMORY;
+        }
+        
+        // Map the new pages
+        bool is_user_vmm = !vmm->is_kernel;
+        uint64_t pt_flags = vmm_convert_vm_flags(current->public.flags, vmm->is_kernel);
+        size_t mapped_offset = 0;
+        
+        for (size_t offset = 0; offset < growth; offset += PAGE_SIZE) {
+            vmm_status_t map_status = arch_map_page(
+                vmm->public.pt_root,
+                phys_base + offset,
+                (void*)(current->public.base + old_length + offset),
+                pt_flags,
+                is_user_vmm
+            );
+            
+            if (map_status != VMM_OK) {
+                DEBUGF("[VMM ERROR] vmm_resize: Mapping failed at offset 0x%lx\n", offset);
+                
+                // Rollback: unmap all successfully mapped pages
+                for (size_t rollback = 0; rollback < offset; rollback += PAGE_SIZE) {
+                    arch_unmap_page(vmm->public.pt_root, 
+                                   (void*)(current->public.base + old_length + rollback));
+                }
+                
+                // Free the entire physical allocation
+                pmm_free(phys_base, growth);
+                
+                return map_status;
+            }
+            
+            mapped_offset = offset + PAGE_SIZE;
+        }
+        
+        // If we reach this, update the object's length
+        current->public.length = new_length;
+        
+        // Flush TLB
+        flush_tlb();
+        
+        return VMM_OK;
+    }
+    
+    // Shrinking the region
+    else {
+        size_t shrinkage = old_length - new_length;
+        uintptr_t shrink_start = current->public.base + new_length;
+        
+        // Unmap and free physical pages
+        for (uintptr_t virt = shrink_start; virt < shrink_start + shrinkage; virt += PAGE_SIZE) {
+            uint64_t phys = arch_unmap_page(vmm->public.pt_root, (void*)virt);
+            
+            if (phys) {
+                pmm_free(phys, PAGE_SIZE);
+            }
+        }
+        
+        // Update the object's length
+        current->public.length = new_length;
+        
+        // Flush TLB after unmapping
+        flush_tlb();
+        
+        return VMM_OK;
+    }
 }
 
 #pragma endregion
