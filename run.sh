@@ -11,7 +11,7 @@ readonly BLUE='\033[1;34m'
 # Configuration
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly QEMU_EXEC="qemu-system-x86_64"
-readonly ISO_PATH="dist/x86_64/kernel.iso"
+readonly DIST_DIR="dist/x86_64"
 
 function command_exists() {
   command -v "$1" >/dev/null 2>&1
@@ -19,6 +19,26 @@ function command_exists() {
 
 function is_root() {
   [[ "$(id -u)" -eq 0 ]]
+}
+
+function find_iso_file() {
+  local iso_pattern="${DIST_DIR}/GatOS-*.iso"
+  local iso_files=($(find "${SCRIPT_DIR}/${DIST_DIR}" -maxdepth 1 -name "GatOS-*.iso" 2>/dev/null))
+  
+  if [[ ${#iso_files[@]} -eq 0 ]]; then
+    echo -e "${RED}[ERROR] No GatOS ISO file found in ${DIST_DIR}${NC}" >&2
+    return 1
+  fi
+  
+  if [[ ${#iso_files[@]} -gt 1 ]]; then
+    echo -e "${YELLOW}[WARNING] Multiple ISO files found. Using the most recent one.${NC}" >&2
+    
+    # Sort by modification time and get the most recent
+    local most_recent_iso=$(ls -t "${SCRIPT_DIR}/${DIST_DIR}"/GatOS-*.iso | head -1)
+    echo "${most_recent_iso}"
+  else
+    echo "${iso_files[0]}"
+  fi
 }
 
 function run_make() {
@@ -61,13 +81,11 @@ function verify_environment() {
 }
 
 function run_qemu() {
-  if [[ ! -f "${SCRIPT_DIR}/${ISO_PATH}" ]]; then
-    echo -e "${RED}[ERROR] Bootable ISO not found at ${ISO_PATH}${NC}" >&2
-    return 1
-  fi
+  local iso_file
+  iso_file=$(find_iso_file) || return 1
 
-  echo -e "${GREEN}[SUCCESS] Build complete. Starting QEMU...${NC}"
-  "${QEMU_EXEC}" -cdrom "${SCRIPT_DIR}/${ISO_PATH}" -serial stdio
+  echo -e "${GREEN}[SUCCESS] Build complete. Starting QEMU with ${iso_file##*/}...${NC}"
+  "${QEMU_EXEC}" -cdrom "${iso_file}" -serial stdio
 }
 
 function main() {
