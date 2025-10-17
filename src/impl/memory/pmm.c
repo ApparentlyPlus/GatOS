@@ -54,13 +54,13 @@ static inline bool validate_block_in_range(uint64_t block_phys, uint32_t order) 
     uint64_t block_size = order_to_size(order);
     
     if (block_phys < g_range_start) {
-        DEBUGF("[PMM ERROR] Block 0x%lx below managed range (start: 0x%lx)\n",
+        LOGF("[PMM ERROR] Block 0x%lx below managed range (start: 0x%lx)\n",
                block_phys, g_range_start);
         return false;
     }
     
     if (block_phys + block_size > g_range_end) {
-        DEBUGF("[PMM ERROR] Block 0x%lx + 0x%lx exceeds managed range (end: 0x%lx)\n",
+        LOGF("[PMM ERROR] Block 0x%lx + 0x%lx exceeds managed range (end: 0x%lx)\n",
                block_phys, block_size, g_range_end);
         return false;
     }
@@ -79,14 +79,14 @@ static inline bool validate_free_header(uint64_t block_phys, uint32_t expected_o
     pmm_free_header_t *header = (pmm_free_header_t *)PHYSMAP_P2V(block_phys);
     
     if (header->magic != PMM_FREE_BLOCK_MAGIC) {
-        DEBUGF("[PMM ERROR] Invalid magic at 0x%lx: 0x%x (expected 0x%x)\n",
+        LOGF("[PMM ERROR] Invalid magic at 0x%lx: 0x%x (expected 0x%x)\n",
                block_phys, header->magic, PMM_FREE_BLOCK_MAGIC);
         g_stats.corruption_detected++;
         return false;
     }
     
     if (header->order != expected_order) {
-        DEBUGF("[PMM ERROR] Order mismatch at 0x%lx: %u (expected %u)\n",
+        LOGF("[PMM ERROR] Order mismatch at 0x%lx: %u (expected %u)\n",
                block_phys, header->order, expected_order);
         g_stats.corruption_detected++;
         return false;
@@ -95,7 +95,7 @@ static inline bool validate_free_header(uint64_t block_phys, uint32_t expected_o
     // Validate next pointer
     if (header->next_phys != EMPTY_SENTINEL && header->next_phys != 0) {
         if (header->next_phys < g_range_start || header->next_phys >= g_range_end) {
-            DEBUGF("[PMM ERROR] Invalid next pointer at 0x%lx: 0x%lx (range: 0x%lx-0x%lx)\n",
+            LOGF("[PMM ERROR] Invalid next pointer at 0x%lx: 0x%lx (range: 0x%lx-0x%lx)\n",
                    block_phys, header->next_phys, g_range_start, g_range_end);
             g_stats.corruption_detected++;
             return false;
@@ -181,7 +181,7 @@ static bool remove_specific(uint32_t order, uint64_t target_phys) {
     while (cur != EMPTY_SENTINEL) {
         // Validate before reading next
         if (!validate_free_header(cur, order)) {
-            DEBUGF("[PMM] Corruption in remove_specific at 0x%lx\n", cur);
+            LOGF("[PMM] Corruption in remove_specific at 0x%lx\n", cur);
             return false;
         }
         
@@ -306,7 +306,7 @@ pmm_status_t pmm_init(uint64_t range_start_phys, uint64_t range_end_phys, uint64
     if (range_end_phys <= range_start_phys) return PMM_ERR_INVALID;
     if (min_block_size == 0 || !is_pow2_u64(min_block_size)) return PMM_ERR_INVALID;
     if (min_block_size < sizeof(pmm_free_header_t)) {
-        DEBUGF("[PMM] min_block_size (%lu) too small for header (%lu)\n",
+        LOGF("[PMM] min_block_size (%lu) too small for header (%lu)\n",
                min_block_size, sizeof(pmm_free_header_t));
         return PMM_ERR_INVALID;
     }
@@ -318,7 +318,7 @@ pmm_status_t pmm_init(uint64_t range_start_phys, uint64_t range_end_phys, uint64
     uint64_t end_aligned = (uint64_t)align_down(range_end_phys, g_min_block);
 
     if (end_aligned <= start_aligned) {
-        DEBUGF("[PMM] After alignment, range is empty\n");
+        LOGF("[PMM] After alignment, range is empty\n");
         return PMM_ERR_INVALID;
     }
 
@@ -430,11 +430,11 @@ pmm_status_t pmm_free(uint64_t phys, size_t size_bytes) {
 
     // Basic range check against [g_range_start, g_range_end)
     if (phys < g_range_start) {
-        DEBUGF("[PMM ERROR] Free: address 0x%lx below managed range\n", phys);
+        LOGF("[PMM ERROR] Free: address 0x%lx below managed range\n", phys);
         return PMM_ERR_OUT_OF_RANGE;
     }
     if (phys >= g_range_end) {
-        DEBUGF("[PMM ERROR] Free: address 0x%lx above managed range\n", phys);
+        LOGF("[PMM ERROR] Free: address 0x%lx above managed range\n", phys);
         return PMM_ERR_OUT_OF_RANGE;
     }
 
@@ -449,7 +449,7 @@ pmm_status_t pmm_free(uint64_t phys, size_t size_bytes) {
     uint64_t block_size = order_to_size(order);
 
     if ((block_addr & (block_size - 1)) != 0) {
-        DEBUGF("[PMM ERROR] Free: address 0x%lx not aligned to size 0x%lx\n",
+        LOGF("[PMM ERROR] Free: address 0x%lx not aligned to size 0x%lx\n",
                block_addr, block_size);
         return PMM_ERR_NOT_ALIGNED;
     }
@@ -506,7 +506,7 @@ pmm_status_t pmm_mark_reserved_range(uint64_t start, uint64_t end) {
     end   = align_up(end, g_min_block);
     
     if (start != orig_start || end != orig_end) {
-        DEBUGF("[PMM] Adjusted reserved range [0x%lx, 0x%lx) to [0x%lx, 0x%lx)\n",
+        LOGF("[PMM] Adjusted reserved range [0x%lx, 0x%lx) to [0x%lx, 0x%lx)\n",
                orig_start, orig_end, start, end);
     }
 
@@ -561,13 +561,13 @@ pmm_status_t pmm_mark_free_range(uint64_t start, uint64_t end) {
     end = align_down(end, g_min_block);
     
     if (start >= end) {
-        DEBUGF("[PMM] After alignment, free range [0x%lx, 0x%lx) became empty\n",
+        LOGF("[PMM] After alignment, free range [0x%lx, 0x%lx) became empty\n",
                orig_start, orig_end);
         return PMM_ERR_INVALID;
     }
     
     if (start != orig_start || end != orig_end) {
-        DEBUGF("[PMM] Adjusted free range [0x%lx, 0x%lx) to [0x%lx, 0x%lx)\n",
+        LOGF("[PMM] Adjusted free range [0x%lx, 0x%lx) to [0x%lx, 0x%lx)\n",
                orig_start, orig_end, start, end);
     }
 
@@ -588,25 +588,25 @@ void pmm_get_stats(pmm_stats_t* out_stats) {
  */
 void pmm_dump_stats(void) {
     if (!g_inited) {
-        DEBUGF("[PMM] Not initialized\n");
+        LOGF("[PMM] Not initialized\n");
         return;
     }
     
-    DEBUGF("=== PMM Statistics ===\n");
-    DEBUGF("Managed range: [0x%lx - 0x%lx) (0x%lx bytes, %.2f MiB)\n",
+    LOGF("=== PMM Statistics ===\n");
+    LOGF("Managed range: [0x%lx - 0x%lx) (0x%lx bytes, %.2f MiB)\n",
            g_range_start, g_range_end, g_range_end - g_range_start,
            (g_range_end - g_range_start) / (1024.0 * 1024.0));
-    DEBUGF("Min block size: 0x%lx, Max order: %u\n", g_min_block, g_max_order);
+    LOGF("Min block size: 0x%lx, Max order: %u\n", g_min_block, g_max_order);
     
-    DEBUGF("\nOperation counts:\n");
-    DEBUGF("  Allocations:      %lu\n", g_stats.alloc_calls);
-    DEBUGF("  Frees:            %lu\n", g_stats.free_calls);
-    DEBUGF("  Coalesces:        %lu\n", g_stats.coalesce_success);
-    DEBUGF("  Corruptions:      %lu\n", g_stats.corruption_detected);
+    LOGF("\nOperation counts:\n");
+    LOGF("  Allocations:      %lu\n", g_stats.alloc_calls);
+    LOGF("  Frees:            %lu\n", g_stats.free_calls);
+    LOGF("  Coalesces:        %lu\n", g_stats.coalesce_success);
+    LOGF("  Corruptions:      %lu\n", g_stats.corruption_detected);
     
-    DEBUGF("\nFree block distribution:\n");
-    DEBUGF("Order  Size         Free Blocks\n");
-    DEBUGF("-----  -----------  -----------\n");
+    LOGF("\nFree block distribution:\n");
+    LOGF("Order  Size         Free Blocks\n");
+    LOGF("-----  -----------  -----------\n");
     
     uint64_t total_free_bytes = 0;
     bool has_free_blocks = false;
@@ -618,28 +618,28 @@ void pmm_dump_stats(void) {
         if (count > 0) {
             uint64_t bytes = count * size;
             total_free_bytes += bytes;
-            DEBUGF("%-5u  0x%-9lx  %-5lu\n", o, size, count);
+            LOGF("%-5u  0x%-9lx  %-5lu\n", o, size, count);
             has_free_blocks = true;
         }
     }
     
     if (!has_free_blocks) {
-        DEBUGF("  (no free blocks - all memory allocated)\n");
+        LOGF("  (no free blocks - all memory allocated)\n");
     }
     
     uint64_t total_managed = pmm_managed_size();
     uint64_t used_bytes = total_managed - total_free_bytes;
     
-    DEBUGF("\nMemory summary:\n");
-    DEBUGF("  Total managed: %lu bytes (%.2f MiB)\n", 
+    LOGF("\nMemory summary:\n");
+    LOGF("  Total managed: %lu bytes (%.2f MiB)\n", 
            total_managed, total_managed / (1024.0 * 1024.0));
-    DEBUGF("  Free:          %lu bytes (%.2f MiB)\n",
+    LOGF("  Free:          %lu bytes (%.2f MiB)\n",
            total_free_bytes, total_free_bytes / (1024.0 * 1024.0));
-    DEBUGF("  Used:          %lu bytes (%.2f MiB)\n",
+    LOGF("  Used:          %lu bytes (%.2f MiB)\n",
            used_bytes, used_bytes / (1024.0 * 1024.0));
-    DEBUGF("  Utilization:   %.1f%%\n",
+    LOGF("  Utilization:   %.1f%%\n",
            total_managed > 0 ? (double)used_bytes / total_managed * 100.0 : 0.0);
-    DEBUGF("======================\n");
+    LOGF("======================\n");
 }
 
 /*
@@ -648,11 +648,11 @@ void pmm_dump_stats(void) {
  */
 bool pmm_verify_integrity(void) {
     if (!g_inited) {
-        DEBUGF("[PMM] Not initialized\n");
+        LOGF("[PMM] Not initialized\n");
         return false;
     }
     
-    DEBUGF("[PMM] Checking free-list integrity...\n");
+    LOGF("[PMM] Checking free-list integrity...\n");
     
     bool all_ok = true;
     uint64_t counted_free[PMM_MAX_ORDERS] = {0};
@@ -669,14 +669,14 @@ bool pmm_verify_integrity(void) {
             
             // Prevent infinite loops
             if (count > 100000) {
-                DEBUGF("[PMM] Order %u: Possible infinite loop detected\n", order);
+                LOGF("[PMM] Order %u: Possible infinite loop detected\n", order);
                 all_ok = false;
                 break;
             }
             
             // Validate the header
             if (!validate_free_header(cur, order)) {
-                DEBUGF("[PMM] Order %u: Invalid header at block 0x%lx\n", order, cur);
+                LOGF("[PMM] Order %u: Invalid header at block 0x%lx\n", order, cur);
                 all_ok = false;
                 break;
             }
@@ -685,7 +685,7 @@ bool pmm_verify_integrity(void) {
             // A block is properly aligned if its offset from rangeStart is aligned
             uint64_t offset = cur - g_range_start;
             if ((offset & (size - 1)) != 0) {
-                DEBUGF("[PMM] Order %u: Block 0x%lx offset 0x%lx not aligned to size 0x%lx\n",
+                LOGF("[PMM] Order %u: Block 0x%lx offset 0x%lx not aligned to size 0x%lx\n",
                        order, cur, offset, size);
                 all_ok = false;
             }
@@ -699,16 +699,16 @@ bool pmm_verify_integrity(void) {
     // Compare counted blocks with statistics
     for (uint32_t order = 0; order <= g_max_order; order++) {
         if (counted_free[order] != g_stats.free_blocks[order]) {
-            DEBUGF("[PMM] Order %u: Statistics mismatch (counted: %lu, stats: %lu)\n",
+            LOGF("[PMM] Order %u: Statistics mismatch (counted: %lu, stats: %lu)\n",
                    order, counted_free[order], g_stats.free_blocks[order]);
             all_ok = false;
         }
     }
     
     if (all_ok) {
-        DEBUGF("[PMM] All checks passed\n");
+        LOGF("[PMM] All checks passed\n");
     } else {
-        DEBUGF("[PMM] FAILED - integrity compromised!\n");
+        LOGF("[PMM] FAILED - integrity compromised!\n");
     }
     
     return all_ok;

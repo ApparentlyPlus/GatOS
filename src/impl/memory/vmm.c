@@ -55,7 +55,7 @@ static slab_cache_t* g_vm_object_internal_cache = NULL;
 static inline bool vmm_validate(vmm_internal* vmm) {
     if (!vmm) return false;
     if (vmm->magic != VMM_MAGIC) {
-        DEBUGF("[VMM ERROR] Invalid VMM magic: 0x%x (expected 0x%x)\n", 
+        LOGF("[VMM ERROR] Invalid VMM magic: 0x%x (expected 0x%x)\n", 
                vmm->magic, VMM_MAGIC);
         return false;
     }
@@ -68,17 +68,17 @@ static inline bool vmm_validate(vmm_internal* vmm) {
 static inline bool vm_object_validate(vm_object_internal* obj) {
     if (!obj) return false;
     if (obj->magic != VM_OBJECT_MAGIC) {
-        DEBUGF("[VMM ERROR] Invalid vm_object magic: 0x%x (expected 0x%x)\n",
+        LOGF("[VMM ERROR] Invalid vm_object magic: 0x%x (expected 0x%x)\n",
                obj->magic, VM_OBJECT_MAGIC);
         return false;
     }
     if (obj->red_zone_pre != VM_OBJECT_RED_ZONE) {
-        DEBUGF("[VMM ERROR] vm_object pre-red-zone corrupted: 0x%x\n",
+        LOGF("[VMM ERROR] vm_object pre-red-zone corrupted: 0x%x\n",
                obj->red_zone_pre);
         return false;
     }
     if (obj->red_zone_post != VM_OBJECT_RED_ZONE) {
-        DEBUGF("[VMM ERROR] vm_object post-red-zone corrupted: 0x%x\n",
+        LOGF("[VMM ERROR] vm_object post-red-zone corrupted: 0x%x\n",
                obj->red_zone_post);
         return false;
     }
@@ -357,7 +357,7 @@ void vmm_free_vm_object(vm_object_internal* obj) {
     if (!obj) return;
     
     if (!vm_object_validate(obj)) {
-        DEBUGF("[VMM ERROR] Attempted to free corrupted vm_object at %p\n", obj);
+        LOGF("[VMM ERROR] Attempted to free corrupted vm_object at %p\n", obj);
         return;
     }
     
@@ -435,7 +435,7 @@ vmm_status_t vmm_alloc(vmm_t* vmm_pub, size_t length, size_t flags, void* arg, v
     if (flags & VM_FLAG_MMIO) {
         uint64_t mmio_phys = (uint64_t)arg;
         if (mmio_phys & (PAGE_SIZE - 1)) {
-            DEBUGF("[VMM ERROR] MMIO address 0x%lx is not page-aligned\n", mmio_phys);
+            LOGF("[VMM ERROR] MMIO address 0x%lx is not page-aligned\n", mmio_phys);
             return VMM_ERR_NOT_ALIGNED;
         }
     }
@@ -578,7 +578,7 @@ vmm_status_t vmm_alloc_at(vmm_t* vmm_pub, void* desired_addr, size_t length,
     // Align to page boundary
     uintptr_t desired = (uintptr_t)desired_addr;
     if (desired & (PAGE_SIZE - 1)) {
-        DEBUGF("[VMM] vmm_alloc_at: address 0x%lx not page-aligned\n", desired);
+        LOGF("[VMM] vmm_alloc_at: address 0x%lx not page-aligned\n", desired);
         return VMM_ERR_NOT_ALIGNED;
     }
     
@@ -588,7 +588,7 @@ vmm_status_t vmm_alloc_at(vmm_t* vmm_pub, void* desired_addr, size_t length,
     // Check if desired range is within allocatable space
     if (desired < vmm->public.alloc_base || 
         desired + length > vmm->public.alloc_end) {
-        DEBUGF("[VMM] vmm_alloc_at: range 0x%lx-0x%lx outside allocatable space\n",
+        LOGF("[VMM] vmm_alloc_at: range 0x%lx-0x%lx outside allocatable space\n",
                desired, desired + length);
         return VMM_ERR_OOM;
     }
@@ -597,7 +597,7 @@ vmm_status_t vmm_alloc_at(vmm_t* vmm_pub, void* desired_addr, size_t length,
     if (flags & VM_FLAG_MMIO) {
         uint64_t mmio_phys = (uint64_t)arg;
         if (mmio_phys & (PAGE_SIZE - 1)) {
-            DEBUGF("[VMM] vmm_alloc_at: MMIO address 0x%lx not page-aligned\n", mmio_phys);
+            LOGF("[VMM] vmm_alloc_at: MMIO address 0x%lx not page-aligned\n", mmio_phys);
             return VMM_ERR_NOT_ALIGNED;
         }
     }
@@ -617,7 +617,7 @@ vmm_status_t vmm_alloc_at(vmm_t* vmm_pub, void* desired_addr, size_t length,
         
         // Check for overlap
         if (!(desired_end <= obj_start || desired >= obj_end)) {
-            DEBUGF("[VMM] vmm_alloc_at: range 0x%lx-0x%lx overlaps with existing object\n",
+            LOGF("[VMM] vmm_alloc_at: range 0x%lx-0x%lx overlaps with existing object\n",
                    desired, desired_end);
             return VMM_ERR_ALREADY_MAPPED;
         }
@@ -790,12 +790,12 @@ vmm_t* vmm_create(uintptr_t alloc_base, uintptr_t alloc_end) {
 
     // Ensure PMM is initialized
     if(!pmm_is_initialized()) {
-        DEBUGF("[VMM] The PMM must be online first\n");
+        LOGF("[VMM] The PMM must be online first\n");
         return NULL;
     }
 
     if(!slab_is_initialized()){
-        DEBUGF("[VMM] The Slab Allocator must be online first\n");
+        LOGF("[VMM] The Slab Allocator must be online first\n");
         return NULL;
     }
     
@@ -846,7 +846,7 @@ void vmm_destroy(vmm_t* vmm_pub) {
     
     // Cannot destroy kernel VMM
     if (vmm == g_kernel_vmm) {
-        DEBUGF("[VMM ERROR] Cannot destroy kernel VMM\n");
+        LOGF("[VMM ERROR] Cannot destroy kernel VMM\n");
         return;
     }
     
@@ -854,7 +854,7 @@ void vmm_destroy(vmm_t* vmm_pub) {
     vm_object_internal* current = vmm->objects_internal;
     while (current) {
         if (!vm_object_validate(current)) {
-            DEBUGF("[VMM ERROR] Corrupted vm_object during destroy\n");
+            LOGF("[VMM ERROR] Corrupted vm_object during destroy\n");
             break;
         }
         
@@ -927,13 +927,13 @@ vmm_status_t vmm_kernel_init(uintptr_t alloc_base, uintptr_t alloc_end) {
     
     // Ensure PMM is online
     if (!pmm_is_initialized()) {
-        DEBUGF("[VMM] The PMM must be online first\n");
+        LOGF("[VMM] The PMM must be online first\n");
         return VMM_ERR_NOT_INIT;
     }
 
     // Ensure slab is online
     if(!slab_is_initialized()){
-        DEBUGF("[VMM] The Slab allocator must be online first\n");
+        LOGF("[VMM] The Slab allocator must be online first\n");
         return VMM_ERR_NOT_INIT;
     }
     
@@ -972,7 +972,7 @@ vmm_status_t vmm_kernel_init(uintptr_t alloc_base, uintptr_t alloc_end) {
     );
 
     if (!g_vmm_internal_cache || !g_vm_object_internal_cache) {
-        DEBUGF("[VMM] Failed to create slab caches\n");
+        LOGF("[VMM] Failed to create slab caches\n");
         return VMM_ERR_NO_MEMORY;
     }
     
@@ -1055,7 +1055,7 @@ vm_object* vmm_find_mapped_object(vmm_t* vmm_pub, void* addr) {
     
     while (current) {
         if (!vm_object_validate(current)) {
-            DEBUGF("[VMM ERROR] Corrupted vm_object in list\n");
+            LOGF("[VMM ERROR] Corrupted vm_object in list\n");
             return NULL;
         }
         
@@ -1215,13 +1215,13 @@ vmm_status_t vmm_resize(vmm_t* vmm_pub, void* addr, size_t new_length) {
     }
     
     if (!current) {
-        DEBUGF("[VMM ERROR] vmm_resize: No object found at address 0x%lx\n", target);
+        LOGF("[VMM ERROR] vmm_resize: No object found at address 0x%lx\n", target);
         return VMM_ERR_NOT_FOUND;
     }
     
     // Cannot resize MMIO regions
     if (current->public.flags & VM_FLAG_MMIO) {
-        DEBUGF("[VMM ERROR] vmm_resize: Cannot resize MMIO region\n");
+        LOGF("[VMM ERROR] vmm_resize: Cannot resize MMIO region\n");
         return VMM_ERR_INVALID;
     }
     
@@ -1240,12 +1240,12 @@ vmm_status_t vmm_resize(vmm_t* vmm_pub, void* addr, size_t new_length) {
         // Check if we have space (either before next object or before alloc_end)
         if (current->next_internal) {
             if (new_end > current->next_internal->public.base) {
-                DEBUGF("[VMM ERROR] vmm_resize: Growth would overlap with next object\n");
+                LOGF("[VMM ERROR] vmm_resize: Growth would overlap with next object\n");
                 return VMM_ERR_OOM;
             }
         } else {
             if (new_end > vmm->public.alloc_end) {
-                DEBUGF("[VMM ERROR] vmm_resize: Growth exceeds allocation range\n");
+                LOGF("[VMM ERROR] vmm_resize: Growth exceeds allocation range\n");
                 return VMM_ERR_OOM;
             }
         }
@@ -1254,7 +1254,7 @@ vmm_status_t vmm_resize(vmm_t* vmm_pub, void* addr, size_t new_length) {
         uint64_t phys_base;
         pmm_status_t pmm_status = pmm_alloc(growth, &phys_base);
         if (pmm_status != PMM_OK) {
-            DEBUGF("[VMM ERROR] vmm_resize: Failed to allocate %zu bytes of physical memory\n", growth);
+            LOGF("[VMM ERROR] vmm_resize: Failed to allocate %zu bytes of physical memory\n", growth);
             return VMM_ERR_NO_MEMORY;
         }
         
@@ -1273,7 +1273,7 @@ vmm_status_t vmm_resize(vmm_t* vmm_pub, void* addr, size_t new_length) {
             );
             
             if (map_status != VMM_OK) {
-                DEBUGF("[VMM ERROR] vmm_resize: Mapping failed at offset 0x%lx\n", offset);
+                LOGF("[VMM ERROR] vmm_resize: Mapping failed at offset 0x%lx\n", offset);
                 
                 // Rollback: unmap all successfully mapped pages
                 for (size_t rollback = 0; rollback < offset; rollback += PAGE_SIZE) {
@@ -1344,7 +1344,7 @@ vmm_status_t vmm_protect(vmm_t* vmm_pub, void* addr, size_t new_flags) {
     
     // Must match base address exactly
     if (obj->base != (uintptr_t)addr) {
-        DEBUGF("[VMM ERROR] vmm_protect requires exact base address match\n");
+        LOGF("[VMM ERROR] vmm_protect requires exact base address match\n");
         return VMM_ERR_INVALID;
     }
     
@@ -1358,7 +1358,7 @@ vmm_status_t vmm_protect(vmm_t* vmm_pub, void* addr, size_t new_flags) {
     for (uintptr_t virt = obj->base; virt < obj->base + obj->length; virt += PAGE_SIZE) {
         vmm_status_t status = arch_update_page_flags(vmm->public.pt_root, (void*)virt, pt_flags);
         if (status != VMM_OK) {
-            DEBUGF("[VMM WARNING] Failed to update flags for page at 0x%lx\n", virt);
+            LOGF("[VMM WARNING] Failed to update flags for page at 0x%lx\n", virt);
         }
     }
     
@@ -1379,25 +1379,25 @@ void vmm_dump(vmm_t* vmm_pub) {
     vmm_internal* vmm = vmm_get_instance(vmm_pub);
     if (!vmm) return;
     
-    DEBUGF("=== VMM Dump ===\n");
-    DEBUGF("VMM at %p (magic: 0x%x, is_kernel: %d)\n", 
+    LOGF("=== VMM Dump ===\n");
+    LOGF("VMM at %p (magic: 0x%x, is_kernel: %d)\n", 
            vmm, vmm->magic, vmm->is_kernel);
-    DEBUGF("Alloc range: 0x%lx - 0x%lx (size: 0x%lx)\n",
+    LOGF("Alloc range: 0x%lx - 0x%lx (size: 0x%lx)\n",
            vmm->public.alloc_base, vmm->public.alloc_end,
            vmm->public.alloc_end - vmm->public.alloc_base);
-    DEBUGF("Page table root (phys): 0x%lx\n", vmm->public.pt_root);
-    DEBUGF("\nVM Objects:\n");
+    LOGF("Page table root (phys): 0x%lx\n", vmm->public.pt_root);
+    LOGF("\nVM Objects:\n");
     
     vm_object_internal* current = vmm->objects_internal;
     int count = 0;
     
     while (current) {
         if (!vm_object_validate(current)) {
-            DEBUGF("[CORRUPTED OBJECT AT INDEX %d]\n", count);
+            LOGF("[CORRUPTED OBJECT AT INDEX %d]\n", count);
             break;
         }
         
-        DEBUGF("  [%d] base=0x%016lx, length=0x%08lx, flags=0x%02lx",
+        LOGF("  [%d] base=0x%016lx, length=0x%08lx, flags=0x%02lx",
                count, current->public.base, current->public.length, current->public.flags);
         
         count++;
@@ -1405,10 +1405,10 @@ void vmm_dump(vmm_t* vmm_pub) {
     }
     
     if (count == 0) {
-        DEBUGF("  (no objects)\n");
+        LOGF("  (no objects)\n");
     }
-    DEBUGF("Total objects: %d\n", count);
-    DEBUGF("================\n");
+    LOGF("Total objects: %d\n", count);
+    LOGF("================\n");
 }
 
 /*
@@ -1425,7 +1425,7 @@ void vmm_stats(vmm_t* vmm_pub, size_t* out_total, size_t* out_resident) {
     vm_object_internal* current = vmm->objects_internal;
     while (current) {
         if (!vm_object_validate(current)) {
-            DEBUGF("[VMM ERROR] Corrupted vm_object during stats\n");
+            LOGF("[VMM ERROR] Corrupted vm_object during stats\n");
             break;
         }
         
@@ -1456,12 +1456,12 @@ void vmm_dump_pte_chain(uint64_t pt_root, void* virt) {
     uint64_t v = (uint64_t)virt;
     uint64_t *pml4 = (uint64_t *)PHYSMAP_P2V(pt_root);
 
-    DEBUGF("Dumping PTE chain for virt=0x%lx (pt_root phys=0x%lx)\n", v, pt_root);
+    LOGF("Dumping PTE chain for virt=0x%lx (pt_root phys=0x%lx)\n", v, pt_root);
     size_t i;
 
     i = PML4_INDEX(virt);
     uint64_t e = pml4[i];
-    DEBUGF("PML4[%3zu] = 0x%016lx\n", i, e);
+    LOGF("PML4[%3zu] = 0x%016lx\n", i, e);
     if (!(e & PAGE_PRESENT)) return;
 
     uint64_t pdpt_phys = PT_ENTRY_ADDR(e);
@@ -1469,7 +1469,7 @@ void vmm_dump_pte_chain(uint64_t pt_root, void* virt) {
 
     i = PDPT_INDEX(virt);
     e = pdpt[i];
-    DEBUGF("PDPT[%3zu] = 0x%016lx\n", i, e);
+    LOGF("PDPT[%3zu] = 0x%016lx\n", i, e);
     if (!(e & PAGE_PRESENT)) return;
 
     uint64_t pd_phys = PT_ENTRY_ADDR(e);
@@ -1477,7 +1477,7 @@ void vmm_dump_pte_chain(uint64_t pt_root, void* virt) {
 
     i = PD_INDEX(virt);
     e = pd[i];
-    DEBUGF("PD  [%3zu] = 0x%016lx\n", i, e);
+    LOGF("PD  [%3zu] = 0x%016lx\n", i, e);
     if (!(e & PAGE_PRESENT)) return;
 
     uint64_t pt_phys = PT_ENTRY_ADDR(e);
@@ -1485,12 +1485,12 @@ void vmm_dump_pte_chain(uint64_t pt_root, void* virt) {
 
     i = PT_INDEX(virt);
     e = pt[i];
-    DEBUGF("PT  [%3zu] = 0x%016lx\n", i, e);
+    LOGF("PT  [%3zu] = 0x%016lx\n", i, e);
     
     if (e & PAGE_PRESENT) {
         uint64_t phys = PT_ENTRY_ADDR(e);
         uint64_t offset = (uintptr_t)virt & 0xFFF;
-        DEBUGF("Physical address: 0x%lx\n", phys + offset);
+        LOGF("Physical address: 0x%lx\n", phys + offset);
     }
 }
 
@@ -1501,11 +1501,11 @@ void vmm_dump_pte_chain(uint64_t pt_root, void* virt) {
 bool vmm_verify_integrity(vmm_t* vmm_pub) {
     vmm_internal* vmm = vmm_get_instance(vmm_pub);
     if (!vmm) {
-        DEBUGF("[VMM VERIFY] Failed to get VMM instance\n");
+        LOGF("[VMM VERIFY] Failed to get VMM instance\n");
         return false;
     }
     
-    DEBUGF("[VMM VERIFY] Checking VMM at %p\n", vmm);
+    LOGF("[VMM VERIFY] Checking VMM at %p\n", vmm);
     
     // Check VMM magic
     if (!vmm_validate(vmm)) {
@@ -1514,14 +1514,14 @@ bool vmm_verify_integrity(vmm_t* vmm_pub) {
     
     // Check allocation range sanity
     if (vmm->public.alloc_end <= vmm->public.alloc_base) {
-        DEBUGF("[VMM VERIFY] Invalid alloc range: 0x%lx - 0x%lx\n",
+        LOGF("[VMM VERIFY] Invalid alloc range: 0x%lx - 0x%lx\n",
                vmm->public.alloc_base, vmm->public.alloc_end);
         return false;
     }
     
     // Check page table root
     if (!vmm->public.pt_root) {
-        DEBUGF("[VMM VERIFY] NULL page table root\n");
+        LOGF("[VMM VERIFY] NULL page table root\n");
         return false;
     }
     
@@ -1533,19 +1533,19 @@ bool vmm_verify_integrity(vmm_t* vmm_pub) {
     while (current) {
         // Validate object structure
         if (!vm_object_validate(current)) {
-            DEBUGF("[VMM VERIFY] Object %d failed validation\n", count);
+            LOGF("[VMM VERIFY] Object %d failed validation\n", count);
             return false;
         }
         
         // Check alignment
         if (current->public.base & (PAGE_SIZE - 1)) {
-            DEBUGF("[VMM VERIFY] Object %d: unaligned base 0x%lx\n",
+            LOGF("[VMM VERIFY] Object %d: unaligned base 0x%lx\n",
                    count, current->public.base);
             return false;
         }
         
         if (current->public.length & (PAGE_SIZE - 1)) {
-            DEBUGF("[VMM VERIFY] Object %d: unaligned length 0x%lx\n",
+            LOGF("[VMM VERIFY] Object %d: unaligned length 0x%lx\n",
                    count, current->public.length);
             return false;
         }
@@ -1553,7 +1553,7 @@ bool vmm_verify_integrity(vmm_t* vmm_pub) {
         // Check bounds
         if (current->public.base < vmm->public.alloc_base ||
             current->public.base + current->public.length > vmm->public.alloc_end) {
-            DEBUGF("[VMM VERIFY] Object %d: out of bounds (0x%lx - 0x%lx)\n",
+            LOGF("[VMM VERIFY] Object %d: out of bounds (0x%lx - 0x%lx)\n",
                    count, current->public.base, current->public.base + current->public.length);
             return false;
         }
@@ -1562,7 +1562,7 @@ bool vmm_verify_integrity(vmm_t* vmm_pub) {
         if (prev) {
             uintptr_t prev_end = prev->public.base + prev->public.length;
             if (current->public.base < prev_end) {
-                DEBUGF("[VMM VERIFY] Object %d overlaps with previous (0x%lx < 0x%lx)\n",
+                LOGF("[VMM VERIFY] Object %d overlaps with previous (0x%lx < 0x%lx)\n",
                        count, current->public.base, prev_end);
                 return false;
             }
@@ -1574,12 +1574,12 @@ bool vmm_verify_integrity(vmm_t* vmm_pub) {
         
         // Sanity check: prevent infinite loop
         if (count > 10000) {
-            DEBUGF("[VMM VERIFY] Too many objects (possible loop)\n");
+            LOGF("[VMM VERIFY] Too many objects (possible loop)\n");
             return false;
         }
     }
     
-    DEBUGF("[VMM VERIFY] All checks passed (%d objects)\n", count);
+    LOGF("[VMM VERIFY] All checks passed (%d objects)\n", count);
     return true;
 }
 

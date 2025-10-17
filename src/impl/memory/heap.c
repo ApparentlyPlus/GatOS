@@ -125,18 +125,18 @@ bool heap_validate_block(heap_block_header_t* header) {
     if (!header) return false;
     
     if (header->magic != BLOCK_MAGIC_USED && header->magic != BLOCK_MAGIC_FREE) {
-        DEBUGF("[HEAP ERROR] Invalid block magic: 0x%x at %p\n", header->magic, header);
+        LOGF("[HEAP ERROR] Invalid block magic: 0x%x at %p\n", header->magic, header);
         return false;
     }
     
     if (header->red_zone_pre != BLOCK_RED_ZONE) {
-        DEBUGF("[HEAP ERROR] Block pre-red-zone corrupted: 0x%x at %p\n", 
+        LOGF("[HEAP ERROR] Block pre-red-zone corrupted: 0x%x at %p\n", 
                header->red_zone_pre, header);
         return false;
     }
     
     if (header->red_zone_post != BLOCK_RED_ZONE) {
-        DEBUGF("[HEAP ERROR] Block post-red-zone corrupted: 0x%x at %p\n",
+        LOGF("[HEAP ERROR] Block post-red-zone corrupted: 0x%x at %p\n",
                header->red_zone_post, header);
         return false;
     }
@@ -144,18 +144,18 @@ bool heap_validate_block(heap_block_header_t* header) {
     heap_block_footer_t* footer = get_footer(header);
     
     if (footer->magic != header->magic) {
-        DEBUGF("[HEAP ERROR] Footer magic mismatch: header=0x%x footer=0x%x at %p\n",
+        LOGF("[HEAP ERROR] Footer magic mismatch: header=0x%x footer=0x%x at %p\n",
                header->magic, footer->magic, header);
         return false;
     }
     
     if (footer->red_zone_pre != BLOCK_RED_ZONE || footer->red_zone_post != BLOCK_RED_ZONE) {
-        DEBUGF("[HEAP ERROR] Footer red-zone corrupted at %p\n", header);
+        LOGF("[HEAP ERROR] Footer red-zone corrupted at %p\n", header);
         return false;
     }
     
     if (footer->header != header) {
-        DEBUGF("[HEAP ERROR] Footer header pointer mismatch at %p\n", header);
+        LOGF("[HEAP ERROR] Footer header pointer mismatch at %p\n", header);
         return false;
     }
     
@@ -169,7 +169,7 @@ static inline bool heap_validate(heap_t* heap) {
     if (!heap) return false;
     
     if (heap->magic != HEAP_MAGIC) {
-        DEBUGF("[HEAP ERROR] Invalid heap magic: 0x%x\n", heap->magic);
+        LOGF("[HEAP ERROR] Invalid heap magic: 0x%x\n", heap->magic);
         return false;
     }
     
@@ -380,17 +380,17 @@ static heap_status_t expand_heap(heap_t* heap, size_t min_increase) {
     );
     
     if (status != VMM_OK) {
-        DEBUGF("[HEAP] Failed to expand heap: vmm_alloc returned %d\n", status);
+        LOGF("[HEAP] Failed to expand heap: vmm_alloc returned %d\n", status);
         return HEAP_ERR_VMM_FAIL;
     }
     
     // Verify allocation is contiguous
     if ((uintptr_t)new_region != heap->heap_end) {
-        DEBUGF("[HEAP] Non-contiguous heap expansion: expected 0x%lx, got 0x%lx\n",
+        LOGF("[HEAP] Non-contiguous heap expansion: expected 0x%lx, got 0x%lx\n",
                heap->heap_end, (uintptr_t)new_region);
         vmm_status_t free_status = vmm_free(heap->vmm, new_region);
         if (free_status != VMM_OK) {
-            DEBUGF("[HEAP WARNING] Failed to free non-contiguous allocation: %d\n", free_status);
+            LOGF("[HEAP WARNING] Failed to free non-contiguous allocation: %d\n", free_status);
         }
         return HEAP_ERR_VMM_FAIL;
     }
@@ -464,7 +464,7 @@ static void try_shrink_heap(heap_t* heap) {
     void* shrink_start = (void*)(heap->heap_end - shrink_amount);
     vmm_status_t status = vmm_free(heap->vmm, shrink_start);
     if (status != VMM_OK) {
-        DEBUGF("[HEAP WARNING] Failed to shrink heap: vmm_free returned %d\n", status);
+        LOGF("[HEAP WARNING] Failed to shrink heap: vmm_free returned %d\n", status);
         // Re-add to free list on failure
         insert_into_free_list(heap, last_block);
         return;
@@ -505,7 +505,7 @@ static heap_block_header_t* find_free_block(heap_t* heap, size_t size) {
     
     while (current) {
         if (!heap_validate_block(current)) {
-            DEBUGF("[HEAP ERROR] Corrupted block in free list\n");
+            LOGF("[HEAP ERROR] Corrupted block in free list\n");
             return NULL;
         }
         
@@ -661,12 +661,12 @@ static void heap_free_internal(heap_t* heap, void* ptr) {
     heap_block_header_t* block = get_header_from_ptr(ptr);
     
     if (!heap_validate_block(block)) {
-        DEBUGF("[HEAP ERROR] Attempted to free invalid block at %p\n", ptr);
+        LOGF("[HEAP ERROR] Attempted to free invalid block at %p\n", ptr);
         return;
     }
     
     if (block->magic != BLOCK_MAGIC_USED) {
-        DEBUGF("[HEAP ERROR] Double free or invalid free at %p (magic: 0x%x)\n", 
+        LOGF("[HEAP ERROR] Double free or invalid free at %p (magic: 0x%x)\n", 
                ptr, block->magic);
         return;
     }
@@ -711,21 +711,21 @@ heap_status_t heap_kernel_init(void) {
     vmm_t* kernel_vmm = vmm_kernel_get();
     if (!kernel_vmm) {
         // Auto-initialize kernel VMM
-        DEBUGF("[HEAP] Kernel VMM not initialized, initializing now...\n");
+        LOGF("[HEAP] Kernel VMM not initialized, initializing now...\n");
         
         uintptr_t alloc_base = get_kend(true) + PAGE_SIZE;
         uintptr_t alloc_end = 0xFFFFFFFFFFFFF000;
         
         vmm_status_t vmm_status = vmm_kernel_init(alloc_base, alloc_end);
         if (vmm_status != VMM_OK) {
-            DEBUGF("[HEAP] Failed to initialize kernel VMM: error %d\n", vmm_status);
+            LOGF("[HEAP] Failed to initialize kernel VMM: error %d\n", vmm_status);
             g_kernel_heap_initializing = false;
             return HEAP_ERR_NOT_INIT;
         }
         
         kernel_vmm = vmm_kernel_get();
         if (!kernel_vmm) {
-            DEBUGF("[HEAP] Kernel VMM still NULL after initialization\n");
+            LOGF("[HEAP] Kernel VMM still NULL after initialization\n");
             g_kernel_heap_initializing = false;
             return HEAP_ERR_NOT_INIT;
         }
@@ -735,7 +735,7 @@ heap_status_t heap_kernel_init(void) {
     if (!g_heap_cache) {
         g_heap_cache = slab_cache_create("heap_t", sizeof(heap_t), _Alignof(heap_t));
         if (!g_heap_cache) {
-            DEBUGF("[HEAP] Failed to create heap slab cache\n");
+            LOGF("[HEAP] Failed to create heap slab cache\n");
             g_kernel_heap_initializing = false;
             return HEAP_ERR_OOM;
         }
@@ -745,7 +745,7 @@ heap_status_t heap_kernel_init(void) {
     void* heap_mem;
     slab_status_t slab_status = slab_alloc(g_heap_cache, &heap_mem);
     if (slab_status != SLAB_OK) {
-        DEBUGF("[HEAP] Failed to allocate heap structure: slab error %d\n", slab_status);
+        LOGF("[HEAP] Failed to allocate heap structure: slab error %d\n", slab_status);
         g_kernel_heap_initializing = false;
         return HEAP_ERR_OOM;
     }
@@ -766,7 +766,7 @@ heap_status_t heap_kernel_init(void) {
                                          NULL, &initial_region);
     
     if (vmm_status != VMM_OK) {
-        DEBUGF("[HEAP] Failed to allocate initial heap region: vmm error %d\n", vmm_status);
+        LOGF("[HEAP] Failed to allocate initial heap region: vmm error %d\n", vmm_status);
         slab_free(g_heap_cache, heap_mem);
         g_kernel_heap_initializing = false;
         return HEAP_ERR_VMM_FAIL;
@@ -802,7 +802,7 @@ heap_status_t heap_kernel_init(void) {
     g_kernel_heap = heap;
     g_kernel_heap_initializing = false;
     
-    DEBUGF("[HEAP] Kernel heap initialized at 0x%lx - 0x%lx (%zu bytes)\n",
+    LOGF("[HEAP] Kernel heap initialized at 0x%lx - 0x%lx (%zu bytes)\n",
            heap->heap_start, heap->heap_end, heap->current_size);
     
     return HEAP_OK;
@@ -816,7 +816,7 @@ heap_t* heap_kernel_get(void) {
     if (!g_kernel_heap && !g_kernel_heap_initializing) {
         heap_status_t status = heap_kernel_init();
         if (status != HEAP_OK) {
-            DEBUGF("[HEAP] Auto-initialization failed: error %d\n", status);
+            LOGF("[HEAP] Auto-initialization failed: error %d\n", status);
             return NULL;
         }
     }
@@ -829,7 +829,7 @@ heap_t* heap_kernel_get(void) {
 void* kmalloc(size_t size) {
     heap_t* heap = heap_kernel_get();
     if (!heap) {
-        DEBUGF("[HEAP] kmalloc: kernel heap not available\n");
+        LOGF("[HEAP] kmalloc: kernel heap not available\n");
         return NULL;
     }
     
@@ -844,7 +844,7 @@ void kfree(void* ptr) {
     
     heap_t* heap = heap_kernel_get();
     if (!heap) {
-        DEBUGF("[HEAP] kfree: kernel heap not available\n");
+        LOGF("[HEAP] kfree: kernel heap not available\n");
         return;
     }
     
@@ -863,17 +863,17 @@ void* krealloc(void* ptr, size_t size) {
     
     heap_t* heap = heap_kernel_get();
     if (!heap) {
-        DEBUGF("[HEAP] krealloc: kernel heap not available\n");
+        LOGF("[HEAP] krealloc: kernel heap not available\n");
         return NULL;
     }
     
     heap_block_header_t* block = get_header_from_ptr(ptr);
     if (!heap_validate_block(block)) {
-        DEBUGF("[HEAP] krealloc: invalid block at %p\n", ptr);
+        LOGF("[HEAP] krealloc: invalid block at %p\n", ptr);
         return NULL;
     }
     if (block->magic != BLOCK_MAGIC_USED) {
-        DEBUGF("[HEAP] krealloc: block at %p is not in use\n", ptr);
+        LOGF("[HEAP] krealloc: block at %p is not in use\n", ptr);
         return NULL;
     }
     
@@ -917,7 +917,7 @@ void* krealloc(void* ptr, size_t size) {
     // Can't expand in place, allocate new block and copy
     void* new_ptr = kmalloc(size);
     if (!new_ptr) {
-        DEBUGF("[HEAP] krealloc: failed to allocate %zu bytes\n", size);
+        LOGF("[HEAP] krealloc: failed to allocate %zu bytes\n", size);
         return NULL;
     }
     
@@ -936,13 +936,13 @@ void* kcalloc(size_t nmemb, size_t size) {
     // Check for overflow
     size_t total = nmemb * size;
     if (total / nmemb != size) {
-        DEBUGF("[HEAP] kcalloc: overflow detected (nmemb=%zu, size=%zu)\n", nmemb, size);
+        LOGF("[HEAP] kcalloc: overflow detected (nmemb=%zu, size=%zu)\n", nmemb, size);
         return NULL;
     }
     
     heap_t* heap = heap_kernel_get();
     if (!heap) {
-        DEBUGF("[HEAP] kcalloc: kernel heap not available\n");
+        LOGF("[HEAP] kcalloc: kernel heap not available\n");
         return NULL;
     }
     
@@ -958,12 +958,12 @@ void* kcalloc(size_t nmemb, size_t size) {
  */
 heap_t* heap_create(vmm_t* vmm, size_t min_size, size_t max_size, uint32_t flags) {
     if (!vmm) {
-        DEBUGF("[HEAP] heap_create: NULL vmm parameter\n");
+        LOGF("[HEAP] heap_create: NULL vmm parameter\n");
         return NULL;
     }
     if (min_size == 0) min_size = HEAP_MIN_SIZE;
     if (max_size < min_size) {
-        DEBUGF("[HEAP] heap_create: max_size (%zu) < min_size (%zu)\n", max_size, min_size);
+        LOGF("[HEAP] heap_create: max_size (%zu) < min_size (%zu)\n", max_size, min_size);
         return NULL;
     }
     
@@ -975,7 +975,7 @@ heap_t* heap_create(vmm_t* vmm, size_t min_size, size_t max_size, uint32_t flags
     if (!g_heap_cache) {
         g_heap_cache = slab_cache_create("heap_t", sizeof(heap_t), _Alignof(heap_t));
         if (!g_heap_cache) {
-            DEBUGF("[HEAP] heap_create: failed to create slab cache\n");
+            LOGF("[HEAP] heap_create: failed to create slab cache\n");
             return NULL;
         }
     }
@@ -984,7 +984,7 @@ heap_t* heap_create(vmm_t* vmm, size_t min_size, size_t max_size, uint32_t flags
     void* heap_mem;
     slab_status_t slab_status = slab_alloc(g_heap_cache, &heap_mem);
     if (slab_status != SLAB_OK) {
-        DEBUGF("[HEAP] heap_create: failed to allocate heap structure: slab error %d\n", slab_status);
+        LOGF("[HEAP] heap_create: failed to allocate heap structure: slab error %d\n", slab_status);
         return NULL;
     }
     
@@ -1005,7 +1005,7 @@ heap_t* heap_create(vmm_t* vmm, size_t min_size, size_t max_size, uint32_t flags
                                          NULL, &initial_region);
     
     if (vmm_status != VMM_OK) {
-        DEBUGF("[HEAP] heap_create: failed to allocate initial region: vmm error %d\n", vmm_status);
+        LOGF("[HEAP] heap_create: failed to allocate initial region: vmm error %d\n", vmm_status);
         slab_free(g_heap_cache, heap_mem);
         return NULL;
     }
@@ -1046,13 +1046,13 @@ heap_t* heap_create(vmm_t* vmm, size_t min_size, size_t max_size, uint32_t flags
 void heap_destroy(heap_t* heap) {
     if (!heap) return;
     if (!heap_validate(heap)) {
-        DEBUGF("[HEAP] heap_destroy: invalid heap at %p\n", heap);
+        LOGF("[HEAP] heap_destroy: invalid heap at %p\n", heap);
         return;
     }
     
     // Can't destroy kernel heap
     if (heap == g_kernel_heap) {
-        DEBUGF("[HEAP ERROR] Cannot destroy kernel heap\n");
+        LOGF("[HEAP ERROR] Cannot destroy kernel heap\n");
         return;
     }
     
@@ -1060,7 +1060,7 @@ void heap_destroy(heap_t* heap) {
     if (heap->heap_start) {
         vmm_status_t status = vmm_free(heap->vmm, (void*)heap->heap_start);
         if (status != VMM_OK) {
-            DEBUGF("[HEAP WARNING] Failed to free heap memory: vmm error %d\n", status);
+            LOGF("[HEAP WARNING] Failed to free heap memory: vmm error %d\n", status);
         }
     }
     
@@ -1171,7 +1171,7 @@ void* heap_calloc(heap_t* heap, size_t nmemb, size_t size) {
     
     size_t total = nmemb * size;
     if (total / nmemb != size) {
-        DEBUGF("[HEAP] heap_calloc: overflow detected (nmemb=%zu, size=%zu)\n", nmemb, size);
+        LOGF("[HEAP] heap_calloc: overflow detected (nmemb=%zu, size=%zu)\n", nmemb, size);
         return NULL;
     }
     
@@ -1203,7 +1203,7 @@ heap_status_t heap_check_integrity(heap_t* heap) {
         heap_block_header_t* block = (heap_block_header_t*)current_addr;
         
         if (!heap_validate_block(block)) {
-            DEBUGF("[HEAP INTEGRITY] Block validation failed at 0x%lx\n", current_addr);
+            LOGF("[HEAP INTEGRITY] Block validation failed at 0x%lx\n", current_addr);
             return HEAP_ERR_CORRUPTED;
         }
         
@@ -1214,7 +1214,7 @@ heap_status_t heap_check_integrity(heap_t* heap) {
             calculated_used += block->size;
             used_blocks++;
         } else {
-            DEBUGF("[HEAP INTEGRITY] Invalid magic 0x%x at 0x%lx\n", block->magic, current_addr);
+            LOGF("[HEAP INTEGRITY] Invalid magic 0x%x at 0x%lx\n", block->magic, current_addr);
             return HEAP_ERR_CORRUPTED;
         }
         
@@ -1222,26 +1222,26 @@ heap_status_t heap_check_integrity(heap_t* heap) {
     }
     
     if (current_addr != heap->heap_end) {
-        DEBUGF("[HEAP INTEGRITY] Heap walk ended at 0x%lx, expected 0x%lx\n",
+        LOGF("[HEAP INTEGRITY] Heap walk ended at 0x%lx, expected 0x%lx\n",
                current_addr, heap->heap_end);
         return HEAP_ERR_CORRUPTED;
     }
     
     // Verify statistics
     if (calculated_free != heap->total_free) {
-        DEBUGF("[HEAP INTEGRITY] Free mismatch: calculated %zu, stored %zu\n",
+        LOGF("[HEAP INTEGRITY] Free mismatch: calculated %zu, stored %zu\n",
                calculated_free, heap->total_free);
         return HEAP_ERR_CORRUPTED;
     }
     
     if (calculated_used != heap->total_allocated) {
-        DEBUGF("[HEAP INTEGRITY] Used mismatch: calculated %zu, stored %zu\n",
+        LOGF("[HEAP INTEGRITY] Used mismatch: calculated %zu, stored %zu\n",
                calculated_used, heap->total_allocated);
         return HEAP_ERR_CORRUPTED;
     }
     
     if (used_blocks != heap->allocation_count) {
-        DEBUGF("[HEAP INTEGRITY] Count mismatch: calculated %zu, stored %zu\n",
+        LOGF("[HEAP INTEGRITY] Count mismatch: calculated %zu, stored %zu\n",
                used_blocks, heap->allocation_count);
         return HEAP_ERR_CORRUPTED;
     }
@@ -1254,23 +1254,23 @@ heap_status_t heap_check_integrity(heap_t* heap) {
     
     while (free_block) {
         if (!heap_validate_block(free_block)) {
-            DEBUGF("[HEAP INTEGRITY] Free list contains invalid block\n");
+            LOGF("[HEAP INTEGRITY] Free list contains invalid block\n");
             return HEAP_ERR_CORRUPTED;
         }
         
         if (free_block->magic != BLOCK_MAGIC_FREE) {
-            DEBUGF("[HEAP INTEGRITY] Free list contains non-free block\n");
+            LOGF("[HEAP INTEGRITY] Free list contains non-free block\n");
             return HEAP_ERR_CORRUPTED;
         }
         
         if (free_block->prev_free != prev_free) {
-            DEBUGF("[HEAP INTEGRITY] Free list prev pointer mismatch\n");
+            LOGF("[HEAP INTEGRITY] Free list prev pointer mismatch\n");
             return HEAP_ERR_CORRUPTED;
         }
         
         // Check sorting (should be sorted by size)
         if (prev_free && prev_free->size > free_block->size) {
-            DEBUGF("[HEAP INTEGRITY] Free list not sorted by size\n");
+            LOGF("[HEAP INTEGRITY] Free list not sorted by size\n");
             return HEAP_ERR_CORRUPTED;
         }
         
@@ -1281,13 +1281,13 @@ heap_status_t heap_check_integrity(heap_t* heap) {
     }
     
     if (free_list_count != free_blocks) {
-        DEBUGF("[HEAP INTEGRITY] Free list count mismatch: %zu vs %zu\n",
+        LOGF("[HEAP INTEGRITY] Free list count mismatch: %zu vs %zu\n",
                free_list_count, free_blocks);
         return HEAP_ERR_CORRUPTED;
     }
     
     if (free_list_size != calculated_free) {
-        DEBUGF("[HEAP INTEGRITY] Free list size mismatch: %zu vs %zu\n",
+        LOGF("[HEAP INTEGRITY] Free list size mismatch: %zu vs %zu\n",
                free_list_size, calculated_free);
         return HEAP_ERR_CORRUPTED;
     }
@@ -1300,23 +1300,23 @@ heap_status_t heap_check_integrity(heap_t* heap) {
  */
 void heap_dump(heap_t* heap) {
     if (!heap_validate(heap)) {
-        DEBUGF("[HEAP DUMP] Invalid heap\n");
+        LOGF("[HEAP DUMP] Invalid heap\n");
         return;
     }
     
-    DEBUGF("=== HEAP DUMP ===\n");
-    DEBUGF("Heap at %p (magic: 0x%x, is_kernel: %d)\n",
+    LOGF("=== HEAP DUMP ===\n");
+    LOGF("Heap at %p (magic: 0x%x, is_kernel: %d)\n",
            heap, heap->magic, heap->is_kernel);
-    DEBUGF("Range: 0x%lx - 0x%lx (current: %zu bytes, min: %zu, max: %zu)\n",
+    LOGF("Range: 0x%lx - 0x%lx (current: %zu bytes, min: %zu, max: %zu)\n",
            heap->heap_start, heap->heap_end, heap->current_size,
            heap->min_size, heap->max_size);
-    DEBUGF("Allocated: %zu bytes in %zu blocks\n",
+    LOGF("Allocated: %zu bytes in %zu blocks\n",
            heap->total_allocated, heap->allocation_count);
-    DEBUGF("Free: %zu bytes\n", heap->total_free);
-    DEBUGF("Overhead: %zu bytes\n",
+    LOGF("Free: %zu bytes\n", heap->total_free);
+    LOGF("Overhead: %zu bytes\n",
            heap->current_size - heap->total_allocated - heap->total_free);
     
-    DEBUGF("\nPhysical blocks:\n");
+    LOGF("\nPhysical blocks:\n");
     uintptr_t current_addr = heap->heap_start;
     int block_num = 0;
     
@@ -1324,11 +1324,11 @@ void heap_dump(heap_t* heap) {
         heap_block_header_t* block = (heap_block_header_t*)current_addr;
         
         if (!heap_validate_block(block)) {
-            DEBUGF("  [%d] CORRUPTED at 0x%lx\n", block_num, current_addr);
+            LOGF("  [%d] CORRUPTED at 0x%lx\n", block_num, current_addr);
             break;
         }
         
-        DEBUGF("  [%d] 0x%lx: %s, size=%zu, total=%zu\n",
+        LOGF("  [%d] 0x%lx: %s, size=%zu, total=%zu\n",
                block_num, current_addr,
                block->magic == BLOCK_MAGIC_FREE ? "FREE" : "USED",
                block->size, block->total_size);
@@ -1337,22 +1337,22 @@ void heap_dump(heap_t* heap) {
         block_num++;
     }
     
-    DEBUGF("\nFree list (sorted by size):\n");
+    LOGF("\nFree list (sorted by size):\n");
     heap_block_header_t* free_block = heap->free_list;
     int free_num = 0;
     
     while (free_block) {
-        DEBUGF("  [%d] 0x%lx: size=%zu\n",
+        LOGF("  [%d] 0x%lx: size=%zu\n",
                free_num, (uintptr_t)free_block, free_block->size);
         free_block = free_block->next_free;
         free_num++;
     }
     
     if (free_num == 0) {
-        DEBUGF("  (no free blocks)\n");
+        LOGF("  (no free blocks)\n");
     }
     
-    DEBUGF("=================\n");
+    LOGF("=================\n");
 }
 
 /*

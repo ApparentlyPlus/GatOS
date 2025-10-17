@@ -58,9 +58,9 @@ void QEMU_GENERIC_LOG(const char* msg) {
 }
 
 /*
- * DEBUGF - Debug function to log messages internally with format specifiers
+ * LOGF - Debug function to log messages internally with format specifiers
  */
-void DEBUGF(const char* fmt, ...)
+void LOGF(const char* fmt, ...)
 {
     char buffer[512];
     va_list args;

@@ -89,13 +89,13 @@ static slab_stats_t g_stats;
 static inline bool slab_validate(slab_t* slab) {
     if (!slab) return false;
     if (slab->magic != SLAB_MAGIC) {
-        DEBUGF("[SLAB ERROR] Invalid slab magic: 0x%x (expected 0x%x)\n",
+        LOGF("[SLAB ERROR] Invalid slab magic: 0x%x (expected 0x%x)\n",
                slab->magic, SLAB_MAGIC);
         g_stats.corruption_detected++;
         return false;
     }
     if (slab->in_use > slab->capacity) {
-        DEBUGF("[SLAB ERROR] Slab in_use (%u) > capacity (%u)\n",
+        LOGF("[SLAB ERROR] Slab in_use (%u) > capacity (%u)\n",
                slab->in_use, slab->capacity);
         g_stats.corruption_detected++;
         return false;
@@ -109,7 +109,7 @@ static inline bool slab_validate(slab_t* slab) {
 static inline bool cache_validate(slab_cache_t* cache) {
     if (!cache) return false;
     if (cache->magic != SLAB_CACHE_MAGIC) {
-        DEBUGF("[SLAB ERROR] Invalid cache magic: 0x%x (expected 0x%x)\n",
+        LOGF("[SLAB ERROR] Invalid cache magic: 0x%x (expected 0x%x)\n",
                cache->magic, SLAB_CACHE_MAGIC);
         g_stats.corruption_detected++;
         return false;
@@ -123,18 +123,18 @@ static inline bool cache_validate(slab_cache_t* cache) {
 static inline bool validate_free_obj(slab_free_obj_t* obj) {
     if (!obj) return false;
     if (obj->magic != SLAB_FREE_MAGIC) {
-        DEBUGF("[SLAB ERROR] Invalid free object magic: 0x%x\n", obj->magic);
+        LOGF("[SLAB ERROR] Invalid free object magic: 0x%x\n", obj->magic);
         g_stats.corruption_detected++;
         return false;
     }
     if (obj->red_zone_pre != SLAB_RED_ZONE) {
-        DEBUGF("[SLAB ERROR] Free object pre-red-zone corrupted: 0x%x\n",
+        LOGF("[SLAB ERROR] Free object pre-red-zone corrupted: 0x%x\n",
                obj->red_zone_pre);
         g_stats.corruption_detected++;
         return false;
     }
     if (obj->red_zone_post != SLAB_RED_ZONE) {
-        DEBUGF("[SLAB ERROR] Free object post-red-zone corrupted: 0x%x\n",
+        LOGF("[SLAB ERROR] Free object post-red-zone corrupted: 0x%x\n",
                obj->red_zone_post);
         g_stats.corruption_detected++;
         return false;
@@ -207,7 +207,7 @@ static slab_t* slab_allocate_page(slab_cache_t* cache) {
     uint64_t phys = 0;
     pmm_status_t pmm_status = pmm_alloc(PAGE_SIZE, &phys);
     if (pmm_status != PMM_OK) {
-        DEBUGF("[SLAB] Failed to allocate page from PMM: %d\n", pmm_status);
+        LOGF("[SLAB] Failed to allocate page from PMM: %d\n", pmm_status);
         return NULL;
     }
     
@@ -241,7 +241,7 @@ static slab_t* slab_allocate_page(slab_cache_t* cache) {
     slab->capacity = available / cache->obj_size;
     
     if (slab->capacity == 0) {
-        DEBUGF("[SLAB ERROR] Object size %zu too large for page (metadata=%zu, avail=%zu)\n",
+        LOGF("[SLAB ERROR] Object size %zu too large for page (metadata=%zu, avail=%zu)\n",
                cache->obj_size, metadata_size, available);
         pmm_free(phys, PAGE_SIZE);
         return NULL;
@@ -318,7 +318,7 @@ static slab_cache_t* slab_alloc_cache_struct(void) {
     uint64_t phys;
     pmm_status_t status = pmm_alloc(sizeof(slab_cache_t), &phys);
     if (status != PMM_OK) {
-        DEBUGF("[SLAB] Failed to allocate cache structure from PMM\n");
+        LOGF("[SLAB] Failed to allocate cache structure from PMM\n");
         return NULL;
     }
     
@@ -356,7 +356,7 @@ slab_status_t slab_init(void) {
     }
     
     if (!pmm_is_initialized()) {
-        DEBUGF("[SLAB] PMM must be initialized before slab allocator\n");
+        LOGF("[SLAB] PMM must be initialized before slab allocator\n");
         return SLAB_ERR_NOT_INIT;
     }
     
@@ -405,17 +405,17 @@ bool slab_is_initialized(void) {
  */
 slab_cache_t* slab_cache_create(const char* name, size_t obj_size, size_t align) {
     if (!g_slab_initialized) {
-        DEBUGF("[SLAB] Allocator not initialized\n");
+        LOGF("[SLAB] Allocator not initialized\n");
         return NULL;
     }
     
     if (!name || obj_size == 0) {
-        DEBUGF("[SLAB] Invalid arguments\n");
+        LOGF("[SLAB] Invalid arguments\n");
         return NULL;
     }
     
     if (obj_size > SLAB_MAX_OBJ_SIZE) {
-        DEBUGF("[SLAB] Object size %zu exceeds max %zu\n", obj_size, SLAB_MAX_OBJ_SIZE);
+        LOGF("[SLAB] Object size %zu exceeds max %zu\n", obj_size, SLAB_MAX_OBJ_SIZE);
         return NULL;
     }
     
@@ -423,20 +423,20 @@ slab_cache_t* slab_cache_create(const char* name, size_t obj_size, size_t align)
         align = 8;  // Eh, default alignment I guess
     
     if (!is_pow2_u64(align)) {
-        DEBUGF("[SLAB] Alignment must be power of 2\n");
+        LOGF("[SLAB] Alignment must be power of 2\n");
         return NULL;
     }
     
     // Check for duplicate cache name
     if (slab_cache_find(name)) {
-        DEBUGF("[SLAB] Cache '%s' already exists\n", name);
+        LOGF("[SLAB] Cache '%s' already exists\n", name);
         return NULL;
     }
     
     // Allocate cache structure from PMM
     slab_cache_t* cache = slab_alloc_cache_struct();
     if (!cache) {
-        DEBUGF("[SLAB] Failed to allocate cache structure\n");
+        LOGF("[SLAB] Failed to allocate cache structure\n");
         return NULL;
     }
     
@@ -519,7 +519,7 @@ slab_cache_t* slab_cache_find(const char* name) {
     slab_cache_t* cache = g_caches;
     while (cache) {
         if (!cache_validate(cache)) {
-            DEBUGF("[SLAB] Corrupted cache in list\n");
+            LOGF("[SLAB] Corrupted cache in list\n");
             return NULL;
         }
         if (strncmp(cache->name, name, SLAB_CACHE_NAME_LEN) == 0) {
@@ -565,14 +565,14 @@ slab_status_t slab_alloc(slab_cache_t* cache, void** out_obj) {
     
     // Pop object from freelist
     if (!slab->freelist) {
-        DEBUGF("[SLAB ERROR] Slab has no free objects but in_use=%u capacity=%u\n",
+        LOGF("[SLAB ERROR] Slab has no free objects but in_use=%u capacity=%u\n",
                slab->in_use, slab->capacity);
         return SLAB_ERR_CORRUPTION;
     }
     
     slab_free_obj_t* obj = (slab_free_obj_t*)slab->freelist;
     if (!validate_free_obj(obj)) {
-        DEBUGF("[SLAB ERROR] Corrupted free object in cache '%s'\n", cache->name);
+        LOGF("[SLAB ERROR] Corrupted free object in cache '%s'\n", cache->name);
         return SLAB_ERR_CORRUPTION;
     }
     
@@ -632,25 +632,25 @@ slab_status_t slab_free(slab_cache_t* cache, void* obj) {
     // Find which slab owns this object
     slab_t* slab = get_slab_from_obj(obj_start);
     if (!slab_validate(slab)) {
-        DEBUGF("[SLAB ERROR] Object %p does not belong to a valid slab\n", obj);
+        LOGF("[SLAB ERROR] Object %p does not belong to a valid slab\n", obj);
         return SLAB_ERR_NOT_FOUND;
     }
     
     // Verify object belongs to this cache
     if (slab->cache != cache) {
-        DEBUGF("[SLAB ERROR] Object belongs to different cache\n");
+        LOGF("[SLAB ERROR] Object belongs to different cache\n");
         return SLAB_ERR_NOT_FOUND;
     }
     
     // Validate allocation header
     slab_alloc_header_t* header = (slab_alloc_header_t*)obj_start;
     if (header->magic != SLAB_ALLOC_MAGIC) {
-        DEBUGF("[SLAB ERROR] Invalid allocation magic (double-free or corruption)\n");
+        LOGF("[SLAB ERROR] Invalid allocation magic (double-free or corruption)\n");
         g_stats.corruption_detected++;
         return SLAB_ERR_CORRUPTION;
     }
     if (header->cache_id != cache->cache_id) {
-        DEBUGF("[SLAB ERROR] Cache ID mismatch\n");
+        LOGF("[SLAB ERROR] Cache ID mismatch\n");
         return SLAB_ERR_CORRUPTION;
     }
     
@@ -727,18 +727,18 @@ void slab_get_stats(slab_stats_t* out_stats) {
  */
 void slab_dump_stats(void) {
     if (!g_slab_initialized) {
-        DEBUGF("[SLAB] Not initialized\n");
+        LOGF("[SLAB] Not initialized\n");
         return;
     }
     
-    DEBUGF("=== Slab Allocator Statistics ===\n");
-    DEBUGF("Total slabs: %lu\n", g_stats.total_slabs);
-    DEBUGF("Total PMM bytes: %lu (%.2f MiB)\n",
+    LOGF("=== Slab Allocator Statistics ===\n");
+    LOGF("Total slabs: %lu\n", g_stats.total_slabs);
+    LOGF("Total PMM bytes: %lu (%.2f MiB)\n",
            g_stats.total_pmm_bytes,
            g_stats.total_pmm_bytes / (1024.0 * 1024.0));
-    DEBUGF("Active caches: %lu (dynamic allocation)\n", g_stats.cache_count);
-    DEBUGF("Corruption events: %lu\n", g_stats.corruption_detected);
-    DEBUGF("=================================\n");
+    LOGF("Active caches: %lu (dynamic allocation)\n", g_stats.cache_count);
+    LOGF("Corruption events: %lu\n", g_stats.corruption_detected);
+    LOGF("=================================\n");
 }
 
 /*
@@ -747,31 +747,31 @@ void slab_dump_stats(void) {
 void slab_cache_dump(slab_cache_t* cache) {
     if (!cache_validate(cache)) return;
     
-    DEBUGF("=== Slab Cache: %s ===\n", cache->name);
-    DEBUGF("User object size: %zu bytes\n", cache->user_size);
-    DEBUGF("Total object size: %zu bytes (align: %zu)\n", cache->obj_size, cache->align);
-    DEBUGF("Cache ID: %u\n", cache->cache_id);
-    DEBUGF("\nStatistics:\n");
-    DEBUGF("  Total allocations: %lu\n", cache->stats.total_allocs);
-    DEBUGF("  Total frees:       %lu\n", cache->stats.total_frees);
-    DEBUGF("  Active objects:    %lu\n", cache->stats.active_objects);
-    DEBUGF("  Slab count:        %lu\n", cache->stats.slab_count);
-    DEBUGF("  Empty slabs:       %lu\n", cache->stats.empty_slabs);
-    DEBUGF("  Partial slabs:     %lu\n", cache->stats.partial_slabs);
-    DEBUGF("  Full slabs:        %lu\n", cache->stats.full_slabs);
+    LOGF("=== Slab Cache: %s ===\n", cache->name);
+    LOGF("User object size: %zu bytes\n", cache->user_size);
+    LOGF("Total object size: %zu bytes (align: %zu)\n", cache->obj_size, cache->align);
+    LOGF("Cache ID: %u\n", cache->cache_id);
+    LOGF("\nStatistics:\n");
+    LOGF("  Total allocations: %lu\n", cache->stats.total_allocs);
+    LOGF("  Total frees:       %lu\n", cache->stats.total_frees);
+    LOGF("  Active objects:    %lu\n", cache->stats.active_objects);
+    LOGF("  Slab count:        %lu\n", cache->stats.slab_count);
+    LOGF("  Empty slabs:       %lu\n", cache->stats.empty_slabs);
+    LOGF("  Partial slabs:     %lu\n", cache->stats.partial_slabs);
+    LOGF("  Full slabs:        %lu\n", cache->stats.full_slabs);
     
     // Calculate memory usage
     uint64_t total_bytes = cache->stats.slab_count * PAGE_SIZE;
     uint64_t used_bytes = cache->stats.active_objects * cache->obj_size;
     double utilization = total_bytes > 0 ? (double)used_bytes / total_bytes * 100.0 : 0.0;
     
-    DEBUGF("\nMemory usage:\n");
-    DEBUGF("  Total:        %lu bytes (%.2f KiB)\n",
+    LOGF("\nMemory usage:\n");
+    LOGF("  Total:        %lu bytes (%.2f KiB)\n",
            total_bytes, total_bytes / 1024.0);
-    DEBUGF("  Used:         %lu bytes (%.2f KiB)\n",
+    LOGF("  Used:         %lu bytes (%.2f KiB)\n",
            used_bytes, used_bytes / 1024.0);
-    DEBUGF("  Utilization:  %.1f%%\n", utilization);
-    DEBUGF("========================\n");
+    LOGF("  Utilization:  %.1f%%\n", utilization);
+    LOGF("========================\n");
 }
 
 /*
@@ -779,26 +779,26 @@ void slab_cache_dump(slab_cache_t* cache) {
  */
 void slab_dump_all_caches(void) {
     if (!g_slab_initialized) {
-        DEBUGF("[SLAB] Not initialized\n");
+        LOGF("[SLAB] Not initialized\n");
         return;
     }
     
     slab_dump_stats();
-    DEBUGF("\n");
+    LOGF("\n");
     
     slab_cache_t* cache = g_caches;
     if (!cache) {
-        DEBUGF("No caches created\n");
+        LOGF("No caches created\n");
         return;
     }
     
     while (cache) {
         if (!cache_validate(cache)) {
-            DEBUGF("[SLAB ERROR] Corrupted cache in list\n");
+            LOGF("[SLAB ERROR] Corrupted cache in list\n");
             break;
         }
         slab_cache_dump(cache);
-        DEBUGF("\n");
+        LOGF("\n");
         cache = cache->next;
     }
 }
@@ -808,11 +808,11 @@ void slab_dump_all_caches(void) {
  */
 bool slab_verify_integrity(void) {
     if (!g_slab_initialized) {
-        DEBUGF("[SLAB VERIFY] Not initialized\n");
+        LOGF("[SLAB VERIFY] Not initialized\n");
         return false;
     }
     
-    DEBUGF("[SLAB VERIFY] Checking slab allocator integrity...\n");
+    LOGF("[SLAB VERIFY] Checking slab allocator integrity...\n");
     bool all_ok = true;
     
     slab_cache_t* cache = g_caches;
@@ -822,7 +822,7 @@ bool slab_verify_integrity(void) {
         cache_count++;
         
         if (!cache_validate(cache)) {
-            DEBUGF("[SLAB VERIFY] Cache %d: validation failed\n", cache_count);
+            LOGF("[SLAB VERIFY] Cache %d: validation failed\n", cache_count);
             all_ok = false;
             break;
         }
@@ -839,7 +839,7 @@ bool slab_verify_integrity(void) {
                 slab_num++;
                 
                 if (!slab_validate(slab)) {
-                    DEBUGF("[SLAB VERIFY] Cache '%s': %s list slab %d invalid\n",
+                    LOGF("[SLAB VERIFY] Cache '%s': %s list slab %d invalid\n",
                            cache->name, list_names[i], slab_num);
                     all_ok = false;
                     break;
@@ -847,24 +847,24 @@ bool slab_verify_integrity(void) {
                 
                 // Verify slab belongs to this cache
                 if (slab->cache != cache) {
-                    DEBUGF("[SLAB VERIFY] Cache '%s': slab %d belongs to wrong cache\n",
+                    LOGF("[SLAB VERIFY] Cache '%s': slab %d belongs to wrong cache\n",
                            cache->name, slab_num);
                     all_ok = false;
                 }
                 
                 // Verify in_use count makes sense for list type
                 if (i == 0 && slab->in_use != 0) {
-                    DEBUGF("[SLAB VERIFY] Cache '%s': empty list has slab with in_use=%u\n",
+                    LOGF("[SLAB VERIFY] Cache '%s': empty list has slab with in_use=%u\n",
                            cache->name, slab->in_use);
                     all_ok = false;
                 }
                 if (i == 1 && (slab->in_use == 0 || slab->in_use >= slab->capacity)) {
-                    DEBUGF("[SLAB VERIFY] Cache '%s': partial list has slab with in_use=%u/%u\n",
+                    LOGF("[SLAB VERIFY] Cache '%s': partial list has slab with in_use=%u/%u\n",
                            cache->name, slab->in_use, slab->capacity);
                     all_ok = false;
                 }
                 if (i == 2 && slab->in_use != slab->capacity) {
-                    DEBUGF("[SLAB VERIFY] Cache '%s': full list has slab with in_use=%u/%u\n",
+                    LOGF("[SLAB VERIFY] Cache '%s': full list has slab with in_use=%u/%u\n",
                            cache->name, slab->in_use, slab->capacity);
                     all_ok = false;
                 }
@@ -875,7 +875,7 @@ bool slab_verify_integrity(void) {
                 
                 while (free_obj && free_count < slab->capacity) {
                     if (!validate_free_obj(free_obj)) {
-                        DEBUGF("[SLAB VERIFY] Cache '%s': slab %d has corrupted free object\n",
+                        LOGF("[SLAB VERIFY] Cache '%s': slab %d has corrupted free object\n",
                                cache->name, slab_num);
                         all_ok = false;
                         break;
@@ -885,14 +885,14 @@ bool slab_verify_integrity(void) {
                 }
                 
                 if (free_count > slab->capacity) {
-                    DEBUGF("[SLAB VERIFY] Cache '%s': slab %d freelist has too many objects\n",
+                    LOGF("[SLAB VERIFY] Cache '%s': slab %d freelist has too many objects\n",
                            cache->name, slab_num);
                     all_ok = false;
                 }
                 
                 uint32_t expected_free = slab->capacity - slab->in_use;
                 if (free_count != expected_free) {
-                    DEBUGF("[SLAB VERIFY] Cache '%s': slab %d free count mismatch (got %u, expected %u)\n",
+                    LOGF("[SLAB VERIFY] Cache '%s': slab %d free count mismatch (got %u, expected %u)\n",
                            cache->name, slab_num, free_count, expected_free);
                     all_ok = false;
                 }
@@ -901,7 +901,7 @@ bool slab_verify_integrity(void) {
                 
                 // Prevent infinite loops
                 if (slab_num > 10000) {
-                    DEBUGF("[SLAB VERIFY] Cache '%s': %s list has too many slabs (loop?)\n",
+                    LOGF("[SLAB VERIFY] Cache '%s': %s list has too many slabs (loop?)\n",
                            cache->name, list_names[i]);
                     all_ok = false;
                     break;
@@ -913,16 +913,16 @@ bool slab_verify_integrity(void) {
         
         // Prevent infinite loops
         if (cache_count > 1000) {
-            DEBUGF("[SLAB VERIFY] Too many caches (loop?)\n");
+            LOGF("[SLAB VERIFY] Too many caches (loop?)\n");
             all_ok = false;
             break;
         }
     }
     
     if (all_ok) {
-        DEBUGF("[SLAB VERIFY] All checks passed (%d caches)\n", cache_count);
+        LOGF("[SLAB VERIFY] All checks passed (%d caches)\n", cache_count);
     } else {
-        DEBUGF("[SLAB VERIFY] FAILED - integrity compromised!\n");
+        LOGF("[SLAB VERIFY] FAILED - integrity compromised!\n");
     }
     
     return all_ok;
