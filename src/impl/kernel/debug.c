@@ -17,9 +17,9 @@
 static int dbg_counter = 0;
 
 /*
- * DEBUG_LOG - Debug function to log messages to qemu serial with counter
+ * QEMU_LOG - Debug function to log messages to qemu serial with counter
  */
-void DEBUG_LOG(const char* msg, int total) {
+void QEMU_LOG(const char* msg, int total) {
     char buf[128];
     char* ptr = buf;
 
@@ -41,9 +41,9 @@ void DEBUG_LOG(const char* msg, int total) {
 }
 
 /*
- * DEBUG_GENERIC_LOG - Debug function to log messages to qemu serial without counter
+ * QEMU_GENERIC_LOG - Debug function to log messages to qemu serial without counter
  */
-void DEBUG_GENERIC_LOG(const char* msg) {
+void QEMU_GENERIC_LOG(const char* msg) {
     char buf[128];
     char* ptr = buf;
 
@@ -57,6 +57,9 @@ void DEBUG_GENERIC_LOG(const char* msg) {
     serial_write(buf);
 }
 
+/*
+ * DEBUGF - Debug function to log messages internally with format specifiers
+ */
 void DEBUGF(const char* fmt, ...)
 {
     char buffer[512];
@@ -66,13 +69,14 @@ void DEBUGF(const char* fmt, ...)
     vsnprintf(buffer, sizeof(buffer), fmt, args);
     va_end(args);
     
-    DEBUG_GENERIC_LOG(buffer);
+    // Output to COM2 instead of COM1 for internal logging
+    serial_write_port(SERIAL_COM2, buffer);
 }
 
 /*
- * DEBUG_DUMP_PMT - Debug function to print page table structure
+ * QEMU_DUMP_PMT - Debug function to print page table structure
  */
-void DEBUG_DUMP_PMT(void) {
+void QEMU_DUMP_PMT(void) {
     uint64_t* PML4 = getPML4();
     serial_write("Page Tables:\n");
 
