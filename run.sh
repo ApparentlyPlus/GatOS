@@ -85,7 +85,7 @@ function run_qemu() {
   iso_file=$(find_iso_file) || return 1
 
   echo -e "${GREEN}[SUCCESS] Build complete. Starting QEMU with ${iso_file##*/}...${NC}"
-  "${QEMU_EXEC}" -cdrom "${iso_file}" -serial stdio
+  "${QEMU_EXEC}" -cdrom "${iso_file}" -serial mon:stdio -serial file:debug.log
 }
 
 function main() {

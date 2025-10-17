@@ -80,10 +80,10 @@
 #define PT_INDEX(addr)   (((uintptr_t)(addr) >> 12) & PT_ENTRY_MASK)
 
 
-#define MEASUREMENT_UNIT_BYTES                 1
-#define MEASUREMENT_UNIT_KB                    1024
-#define MEASUREMENT_UNIT_MB                    1024*1024
-#define MEASUREMENT_UNIT_GB                    1024*1024*1024
+#define MEASUREMENT_UNIT_BYTES                 (1)
+#define MEASUREMENT_UNIT_KB                    (1024)
+#define MEASUREMENT_UNIT_MB                    (1024*1024)
+#define MEASUREMENT_UNIT_GB                    (1024*1024*1024)
 
 #ifndef __ASSEMBLER__
 

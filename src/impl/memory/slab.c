@@ -365,6 +365,8 @@ slab_status_t slab_init(void) {
     memset(&g_stats, 0, sizeof(slab_stats_t));
     
     g_slab_initialized = true;
+
+    LOGF("[SLAB] Slab (System Wide) Allocator initialized\n");
     
     return SLAB_OK;
 }
@@ -387,6 +389,8 @@ void slab_shutdown(void) {
     g_caches = NULL;
     g_next_cache_id = 1;
     memset(&g_stats, 0, sizeof(slab_stats_t));
+
+    LOGF("[SLAB] Slab (System Wide) Allocator shutdown\n");
 }
 
 /*

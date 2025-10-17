@@ -833,6 +833,9 @@ vmm_t* vmm_create(uintptr_t alloc_base, uintptr_t alloc_end) {
     vmm->public.objects = NULL;
     vmm->public.alloc_base = alloc_base;
     vmm->public.alloc_end = alloc_end;
+
+    LOGF("[VMM] User VMM initialized, managing 0x%lx - 0x%lx (%zu MiB)\n",
+           alloc_base, alloc_end, (alloc_end - alloc_base)/MEASUREMENT_UNIT_MB);
     
     return &vmm->public;
 }
@@ -902,6 +905,8 @@ void vmm_destroy(vmm_t* vmm_pub) {
     
     // Free VMM structure itself using slab allocator
     slab_free(g_vmm_internal_cache, vmm);
+
+    LOGF("[VMM] User VMM Destroyed\n");
 }
 
 
@@ -975,6 +980,9 @@ vmm_status_t vmm_kernel_init(uintptr_t alloc_base, uintptr_t alloc_end) {
         LOGF("[VMM] Failed to create slab caches\n");
         return VMM_ERR_NO_MEMORY;
     }
+
+    LOGF("[VMM] Kernel VMM initialized, managing 0x%lx - 0x%lx (%zu MiB)\n",
+           alloc_base, alloc_end, (alloc_end - alloc_base)/MEASUREMENT_UNIT_MB);
     
     return VMM_OK;
 }

@@ -345,8 +345,12 @@ pmm_status_t pmm_init(uint64_t range_start_phys, uint64_t range_end_phys, uint64
 
     // Partition the range into blocks
     partition_range_into_blocks(g_range_start, g_range_end);
-
+    
     g_inited = true;
+
+    LOGF("[PMM] PMM initialized, managing 0x%lx - 0x%lx (%zu MiB)\n",
+           pmm_managed_base(), pmm_managed_end(), pmm_managed_size() / (1024 * 1024));
+
     return PMM_OK;
 }
 
@@ -372,6 +376,8 @@ void pmm_shutdown(void) {
         g_free_heads[i] = EMPTY_SENTINEL;
     
     memset(&g_stats, 0, sizeof(pmm_stats_t));
+
+    LOGF("[PMM] PMM Shutdown\n");
 }
 
 /*

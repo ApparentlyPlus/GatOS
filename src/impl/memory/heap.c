@@ -1,5 +1,5 @@
 /*
- * heap.c - Kernel Heap Manager Implementation (Improved)
+ * heap.c - Kernel Heap Manager Implementation
  *
  * This implementation provides a robust heap allocator using boundary tag
  * coalescing. Each allocation is tracked with header and footer metadata
@@ -802,8 +802,8 @@ heap_status_t heap_kernel_init(void) {
     g_kernel_heap = heap;
     g_kernel_heap_initializing = false;
     
-    LOGF("[HEAP] Kernel heap initialized at 0x%lx - 0x%lx (%zu bytes)\n",
-           heap->heap_start, heap->heap_end, heap->current_size);
+    LOGF("[HEAP] Kernel heap initialized at 0x%lx - 0x%lx (%zu KiB)\n",
+           heap->heap_start, heap->heap_end, heap->current_size / MEASUREMENT_UNIT_KB);
     
     return HEAP_OK;
 }
@@ -1036,6 +1036,9 @@ heap_t* heap_create(vmm_t* vmm, size_t min_size, size_t max_size, uint32_t flags
     heap->total_free = initial_block_size;
     heap->total_allocated = 0;
     heap->allocation_count = 0;
+
+    LOGF("[HEAP] User heap initialized at 0x%lx - 0x%lx (%zu MiB)\n",
+           heap->heap_start, heap->heap_end, heap->current_size / MEASUREMENT_UNIT_MB);
     
     return heap;
 }
@@ -1069,6 +1072,8 @@ void heap_destroy(heap_t* heap) {
     
     // Free heap structure
     slab_free(g_heap_cache, heap);
+
+    LOGF("[HEAP] User heap destroyed\n");
 }
 
 /*

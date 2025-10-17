@@ -14,6 +14,7 @@
 #include <vga_stdio.h>
 #include <serial.h>
 #include <multiboot2.h>
+#include <debug.h>
 
 /*
  * align_up - Aligns address to specified boundary
@@ -87,6 +88,7 @@ void flush_tlb(void) {
  */
 void PMT_switch(uint64_t pml4) {
     __asm__ volatile("mov %0, %%cr3" : : "r"(pml4));
+    LOGF("[PAGING] Page tables switched\n");
 }
 
 /*
@@ -107,6 +109,7 @@ void unmap_identity(){
     PML4[0] = 0;
     PDPT[0] = 0;
     flush_tlb();
+    LOGF("[PAGING] Removed identity mapping\n");
 }
 
 /*
@@ -179,6 +182,7 @@ void cleanup_kernel_page_tables(uintptr_t start, uintptr_t end) {
         PT[i] = phys | (PAGE_PRESENT | PAGE_WRITABLE);
     }
 
+    LOGF("[PAGING] Cleaned up kernel page tabeles (only 0x%lx - 0x%lx remains)\n", virt_start, virt_end);
     flush_tlb();
 }
 
@@ -209,6 +213,8 @@ uint64_t reserve_required_tablespace(multiboot_parser_t* multiboot) {
     physmapStruct.tables_base = (uintptr_t)get_kend(true);
 
     KEND += table_bytes;
+
+    LOGF("[PAGING] Reserved required tablespace for physmap (%d MiB)\n", (get_physmap_end() - get_physmap_start())/MEASUREMENT_UNIT_MB);
 
     return table_bytes;
 }
@@ -297,4 +303,7 @@ void build_physmap() {
 
     // For good measure, flush TLB
     flush_tlb();
+
+    LOGF("[PAGING] Physmap has been built at 0x%lx - 0x%lx (%zu MiB)\n", PHYSMAP_VIRTUAL_BASE, 
+        get_physmap_end(), (get_physmap_end() - PHYSMAP_VIRTUAL_BASE) / MEASUREMENT_UNIT_MB);
 }
