@@ -22,7 +22,7 @@
 #include <serial.h>
 #include <debug.h>
 
-#define TOTAL_DBG 11
+#define TOTAL_DBG 14
 
 static char* KERNEL_VERSION = "v1.6.6-alpha";
 static uint8_t multiboot_buffer[8 * 1024]; // 8KB should be more than enough
@@ -38,9 +38,11 @@ void kernel_main(void* mb_info) {
 	print_banner(KERNEL_VERSION);
 
 	// Initialize serial (COM1) for QEMU output
+
 	serial_init_port(COM1_PORT);
 
 	// Initialize serial (COM2) for internal logging
+
 	serial_init_port(COM2_PORT);
 
 	QEMU_LOG("Kernel main reached, normal assembly boot succeeded", TOTAL_DBG);
@@ -117,6 +119,37 @@ void kernel_main(void* mb_info) {
 		return;
 	}
 
+	// Initialize slab allocator
+
+	slab_status_t slab_status = slab_init();
+	if(slab_status != SLAB_OK){
+		printf("[Slab] Failed to initialize slab allocator, error code: %d\n", slab_status);
+		return;
+	}
+	printf("[SLAB] Slab Allocator initialized\n");
+	QEMU_LOG("Initialized slab allocator", TOTAL_DBG);
+
+	// Initialize virtual memory manager
+
+	vmm_status_t vmm_status = vmm_kernel_init(get_kend(true) + PAGE_SIZE, 0xFFFFFFFFFFFFF000);
+	if(vmm_status != VMM_OK){
+		printf("[VMM] Failed to initialize virtual memory manager, error code: %d\n", vmm_status);
+		return;
+	}
+	printf("[VMM] Kernel Virtual Memory Manager initialized\n");
+	QEMU_LOG("Initialized kernel virtual memory manager", TOTAL_DBG);
+
+	// Initialize kernel heap
+
+	heap_status_t heap_status = heap_kernel_init();
+	if(heap_status != HEAP_OK){
+		printf("[HEAP] Failed to initialize kernel heap, error code: %d\n", heap_status);
+		return;
+	}
+	printf("[HEAP] Kernel Heap initialized\n");
+	QEMU_LOG("Initialized kernel heap", TOTAL_DBG);
+
 	// Final sanity check
+	
 	QEMU_LOG("Reached kernel end", TOTAL_DBG);
 }
