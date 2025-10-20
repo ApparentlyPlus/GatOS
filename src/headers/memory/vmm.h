@@ -46,21 +46,19 @@ typedef enum {
 typedef struct vm_object vm_object;
 
 // VM Object - represents a virtual memory range
-// Note: This is the public interface. Internal implementation adds validation fields.
 struct vm_object{
-    uintptr_t base;        // Virtual base address (page-aligned)
-    size_t length;         // Length in bytes (page-aligned)
-    size_t flags;          // VM_FLAG_* bitfield
-    vm_object* next;       // Next object in linked list
+    uintptr_t base;
+    size_t length;
+    size_t flags;
+    vm_object* next;
 };
 
 // VMM Instance - manages one address space
-// Note: This is the public interface. Internal implementation adds validation fields.
 typedef struct {
-    uint64_t pt_root;      // Page table root (physical address)
-    vm_object* objects;    // Linked list of vm_objects
-    uintptr_t alloc_base;  // Base address for allocations
-    uintptr_t alloc_end;   // End address for allocations
+    uint64_t pt_root;
+    vm_object* objects;
+    uintptr_t alloc_base;
+    uintptr_t alloc_end;
 } vmm_t;
 
 // Core Allocation/Deallocation
@@ -112,7 +110,6 @@ void vmm_dump(vmm_t* vmm);
 void vmm_stats(vmm_t* vmm, size_t* out_total, size_t* out_resident);
 void vmm_dump_pte_chain(uint64_t pt_root, void* virt);
 bool vmm_verify_integrity(vmm_t* vmm_pub);
-
 
 /*
 

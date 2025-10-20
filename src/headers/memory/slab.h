@@ -52,21 +52,21 @@ typedef struct slab slab_t;
 
 // Slab cache statistics
 typedef struct {
-    uint64_t total_allocs;       // Total allocations from this cache
-    uint64_t total_frees;        // Total frees to this cache
-    uint64_t active_objects;     // Currently allocated objects
-    uint64_t slab_count;         // Number of slabs in cache
-    uint64_t partial_slabs;      // Slabs with some free objects
-    uint64_t full_slabs;         // Slabs with no free objects
-    uint64_t empty_slabs;        // Slabs with all objects free
+    uint64_t total_allocs;
+    uint64_t total_frees;
+    uint64_t active_objects;
+    uint64_t slab_count;
+    uint64_t partial_slabs;
+    uint64_t full_slabs;
+    uint64_t empty_slabs;
 } slab_cache_stats_t;
 
 // Global slab allocator statistics
 typedef struct {
-    uint64_t total_slabs;           // Total slabs allocated from PMM
-    uint64_t total_pmm_bytes;       // Total bytes requested from PMM
-    uint64_t cache_count;           // Number of active caches
-    uint64_t corruption_detected;   // Corruption events detected
+    uint64_t total_slabs;
+    uint64_t total_pmm_bytes;
+    uint64_t cache_count;
+    uint64_t corruption_detected;
 } slab_stats_t;
 
 // Initialization and Shutdown
@@ -99,7 +99,6 @@ bool slab_verify_integrity(void);
 
 size_t slab_cache_obj_size(slab_cache_t* cache);
 const char* slab_cache_name(slab_cache_t* cache);
-
 
 /*
 

@@ -44,18 +44,18 @@ typedef enum {
 } pmm_status_t;
 
 typedef struct {
-    uint64_t free_blocks[PMM_MAX_ORDERS];       // Free blocks per order
-    uint64_t alloc_calls;                       // Number of allocation calls
-    uint64_t free_calls;                        // Number of free calls
-    uint64_t coalesce_success;                  // Successful coalesces
-    uint64_t corruption_detected;               // Free-list corruption events
+    uint64_t free_blocks[PMM_MAX_ORDERS];
+    uint64_t alloc_calls;
+    uint64_t free_calls;
+    uint64_t coalesce_success;
+    uint64_t corruption_detected;
 } pmm_stats_t;
 
 // Free block header stored at the start of each free block
 typedef struct {
-    uint32_t magic;        // PMM_FREE_BLOCK_MAGIC
-    uint32_t order;        // Block order (for validation)
-    uint64_t next_phys;    // Physical address of next free block
+    uint32_t magic; 
+    uint32_t order;
+    uint64_t next_phys;
 } pmm_free_header_t;
 
 
@@ -84,7 +84,6 @@ uint64_t pmm_min_block_size(void);
 void pmm_get_stats(pmm_stats_t* out_stats);
 void pmm_dump_stats(void);
 bool pmm_verify_integrity(void);
-
 
 
 /*

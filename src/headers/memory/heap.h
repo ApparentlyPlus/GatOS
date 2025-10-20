@@ -34,21 +34,21 @@
 // Return codes
 typedef enum {
     HEAP_OK = 0,
-    HEAP_ERR_INVALID,
-    HEAP_ERR_OOM,
-    HEAP_ERR_NOT_INIT,
-    HEAP_ERR_ALREADY_INIT,
-    HEAP_ERR_VMM_FAIL,
-    HEAP_ERR_CORRUPTED,
-    HEAP_ERR_NOT_FOUND,
-    HEAP_ERR_DOUBLE_FREE,
+    HEAP_ERR_INVALID,       // Invalid arguments 
+    HEAP_ERR_OOM,           // Out of memory
+    HEAP_ERR_NOT_INIT,      // Heap not initialized
+    HEAP_ERR_ALREADY_INIT,  // Heap already initialized
+    HEAP_ERR_VMM_FAIL,      // Something went wrong with the VMM
+    HEAP_ERR_CORRUPTED,     // Heap corruption detected
 } heap_status_t;
 
 // Forward declarations
+
 typedef struct heap heap_t;
 typedef struct heap_block_header heap_block_header_t;
 
 // Kernel heap interface (auto-initialized on first use)
+
 heap_status_t heap_kernel_init(void);
 heap_t* heap_kernel_get(void);
 void* kmalloc(size_t size);
@@ -57,6 +57,7 @@ void* krealloc(void* ptr, size_t size);
 void* kcalloc(size_t nmemb, size_t size);
 
 // User heap interface
+
 heap_t* heap_create(vmm_t* vmm, size_t min_size, size_t max_size, uint32_t flags);
 void heap_destroy(heap_t* heap);
 void* heap_malloc(heap_t* heap, size_t size);
@@ -65,11 +66,13 @@ void* heap_realloc(heap_t* heap, void* ptr, size_t size);
 void* heap_calloc(heap_t* heap, size_t nmemb, size_t size);
 
 // Heap introspection and debugging
+
 heap_status_t heap_check_integrity(heap_t* heap);
 void heap_dump(heap_t* heap);
 void heap_stats(heap_t* heap, size_t* total, size_t* used, size_t* free, size_t* overhead);
 size_t heap_get_alloc_size(heap_t* heap, void* ptr);
 
 // Utility functions
+
 size_t heap_align_size(size_t size);
 bool heap_validate_block(heap_block_header_t* header);

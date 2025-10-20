@@ -30,7 +30,6 @@
  *   virtual_addr = physical_addr + PHYSMAP_VIRTUAL_BASE
  */
 
-
 #ifdef __ASSEMBLER__
 
 #define KERNEL_V2P(a) ((a) - KERNEL_VIRTUAL_BASE)
@@ -132,7 +131,6 @@ static uint64_t KEND = (uint64_t)&KPHYS_END;
 
 static physmapInfo physmapStruct = {0};
 #endif
-
 
 /*
 
