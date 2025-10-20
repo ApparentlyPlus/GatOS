@@ -969,7 +969,7 @@ heap_status_t heap_kernel_init(void) {
     heap->magic = HEAP_MAGIC;
     heap->vmm = kernel_vmm;
     heap->is_kernel = true;
-    heap->flags = HEAP_FLAG_NONE;
+    heap->flags = HEAP_FLAG_URGENT;
     heap->min_arena_size = MIN_ARENA_SIZE;
     heap->max_size = SIZE_MAX;
     heap->current_size = 0;
