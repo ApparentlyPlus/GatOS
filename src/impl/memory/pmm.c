@@ -17,7 +17,7 @@
 #include <debug.h>
 
 // Magic number for validating free block headers
-#define PMM_FREE_BLOCK_MAGIC 0x46524545
+#define PMM_FREE_BLOCK_MAGIC 0xFEEDBEEF
 
 static bool g_inited = false;
 static uint64_t g_range_start = 0;

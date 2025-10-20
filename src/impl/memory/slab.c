@@ -18,11 +18,11 @@
 #include <stdbool.h>
 
 // Magic numbers for validation
-#define SLAB_MAGIC           0x534C4142
-#define SLAB_CACHE_MAGIC     0x43414348
+#define SLAB_MAGIC           0xC00151AB
+#define SLAB_CACHE_MAGIC     0xCACE51AB
 #define SLAB_FREE_MAGIC      0xFEEDF00D
 #define SLAB_ALLOC_MAGIC     0xA110C8ED
-#define SLAB_RED_ZONE        0xDEADBEEF
+#define SLAB_RED_ZONE        0xDEADFA11
 
 // Objects larger than this should be using the PMM directly
 #define SLAB_MAX_OBJ_SIZE (PAGE_SIZE / 8)

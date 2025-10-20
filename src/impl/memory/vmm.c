@@ -19,8 +19,8 @@
 #include <stdbool.h>
 
 // Magic numbers for validation and corruption detection
-#define VMM_MAGIC           0x564D4D21
-#define VM_OBJECT_MAGIC     0x564F424A
+#define VMM_MAGIC           0xC0FFEEEE
+#define VM_OBJECT_MAGIC     0xACCE55ED
 #define VM_OBJECT_RED_ZONE  0xDEADC0DE
 
 // Extended vm_object with validation
