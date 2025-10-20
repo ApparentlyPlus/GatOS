@@ -715,8 +715,7 @@ static void split_block(heap_t* heap, heap_block_header_t* block, size_t size) {
         return;
     }
 
-    // record whether block was already in free list (we'll re-insert
-    // conditionally)
+    // record whether block was already in free list (we'll re-insert conditionally)
     bool was_in_free_list = (block->magic == BLOCK_MAGIC_FREE);
 
     if (was_in_free_list) {
@@ -969,7 +968,7 @@ heap_status_t heap_kernel_init(void) {
     heap->magic = HEAP_MAGIC;
     heap->vmm = kernel_vmm;
     heap->is_kernel = true;
-    heap->flags = HEAP_FLAG_URGENT;
+    heap->flags = HEAP_FLAG_URGENT | HEAP_FLAG_ZERO;
     heap->min_arena_size = MIN_ARENA_SIZE;
     heap->max_size = SIZE_MAX;
     heap->current_size = 0;
