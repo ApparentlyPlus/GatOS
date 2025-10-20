@@ -214,7 +214,7 @@ uint64_t reserve_required_tablespace(multiboot_parser_t* multiboot) {
 
     KEND += table_bytes;
 
-    LOGF("[PAGING] Reserved required tablespace for physmap (%d MiB)\n", (get_physmap_end() - get_physmap_start())/MEASUREMENT_UNIT_MB);
+    LOGF("[PAGING] Reserved required tablespace for physmap (%d MiB)\n", table_bytes/MEASUREMENT_UNIT_MB);
 
     return table_bytes;
 }
