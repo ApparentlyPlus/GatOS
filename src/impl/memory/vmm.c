@@ -131,15 +131,15 @@ static inline uint64_t vmm_convert_vm_flags(size_t vm_flags,
         pt_flags |= PAGE_USER;
     }
 
-    // For non-kernel address spaces, make sure intermediate tables also get the
-    // user bit (this is an architecture requirement on many platforms to
-    // prevent kernel-only faults)
+    // For non-kernel address spaces, make sure intermediate tables also get the user bit 
     if (!is_kernel_vmm && (vm_flags & VM_FLAG_USER)) {
         pt_flags |= PAGE_USER;
     }
 
-    // NOTE: NX (no-execute) is architecture-dependent. We keep this commented
-    // as the original. if (!(vm_flags & VM_FLAG_EXEC)) {
+    // NOTE: NX (no-execute) is architecture-dependent. The code below should
+    // remain commented out until we have a way to check if NX/PAE support is enabled.
+    
+    //if (!(vm_flags & VM_FLAG_EXEC)) {
     //     pt_flags |= PAGE_NO_EXECUTE;
     // }
 
