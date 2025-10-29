@@ -9,6 +9,7 @@
  */
 
 #include <debug.h>
+#include <sys/cpu.h>
 #include <libc/string.h>
 #include <memory/paging.h>
 #include <memory/pmm.h>
@@ -135,13 +136,10 @@ static inline uint64_t vmm_convert_vm_flags(size_t vm_flags,
     if (!is_kernel_vmm && (vm_flags & VM_FLAG_USER)) {
         pt_flags |= PAGE_USER;
     }
-
-    // NOTE: NX (no-execute) is architecture-dependent. The code below should
-    // remain commented out until we have a way to check if NX/PAE support is enabled.
     
-    //if (!(vm_flags & VM_FLAG_EXEC)) {
-    //     pt_flags |= PAGE_NO_EXECUTE;
-    // }
+    if (!(vm_flags & VM_FLAG_EXEC) && cpu_is_feature_enabled(CPU_FEAT_NX)) {
+         pt_flags |= PAGE_NO_EXECUTE;
+    }
 
     return pt_flags;
 }
@@ -962,6 +960,11 @@ vmm_status_t vmm_kernel_init(uintptr_t alloc_base, uintptr_t alloc_end) {
     if (!slab_is_initialized()) {
         LOGF("[VMM] The Slab allocator must be online first\n");
         return VMM_ERR_NOT_INIT;
+    }
+
+    // Enable NX bit if supported
+    if(cpu_has_feature(CPU_FEAT_NX)){
+        cpu_enable_feature(CPU_FEAT_NX);
     }
 
     // Allocate kernel VMM structure using PMM (kernel wants a stable physical

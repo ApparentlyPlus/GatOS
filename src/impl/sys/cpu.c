@@ -258,3 +258,50 @@ bool cpu_enable_feature(cpu_feature_t feature)
             return false;
     }
 }
+
+/*
+ * cpu_is_feature_enabled - Checks if a CPU feature is enabled
+ */
+bool cpu_is_feature_enabled(cpu_feature_t feature)
+{
+    uint64_t cr0, cr4, xcr0, efer;
+
+    switch (feature) {
+        case CPU_FEAT_PAE:
+            cr4 = read_cr4();
+            return (cr4 & (1 << 5)) != 0;
+
+        case CPU_FEAT_SSE:
+        case CPU_FEAT_SSE2:
+        case CPU_FEAT_SSE3:
+        case CPU_FEAT_SSSE3:
+        case CPU_FEAT_SSE4_1:
+        case CPU_FEAT_SSE4_2:
+            cr0 = read_cr0();
+            cr4 = read_cr4();
+            return ((cr4 & (1 << 9)) && (cr4 & (1 << 10)) && !(cr0 & (1 << 2)));
+
+        case CPU_FEAT_AVX:
+        case CPU_FEAT_AVX2:
+            cr4  = read_cr4();
+            xcr0 = read_xcr0();
+            return ((cr4 & (1 << 18)) &&
+                    (xcr0 & (1 << 0)) && (xcr0 & (1 << 1)) && (xcr0 & (1 << 2)));
+
+        case CPU_FEAT_NX:
+            efer = read_msr(0xC0000080); // IA32_EFER
+            return (efer & (1 << 11)) != 0;
+
+        case CPU_FEAT_VMX:
+            cr4 = read_cr4();
+            return (cr4 & (1 << 13)) != 0;
+
+        case CPU_FEAT_SVM:
+            efer = read_msr(0xC0000080);
+            return (efer & (1 << 12)) != 0;
+
+        default:
+            return false;
+    }
+}
+

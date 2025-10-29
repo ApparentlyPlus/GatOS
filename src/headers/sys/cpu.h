@@ -46,3 +46,4 @@ void cpu_init(void);
 const CPUInfo* cpu_get_info(void);
 bool cpu_has_feature(cpu_feature_t feature);
 bool cpu_enable_feature(cpu_feature_t feature);
+bool cpu_is_feature_enabled(cpu_feature_t feature);
