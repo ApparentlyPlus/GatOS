@@ -30,12 +30,26 @@ jobs:
         chmod +x setup.sh
         ./setup.sh
 
-    - name: Build and Run Kernel
+    - name: Build GatOS
       run: |
         make clean
         make
+
+    - name: Find ISO file
+      id: find_iso
+      run: |
+        ISO_PATH=$(find dist/x86_64 -maxdepth 1 -type f -name "GatOS-*.iso" | sort -r | head -n1)
+        if [ -z "$ISO_PATH" ]; then
+          echo "No ISO file found in dist/x86_64"
+          exit 1
+        fi
+        echo "Found ISO: $ISO_PATH"
+        echo "iso_path=$ISO_PATH" >> $GITHUB_OUTPUT
+
+    - name: Run Kernel in QEMU
+      run: |
         timeout 10s qemu-system-x86_64 \
-          -cdrom dist/x86_64/kernel.iso \
+          -cdrom "${{ steps.find_iso.outputs.iso_path }}" \
           -nographic \
           -serial file:serial.log \
           -no-reboot || true
@@ -44,6 +58,8 @@ jobs:
       run: |
         if ! grep -q "\[[0-9]\+/[0-9]\+\]" serial.log; then
           echo "No test output found"
+          echo "Serial log:"
+          cat serial.log || true
           exit 1
         fi
 
@@ -58,3 +74,9 @@ jobs:
           exit 1
         fi
 
+    - name: Upload Serial Log (on failure)
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: serial-log
+        path: serial.log

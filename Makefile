@@ -72,4 +72,4 @@ iso: build $(UEFI_GRUB)
 # Clean all build and dist files
 .PHONY: clean
 clean:
-	rm -rf $(BUILD_DIR) $(DIST_DIR) dist $(ISO_DIR)/boot/kernel.bin $(UEFI_GRUB)
+	rm -rf $(BUILD_DIR) $(DIST_DIR) dist $(ISO_DIR)/boot/kernel.bin $(UEFI_GRUB) debug.log
