@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <multiboot2.h>
+#include <stdbool.h>
 
 /* RSDP 1.0 */
 typedef struct {
