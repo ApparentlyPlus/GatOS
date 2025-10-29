@@ -3,7 +3,8 @@ CC := x86_64-elf-gcc
 LD := x86_64-elf-ld
 
 # Compilation and preprocessing flags
-CFLAGS := -m64 -ffreestanding -nostdlib -fno-pic -mcmodel=kernel -I src/headers -g
+CFLAGS_FAST := -O3 -fomit-frame-pointer -fpredictive-commoning -fstrict-aliasing
+CFLAGS := -m64 -ffreestanding -nostdlib -fno-pic -mcmodel=kernel -I src/headers
 CPPFLAGS := -I src/headers -D__ASSEMBLER__
 LDFLAGS := -n -nostdlib -T targets/x86_64/linker.ld --no-relax -g
 
@@ -26,6 +27,10 @@ ASM_SRC_FILES := $(shell find $(SRC_DIR) -type f -name '*.S')
 C_OBJ_FILES := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(C_SRC_FILES))
 ASM_OBJ_FILES := $(patsubst $(SRC_DIR)/%.S,$(BUILD_DIR)/%.o,$(ASM_SRC_FILES))
 OBJ_FILES := $(C_OBJ_FILES) $(ASM_OBJ_FILES)
+
+# Extract kernel version from source files (looks for KERNEL_VERSION = "vX.X.X-*";)
+KERNEL_VERSION := $(shell grep -hr 'KERNEL_VERSION\s*=\s*"[^"]*"' $(SRC_DIR) $(HEADER_DIR) | head -1 | sed -E 's/.*KERNEL_VERSION\s*=\s*"([^"]*)".*/\1/')
+ISO_NAME := GatOS-$(KERNEL_VERSION).iso
 
 # Default target
 .PHONY: all
@@ -56,13 +61,13 @@ $(UEFI_GRUB): $(ISO_DIR)/boot/grub/grub.cfg
 		--locales="" --fonts="" \
 		"boot/grub/grub.cfg=$(ISO_DIR)/boot/grub/grub.cfg"
 
-# Generate ISO image (BIOS + UEFI hybrid)
+# Generate ISO image (BIOS + UEFI hybrid) with versioned name
 .PHONY: iso
 iso: build $(UEFI_GRUB)
 	@mkdir -p $(ISO_DIR)/boot
 	cp $(DIST_DIR)/kernel.bin $(ISO_DIR)/boot/kernel.bin
-	grub-mkrescue -o $(DIST_DIR)/kernel.iso $(ISO_DIR) || \
-	grub-mkrescue -d /usr/lib/grub/i386-pc -o $(DIST_DIR)/kernel.iso $(ISO_DIR);
+	grub-mkrescue -o $(DIST_DIR)/$(ISO_NAME) $(ISO_DIR) || \
+	grub-mkrescue -d /usr/lib/grub/i386-pc -o $(DIST_DIR)/$(ISO_NAME) $(ISO_DIR);
 
 # Clean all build and dist files
 .PHONY: clean

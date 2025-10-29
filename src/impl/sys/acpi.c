@@ -1,17 +1,17 @@
 /*
- * ACPI.c - ACPI (Advanced Configuration and Power Interface) related functions.
+ * acpi.c - ACPI (Advanced Configuration and Power Interface) related functions.
  *
  * Author: u/ApparentlyPlus
  */
 
 #include <multiboot2.h>
 #include <libc/string.h>
-#include <sys/ACPI.h>
+#include <sys/acpi.h>
 #include <sys/panic.h>
 #include <debug.h>
 
-static RSDP2Descriptor* g_rsdp = nullptr;
-static void* g_root_sdt = nullptr;
+static RSDP2Descriptor* g_rsdp = NULL;
+static void* g_root_sdt = NULL;
 static bool g_xsdt_supported = false;
 
 /*
@@ -33,15 +33,15 @@ bool acpi_validate_rsdp(RSDP2Descriptor* rsdp) {
  */
 RSDP2Descriptor* acpi_find_rsdp(multiboot_parser_t* parser) {
     if (!parser || !parser->initialized || !parser->info)
-        return nullptr;
+        return NULL;
 
     multiboot_acpi_t* acpi_tag = multiboot_get_acpi_rsdp(parser);
     if (!acpi_tag)
-        return nullptr;
+        return NULL;
 
     if (acpi_tag->type == MULTIBOOT_TAG_TYPE_ACPI_NEW) {
         RSDP2Descriptor* rsdp2 = (RSDP2Descriptor*)acpi_tag->rsdp;
-        return acpi_validate_rsdp(rsdp2) ? rsdp2 : nullptr;
+        return acpi_validate_rsdp(rsdp2) ? rsdp2 : NULL;
     } else if (acpi_tag->type == MULTIBOOT_TAG_TYPE_ACPI_OLD) {
         RSDPDescriptor* rsdp1 = (RSDPDescriptor*)acpi_tag->rsdp;
         static RSDP2Descriptor rsdp2;
@@ -59,10 +59,10 @@ RSDP2Descriptor* acpi_find_rsdp(multiboot_parser_t* parser) {
         rsdp2.ExtendedChecksum = 0;
         memset(rsdp2.Reserved, 0, sizeof(rsdp2.Reserved));
 
-        return acpi_validate_rsdp((RSDP2Descriptor*)rsdp1) ? &rsdp2 : nullptr;
+        return acpi_validate_rsdp((RSDP2Descriptor*)rsdp1) ? &rsdp2 : NULL;
     }
 
-    return nullptr;
+    return NULL;
 }
 
 /*
@@ -70,7 +70,7 @@ RSDP2Descriptor* acpi_find_rsdp(multiboot_parser_t* parser) {
  */
 void* acpi_find_root_sdt(RSDP2Descriptor* rsdp) {
     if (!rsdp)
-        return nullptr;
+        return NULL;
 
     if (rsdp->Revision >= 2 && rsdp->XsdtAddress != 0) {
         /* ACPI 2.0+ → use XSDT */
@@ -88,7 +88,7 @@ void* acpi_find_root_sdt(RSDP2Descriptor* rsdp) {
  */
 ACPISDTHeader* acpi_get_nth_sdt_from_root(void* root_sdt, size_t index) {
     if (!root_sdt)
-        return nullptr;
+        return NULL;
 
     if (g_xsdt_supported)
         return (ACPISDTHeader*)(uintptr_t)((XSDT*)root_sdt)->sdt_addresses[index];

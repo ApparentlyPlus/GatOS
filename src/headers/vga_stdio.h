@@ -9,8 +9,7 @@
  *             2014-2019, PALANDesign Hannover, Germany
  */
 
-#ifndef _VGA_STDIO_H
-#define _VGA_STDIO_H
+#pragma once
 
 #include <stdarg.h>
 #include <stddef.h>
@@ -82,6 +81,3 @@ int vprintf_(const char* format, va_list va);
  * \return The number of characters that are sent to the output function, not counting the terminating null character
  */
 int fctprintf(void (*out)(char character, void* arg), void* arg, const char* format, ...);
-
-
-#endif  // _VGA_STDIO_H

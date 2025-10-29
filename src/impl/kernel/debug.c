@@ -11,13 +11,15 @@
 #include <stddef.h>
 #include <serial.h>
 #include <misc.h>
+#include <stdarg.h>
+#include <vga_stdio.h>
 
 static int dbg_counter = 0;
 
 /*
- * DEBUG_LOG - Debug function to log messages to qemu serial with counter
+ * QEMU_LOG - Debug function to log messages to qemu serial with counter
  */
-void DEBUG_LOG(const char* msg, int total) {
+void QEMU_LOG(const char* msg, int total) {
     char buf[128];
     char* ptr = buf;
 
@@ -39,9 +41,9 @@ void DEBUG_LOG(const char* msg, int total) {
 }
 
 /*
- * DEBUG_GENERIC_LOG - Debug function to log messages to qemu serial without counter
+ * QEMU_GENERIC_LOG - Debug function to log messages to qemu serial without counter
  */
-void DEBUG_GENERIC_LOG(const char* msg) {
+void QEMU_GENERIC_LOG(const char* msg) {
     char buf[128];
     char* ptr = buf;
 
@@ -56,9 +58,25 @@ void DEBUG_GENERIC_LOG(const char* msg) {
 }
 
 /*
- * DEBUG_DUMP_PMT - Debug function to print page table structure
+ * LOGF - Debug function to log messages internally with format specifiers
  */
-void DEBUG_DUMP_PMT(void) {
+void LOGF(const char* fmt, ...)
+{
+    char buffer[512];
+    va_list args;
+    
+    va_start(args, fmt);
+    vsnprintf(buffer, sizeof(buffer), fmt, args);
+    va_end(args);
+    
+    // Output to COM2 instead of COM1 for internal logging
+    serial_write_port(SERIAL_COM2, buffer);
+}
+
+/*
+ * QEMU_DUMP_PMT - Debug function to print page table structure
+ */
+void QEMU_DUMP_PMT(void) {
     uint64_t* PML4 = getPML4();
     serial_write("Page Tables:\n");
 
@@ -73,7 +91,7 @@ void DEBUG_DUMP_PMT(void) {
         serial_write(" -> PDPT\n");
 
         // Convert physical address to virtual
-        uint64_t* pdpt = (uint64_t*)(KERNEL_P2V(pml4e & PAGE_MASK));
+        uint64_t* pdpt = (uint64_t*)(KERNEL_P2V(pml4e & FRAME_MASK));
 
         for (int pdpt_i = 0; pdpt_i < PAGE_ENTRIES; pdpt_i++) {
             uint64_t pdpte = pdpt[pdpt_i];
@@ -86,7 +104,7 @@ void DEBUG_DUMP_PMT(void) {
             serial_write(" -> PD\n");
 
             // Convert physical address to virtual
-            uint64_t* pd = (uint64_t*)(KERNEL_P2V(pdpte & PAGE_MASK));
+            uint64_t* pd = (uint64_t*)(KERNEL_P2V(pdpte & FRAME_MASK));
 
             for (int pd_i = 0; pd_i < PAGE_ENTRIES; pd_i++) {
                 uint64_t pde = pd[pd_i];
@@ -99,7 +117,7 @@ void DEBUG_DUMP_PMT(void) {
                 serial_write(" -> PT\n");
 
                 // Convert physical address to virtual
-                uint64_t* pt = (uint64_t*)(KERNEL_P2V(pde & PAGE_MASK));
+                uint64_t* pt = (uint64_t*)(KERNEL_P2V(pde & FRAME_MASK));
 
                 for (int pt_i = 0; pt_i < PAGE_ENTRIES; pt_i++) {
                     uint64_t pte = pt[pt_i];

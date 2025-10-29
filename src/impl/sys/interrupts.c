@@ -123,102 +123,102 @@ cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
 {
     switch (context->vector_number) {
         case INT_DIVIDE_ERROR:
-            DEBUG_GENERIC_LOG("[EXCEPTION] Divide by zero error!\n");
+            QEMU_GENERIC_LOG("[EXCEPTION] Divide by zero error!\n");
             panic_c("Attempted to divide by zero", context);
             break;
 
         case INT_DEBUG:
-            DEBUG_GENERIC_LOG("[EXCEPTION] Debug exception!\n");
+            QEMU_GENERIC_LOG("[EXCEPTION] Debug exception!\n");
             panic_c("Triggered a debug trap", context);
             break;
 
         case INT_NMI:
-            DEBUG_GENERIC_LOG("[EXCEPTION] Non-maskable interrupt!\n");
+            QEMU_GENERIC_LOG("[EXCEPTION] Non-maskable interrupt!\n");
             panic_c("Crazy, you got a non-maskable interrupt", context);
             break;
 
         case INT_BREAKPOINT:
-            DEBUG_GENERIC_LOG("[EXCEPTION] Breakpoint exception!\n");
+            QEMU_GENERIC_LOG("[EXCEPTION] Breakpoint exception!\n");
             panic_c("Breakpoint triggered", context);
             break;
 
         case INT_OVERFLOW:
-            DEBUG_GENERIC_LOG("[EXCEPTION] Overflow exception!\n");
+            QEMU_GENERIC_LOG("[EXCEPTION] Overflow exception!\n");
             panic_c("Arithmetic overflow", context);
             break;
 
         case INT_BOUND_RANGE:
-            DEBUG_GENERIC_LOG("[EXCEPTION] Bound range exceeded exception!\n");
+            QEMU_GENERIC_LOG("[EXCEPTION] Bound range exceeded exception!\n");
             panic_c("Bound range exceeded", context);
             break;
 
         case INT_INVALID_OPCODE:
-            DEBUG_GENERIC_LOG("[EXCEPTION] Invalid opcode exception!\n");
+            QEMU_GENERIC_LOG("[EXCEPTION] Invalid opcode exception!\n");
             panic_c("Invalid instruction opcode", context);
             break;
 
         case INT_DEVICE_NOT_AVAILABLE:
-            DEBUG_GENERIC_LOG("[EXCEPTION] Device not available exception!\n");
+            QEMU_GENERIC_LOG("[EXCEPTION] Device not available exception!\n");
             panic_c("Device not available", context);
             break;
 
         case INT_DOUBLE_FAULT:
-            DEBUG_GENERIC_LOG("[EXCEPTION] Double fault exception!\n");
+            QEMU_GENERIC_LOG("[EXCEPTION] Double fault exception!\n");
             panic_c("A double fault occured. Sorry to hear that.", context);
             break;
 
         case INT_COPROCESSOR_SEGMENT:
-            DEBUG_GENERIC_LOG("[EXCEPTION] Coprocessor segment overrun exception!\n");
+            QEMU_GENERIC_LOG("[EXCEPTION] Coprocessor segment overrun exception!\n");
             panic_c("Coprocessor segment overrun", context);
             break;
 
         case INT_INVALID_TSS:
-            DEBUG_GENERIC_LOG("[EXCEPTION] Invalid TSS exception!\n");
+            QEMU_GENERIC_LOG("[EXCEPTION] Invalid TSS exception!\n");
             panic_c("Invalid task state segment", context);
             break;
 
         case INT_SEGMENT_NOT_PRESENT:
-            DEBUG_GENERIC_LOG("[EXCEPTION] Segment not present exception!\n");
+            QEMU_GENERIC_LOG("[EXCEPTION] Segment not present exception!\n");
             panic_c("Segment not present", context);
             break;
 
         case INT_STACK_SEGMENT_FAULT:
-            DEBUG_GENERIC_LOG("[EXCEPTION] Stack segment fault exception!\n");
+            QEMU_GENERIC_LOG("[EXCEPTION] Stack segment fault exception!\n");
             panic_c("A stack segment fault occured", context);
             break;
 
         case INT_GENERAL_PROTECTION:
-            DEBUG_GENERIC_LOG("[EXCEPTION] General protection fault exception!\n");
+            QEMU_GENERIC_LOG("[EXCEPTION] General protection fault exception!\n");
             panic_c("A general protection fault occured", context);
             break;
 
         case INT_PAGE_FAULT:
-            DEBUG_GENERIC_LOG("[EXCEPTION] Page fault exception!\n");
+            QEMU_GENERIC_LOG("[EXCEPTION] Page fault exception!\n");
             panic_c("A page fault occured", context);
             break;
 
         case INT_X87_FPU_ERROR:
-            DEBUG_GENERIC_LOG("[EXCEPTION] x87 FPU error exception!\n");
+            QEMU_GENERIC_LOG("[EXCEPTION] x87 FPU error exception!\n");
             panic_c("An x87 floating point error occured", context);
             break;
 
         case INT_ALIGNMENT_CHECK:
-            DEBUG_GENERIC_LOG("[EXCEPTION] Alignment check exception!\n");
+            QEMU_GENERIC_LOG("[EXCEPTION] Alignment check exception!\n");
             panic_c("Memory alignment check failed", context);
             break;
 
         case INT_MACHINE_CHECK:
-            DEBUG_GENERIC_LOG("[EXCEPTION] Machine check exception!\n");
+            QEMU_GENERIC_LOG("[EXCEPTION] Machine check exception!\n");
             panic_c("Machine check", context);
             break;
 
         case INT_SIMD_ERROR:
-            DEBUG_GENERIC_LOG("[EXCEPTION] SIMD error exception!\n");
+            QEMU_GENERIC_LOG("[EXCEPTION] SIMD error exception!\n");
             panic_c("A SIMD floating point erroroccured, check SSE", context);
             break;
 
         default:
-            DEBUG_GENERIC_LOG("[EXCEPTION] Unknown exception!\n");
+            QEMU_GENERIC_LOG("[EXCEPTION] Unknown exception!\n");
             panic_c("Unknown interrupt vector", context);
             break;
     }

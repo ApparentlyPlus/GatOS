@@ -9,16 +9,25 @@
 
 #include <stdbool.h>
 #include <memory/paging.h>
+#include <sys/panic.h>
 #include <libc/string.h>
 #include <vga_stdio.h>
 #include <serial.h>
 #include <multiboot2.h>
+#include <debug.h>
 
 /*
  * align_up - Aligns address to specified boundary
  */
 uintptr_t align_up(uintptr_t val, uintptr_t align) {
     return (val + align - 1) & ~(align - 1);
+}
+
+/*
+ * align_down - Aligns address down to specified boundary
+ */
+uintptr_t align_down(uintptr_t val, uintptr_t align) {
+    return val & ~(align - 1);
 }
 
 /*
@@ -52,12 +61,34 @@ uint64_t get_linker_kstart(bool virtual){
 }
 
 /*
+ * get_physmap_start - Gets the start address of the physmap region (virtual)
+ */
+uint64_t get_physmap_start(void) {
+    return PHYSMAP_VIRTUAL_BASE;
+}
+
+/*
+ * get_physmap_end - Gets the end address of the physmap region (virtual)
+ */
+uint64_t get_physmap_end(void) {
+    return PHYSMAP_VIRTUAL_BASE + physmapStruct.total_RAM;
+}
+
+/*
  * flush_tlb - Invalidates TLB cache
  */
 void flush_tlb(void) {
     uint64_t cr3;
     __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
     __asm__ volatile("mov %0, %%cr3" : : "r"(cr3));
+}
+
+/*
+ * PMT_switch - Switch to a page table
+ */
+void PMT_switch(uint64_t pml4) {
+    __asm__ volatile("mov %0, %%cr3" : : "r"(pml4));
+    LOGF("[PAGING] Page tables switched\n");
 }
 
 /*
@@ -74,10 +105,11 @@ uint64_t* getPML4(void) {
  */
 void unmap_identity(){
     int64_t* PML4 = getPML4();
-    uint64_t* PDPT = PML4 + 512 * PREALLOC_PML4s;
+    uint64_t* PDPT = PML4 + PAGE_ENTRIES * PREALLOC_PML4s;
     PML4[0] = 0;
     PDPT[0] = 0;
     flush_tlb();
+    LOGF("[PAGING] Removed identity mapping\n");
 }
 
 /*
@@ -86,23 +118,23 @@ void unmap_identity(){
  */
 void cleanup_kernel_page_tables(uintptr_t start, uintptr_t end) {
     uint64_t* PML4 = getPML4();
-    uint64_t* PDPT = PML4 + 512 * PREALLOC_PML4s;
-    uint64_t* PD = PDPT + 512 * PREALLOC_PDPTs;
-    uint64_t* PT = PD + 512 * PREALLOC_PDs;
+    uint64_t* PDPT = PML4 + PAGE_ENTRIES * PREALLOC_PML4s;
+    uint64_t* PD = PDPT + PAGE_ENTRIES * PREALLOC_PDPTs;
+    uint64_t* PT = PD + PAGE_ENTRIES * PREALLOC_PDs;
 
     uintptr_t kernel_size = end - start;
     if (kernel_size > (1UL << 30)) return; // > 1 GiB not allowed
-    if ((start & 0xFFF) != 0 || (end & 0xFFF) != 0) return; // alignment check
+    if ((start & (PAGE_SIZE - 1)) != 0 || (end & (PAGE_SIZE - 1)) != 0) return; // alignment check
 
     // Compute virtual addresses (higher half only)
     uintptr_t virt_start = start + KERNEL_VIRTUAL_BASE;
     uintptr_t virt_end   = end   + KERNEL_VIRTUAL_BASE;
 
     // Get page table indices for higher half mapping only
-    size_t hh_pml4 = (virt_start >> 39) & 0x1FF;
-    size_t hh_pdpt = (virt_start >> 30) & 0x1FF;
-    size_t hh_pd_start = (virt_start >> 21) & 0x1FF;
-    size_t hh_pd_end   = ((virt_end - 1) >> 21) & 0x1FF;
+    size_t hh_pml4 = PML4_INDEX(virt_start);
+    size_t hh_pdpt = PDPT_INDEX(virt_start);
+    size_t hh_pd_start = PD_INDEX(virt_start);
+    size_t hh_pd_end   = PD_INDEX(virt_end - 1);
 
     uintptr_t start_page = start >> 12;
     uintptr_t end_page   = (end - 1) >> 12;
@@ -110,7 +142,7 @@ void cleanup_kernel_page_tables(uintptr_t start, uintptr_t end) {
     size_t total_pds = hh_pd_end + 1;
 
     // Zero out all PML4 entries except the higher half one we're using
-    for (size_t i = 0; i < 512; i++) {
+    for (size_t i = 0; i < PAGE_ENTRIES; i++) {
         if (i != hh_pml4) {
             PML4[i] = 0;
         }
@@ -119,7 +151,7 @@ void cleanup_kernel_page_tables(uintptr_t start, uintptr_t end) {
     PML4[hh_pml4] = KERNEL_V2P(PDPT) | (PAGE_PRESENT | PAGE_WRITABLE);
 
     // Zero out all PDPT entries except the higher half one we're using
-    for (size_t i = 0; i < 512; i++) {
+    for (size_t i = 0; i < PAGE_ENTRIES; i++) {
         if (i != hh_pdpt) {
             PDPT[i] = 0;
         }
@@ -128,7 +160,7 @@ void cleanup_kernel_page_tables(uintptr_t start, uintptr_t end) {
     PDPT[hh_pdpt] = KERNEL_V2P(PD) | (PAGE_PRESENT | PAGE_WRITABLE);
 
     // Zero out all PD entries except the higher half ones we're using
-    for (size_t i = 0; i < 512; i++) {
+    for (size_t i = 0; i < PAGE_ENTRIES; i++) {
         if (!(i >= hh_pd_start && i <= hh_pd_end)) {
             PD[i] = 0;
         }
@@ -139,7 +171,7 @@ void cleanup_kernel_page_tables(uintptr_t start, uintptr_t end) {
     }
 
     // Zero out all PT entries except the ones we're using for higher half
-    for (size_t i = 0; i < (512 * (hh_pd_end - hh_pd_start + 1)); i++) {
+    for (size_t i = 0; i < (PAGE_ENTRIES * (hh_pd_end - hh_pd_start + 1)); i++) {
         if (i >= total_pages) {
             PT[i] = 0;
         }
@@ -150,6 +182,7 @@ void cleanup_kernel_page_tables(uintptr_t start, uintptr_t end) {
         PT[i] = phys | (PAGE_PRESENT | PAGE_WRITABLE);
     }
 
+    LOGF("[PAGING] Cleaned up kernel page tabeles (only 0x%lx - 0x%lx remains)\n", virt_start, virt_end);
     flush_tlb();
 }
 
@@ -180,6 +213,8 @@ uint64_t reserve_required_tablespace(multiboot_parser_t* multiboot) {
     physmapStruct.tables_base = (uintptr_t)get_kend(true);
 
     KEND += table_bytes;
+
+    LOGF("[PAGING] Reserved required tablespace for physmap (%d MiB)\n", table_bytes/MEASUREMENT_UNIT_MB);
 
     return table_bytes;
 }
@@ -252,17 +287,23 @@ void build_physmap() {
 
     // copy kernel pml4 entry at its exact index
     uint64_t *old_pml4 = getPML4();
-    size_t kernel_index = (KERNEL_VIRTUAL_BASE >> 39) & 0x1FF;
+    size_t kernel_index = PML4_INDEX(KERNEL_VIRTUAL_BASE);
     PML4[0][kernel_index] = old_pml4[kernel_index];
 
     // place physmap
-    size_t physmap_index = (PHYSMAP_VIRTUAL_BASE >> 39) & 0x1FF;
+    size_t physmap_index = PML4_INDEX(PHYSMAP_VIRTUAL_BASE);
+
+    PANIC_ASSERT(kernel_index != physmap_index);
+    
     PML4[0][physmap_index] = KERNEL_V2P(&PDPTs[0]) | (PAGE_PRESENT | PAGE_WRITABLE);
 
     // activate new PML4 (load CR3 with *physical* address)
     uintptr_t pml4_phys = KERNEL_V2P(pml4_base);
-    asm volatile("mov %0, %%cr3" :: "r"(pml4_phys));
+    PMT_switch(pml4_phys);
 
     // For good measure, flush TLB
     flush_tlb();
+
+    LOGF("[PAGING] Physmap has been built at 0x%lx - 0x%lx (%zu MiB)\n", PHYSMAP_VIRTUAL_BASE, 
+        get_physmap_end(), (get_physmap_end() - PHYSMAP_VIRTUAL_BASE) / MEASUREMENT_UNIT_MB);
 }

@@ -1,7 +1,7 @@
 import os
 import pyperclip
 
-def map_and_display_by_extension():
+def map_and_display_files():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     all_files = []
     output_content = []  # Store all output for clipboard
@@ -28,13 +28,31 @@ def map_and_display_by_extension():
         print("No specific file extensions found.")
 
     while True:
-        extensions_input = input("\nEnter desired file extensions (e.g., py, json, txt) or 'all': ").strip().lower()
+        user_input = input("\nEnter desired file extensions (e.g., py, json, txt), specific filenames (e.g., main.py, config.json), or 'all': ").strip().lower()
         
-        if not extensions_input:
-            print("Please enter at least one extension or 'all'.")
+        if not user_input:
+            print("Please enter at least one extension, filename, or 'all'.")
             continue
             
-        desired_extensions = set(ext.strip() for ext in extensions_input.split(',')) if extensions_input != 'all' else 'all'
+        if user_input == 'all':
+            desired_extensions = 'all'
+            desired_filenames = set()
+        else:
+            # Split input and process each item
+            items = [item.strip() for item in user_input.split(',')]
+            desired_extensions = set()
+            desired_filenames = set()
+            
+            for item in items:
+                if '.' in item:
+                    # This looks like a filename with extension
+                    desired_filenames.add(item)
+                else:
+                    # This looks like an extension
+                    desired_extensions.add(item)
+            
+            print(f"Looking for: extensions={desired_extensions} OR filenames={desired_filenames}")
+        
         break
 
     print("\n--- File Contents ---")
@@ -44,7 +62,16 @@ def map_and_display_by_extension():
         filename = os.path.basename(file_path)
         extension = os.path.splitext(file_path)[1][1:].lower()
         
-        if desired_extensions == 'all' or extension in desired_extensions:
+        # Check if file matches our criteria
+        file_matches = False
+        if desired_extensions == 'all':
+            file_matches = True
+        else:
+            # Match by extension OR by filename
+            if extension in desired_extensions or filename.lower() in desired_filenames:
+                file_matches = True
+        
+        if file_matches:
             files_found = True
             file_header = f"\n{filename}:"
             print(file_header)
@@ -65,7 +92,7 @@ def map_and_display_by_extension():
                 output_content.append(error_msg)
 
     if not files_found:
-        msg = f"No files found with extensions: {extensions_input}"
+        msg = f"No files found matching: {user_input}"
         print(msg)
         output_content.append(msg)
     
@@ -77,4 +104,4 @@ def map_and_display_by_extension():
         print(f"\nFailed to copy to clipboard: {e}")
 
 if __name__ == "__main__":
-    map_and_display_by_extension()
+    map_and_display_files()

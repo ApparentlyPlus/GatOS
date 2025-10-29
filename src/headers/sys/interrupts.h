@@ -7,8 +7,7 @@
  * Author: u/ApparentlyPlus
  */
 
-#ifndef INTERRUPTS_H
-#define INTERRUPTS_H
+#pragma once
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -119,5 +118,3 @@ extern uint32_t gdt64_code_segment;
 void idt_init(void);
 void enable_interrupts(void);
 void disable_interrupts(void);
-
-#endif
