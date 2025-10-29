@@ -1,5 +1,5 @@
 /*
- * ACPI.h - ACPI (Advanced Configuration and Power Interface) related definitions.
+ * acpi.h - ACPI (Advanced Configuration and Power Interface) related definitions.
  *
  * Author: u/ApparentlyPlus
  */

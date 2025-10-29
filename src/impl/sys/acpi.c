@@ -1,12 +1,12 @@
 /*
- * ACPI.c - ACPI (Advanced Configuration and Power Interface) related functions.
+ * acpi.c - ACPI (Advanced Configuration and Power Interface) related functions.
  *
  * Author: u/ApparentlyPlus
  */
 
 #include <multiboot2.h>
 #include <libc/string.h>
-#include <sys/ACPI.h>
+#include <sys/acpi.h>
 #include <sys/panic.h>
 #include <debug.h>
 

@@ -13,7 +13,8 @@
 #include <memory/heap.h>
 #include <memory/slab.h>
 #include <memory/paging.h>
-#include <sys/ACPI.h>
+#include <sys/acpi.h>
+#include <sys/cpu.h>
 #include <libc/string.h>
 #include <multiboot2.h>
 #include <vga_console.h>
@@ -22,9 +23,9 @@
 #include <serial.h>
 #include <debug.h>
 
-#define TOTAL_DBG 14
+#define TOTAL_DBG 15
 
-static char* KERNEL_VERSION = "v1.6.8-alpha";
+static char* KERNEL_VERSION = "v1.6.9-alpha";
 static uint8_t multiboot_buffer[8 * 1024]; // 8KB should be more than enough
 
 /*
@@ -58,6 +59,10 @@ void kernel_main(void* mb_info) {
 	enable_interrupts();
 	printf("[IDT] Enabled interrupts.\n");
 	QEMU_LOG("Enabled interrupts using asm(\"sti\")", TOTAL_DBG);
+
+	// Parse CPU information
+	cpu_init();
+	QEMU_LOG("Parsed CPU information", TOTAL_DBG);
 	
 	// Initialize multiboot parser (copies everything to higher half)
 
