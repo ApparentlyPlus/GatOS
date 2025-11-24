@@ -7,7 +7,7 @@ import shutil
 import argparse
 import subprocess
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 from multiprocessing import Pool, cpu_count
 
 # Configuration & Constants
@@ -54,7 +54,8 @@ DEBUG_LOG = ROOT_DIR / "debug.log"
 # Toolchain Paths
 
 if not PLATFORM_TOOLCHAIN_DIR.exists():
-    sys.stderr.write(f"{RED}[FATAL] Toolchain not found at: {PLATFORM_TOOLCHAIN_DIR}, please install it by running setup.py\n{NC}")
+    sys.stderr.write(f"{RED}[FATAL] Toolchain not found at: {PLATFORM_TOOLCHAIN_DIR}\n")
+    sys.stderr.write(f"{YELLOW}Please run 'python setup.py' to install the toolchain.{NC}\n")
     sys.exit(1)
 
 CC = PLATFORM_TOOLCHAIN_DIR / "gcc" / "bin" / f"x86_64-elf-gcc{EXE_EXT}"
@@ -101,7 +102,7 @@ BUILD_PROFILES = {
     "vfast": {
         "flags": CFLAGS_VFAST, 
         "confirm": True,
-        "msg": "WARNING: 'vfast' uses aggressive optimizations which may cause unexpected kernel behavior or instability."
+        "msg": "WARNING: 'vfast' uses aggressive optimizations (-O3, -funroll-loops) which may cause unexpected kernel behavior or instability."
     }
 }
 
@@ -137,16 +138,6 @@ def fix_unix_permissions():
     if OS_NAME == "win": return
     print(f"{YELLOW}[INFO] Ensuring toolchain permissions...{NC}")
     subprocess.run(["chmod", "-R", "+x", str(BASE_TOOLCHAIN_DIR)], check=False, capture_output=True)
-    
-    # Attempt to remove macOS Quarantine (Gatekeeper)
-    if OS_NAME == "macos":
-        print(f"{YELLOW}[INFO] Attempting to remove macOS Quarantine attributes...{NC}")
-        res = subprocess.run(
-            ["xattr", "-r", "-d", "com.apple.quarantine", str(BASE_TOOLCHAIN_DIR)],
-            check=False, capture_output=True
-        )
-        if res.returncode != 0 and "No such xattr" not in str(res.stderr):
-            print(f"{YELLOW}[WARN] Could not remove quarantine automatically. If build fails, run: sudo xattr -r -d com.apple.quarantine toolchain/{NC}")
 
 def compile_worker(job):
     compiler, src, obj, flags = job
@@ -158,13 +149,11 @@ def compile_worker(job):
 def compile_sources(c_files: List[Path], asm_files: List[Path], profile_name: str) -> bool:
     profile = BUILD_PROFILES.get(profile_name, BUILD_PROFILES["default"])
     
-    # Handle Confirmation for Aggressive Profiles
     if profile.get("confirm", False):
         print(f"{RED}{profile['msg']}{NC}")
         try:
-            # Flush stdout to ensure prompt appears before blocking
             sys.stdout.flush()
-            response = input(f"{YELLOW}Are you sure you want to proceed? (y/N): {NC}").strip().lower()
+            response = input(f"{YELLOW}Do you want to proceed? (y/N): {NC}").strip().lower()
             if response != 'y':
                 print(f"{RED}[ABORT] Build cancelled by user.{NC}")
                 sys.exit(0)
@@ -184,7 +173,6 @@ def compile_sources(c_files: List[Path], asm_files: List[Path], profile_name: st
 
     with Pool(processes=cpu_count()) as pool:
         results = pool.map(compile_worker, jobs)
-        # Explicitly close pool to ensure file descriptors are released
         pool.close()
         pool.join()
 
@@ -212,7 +200,6 @@ def make_iso(output_iso: Path):
     print(f"{YELLOW}[INFO] Creating hybrid ISO: {output_iso}{NC}")
 
     if OS_NAME in ["linux", "macos"]:
-        # Unix Logic (Relative paths, shell script)
         if not GRUB_FONT_PATH.exists():
             sys.stderr.write(f"{RED}[FATAL] Unicode font missing at {GRUB_FONT_PATH}{NC}\n")
             sys.exit(1)
@@ -225,10 +212,11 @@ def make_iso(output_iso: Path):
             "-o", str(output_iso),
             str(ISO_DIR)
         ]
-        # Must be run from GRUB_DIR to satisfy internal relative path lookups
+        # Runs inside GRUB_DIR to satisfy internal relative paths on macOS/Linux
         run_cmd(cmd, cwd=GRUB_DIR)
+        
     else:
-        # Windows Logic (Absolute paths, C++ wrapper for grub-mkrescue)
+        # Windows Logic (Absolute paths, C++ wrapper)
         if not GRUB_MKRESCUE_CMD.exists():
             sys.stderr.write(f"{RED}[FATAL] grub-mkrescue wrapper not found at: {GRUB_MKRESCUE_CMD}{NC}\n")
             sys.exit(1)
