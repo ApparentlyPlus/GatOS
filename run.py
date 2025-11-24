@@ -54,7 +54,7 @@ DEBUG_LOG = ROOT_DIR / "debug.log"
 # Toolchain Paths
 
 if not PLATFORM_TOOLCHAIN_DIR.exists():
-    sys.stderr.write(f"{RED}[FATAL] Toolchain not found at: {PLATFORM_TOOLCHAIN_DIR}{NC}, please install it by running setup.py\n")
+    sys.stderr.write(f"{RED}[FATAL] Toolchain not found at: {PLATFORM_TOOLCHAIN_DIR}, please install it by running setup.py\n{NC}")
     sys.exit(1)
 
 CC = PLATFORM_TOOLCHAIN_DIR / "gcc" / "bin" / f"x86_64-elf-gcc{EXE_EXT}"
@@ -137,6 +137,16 @@ def fix_unix_permissions():
     if OS_NAME == "win": return
     print(f"{YELLOW}[INFO] Ensuring toolchain permissions...{NC}")
     subprocess.run(["chmod", "-R", "+x", str(BASE_TOOLCHAIN_DIR)], check=False, capture_output=True)
+    
+    # Attempt to remove macOS Quarantine (Gatekeeper)
+    if OS_NAME == "macos":
+        print(f"{YELLOW}[INFO] Attempting to remove macOS Quarantine attributes...{NC}")
+        res = subprocess.run(
+            ["xattr", "-r", "-d", "com.apple.quarantine", str(BASE_TOOLCHAIN_DIR)],
+            check=False, capture_output=True
+        )
+        if res.returncode != 0 and "No such xattr" not in str(res.stderr):
+            print(f"{YELLOW}[WARN] Could not remove quarantine automatically. If build fails, run: sudo xattr -r -d com.apple.quarantine toolchain/{NC}")
 
 def compile_worker(job):
     compiler, src, obj, flags = job
