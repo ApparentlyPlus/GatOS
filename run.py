@@ -39,8 +39,9 @@ BASE_TOOLCHAIN_DIR = ROOT_DIR / "toolchain"
 PLATFORM_TOOLCHAIN_DIR = BASE_TOOLCHAIN_DIR / f"x86_64-{OS_NAME}"
 GRUB_DIR = PLATFORM_TOOLCHAIN_DIR / "grub"
 
-SRC_DIR = ROOT_DIR / "src/impl"
-HEADER_DIR = ROOT_DIR / "src/headers"
+# UPDATED PATHS FOR NEW STRUCTURE
+SRC_DIR = ROOT_DIR / "src"
+HEADER_DIR = ROOT_DIR / "src"
 BUILD_DIR = ROOT_DIR / "build"
 DIST_DIR = ROOT_DIR / "dist/x86_64"
 ISO_DIR = ROOT_DIR / "targets/x86_64/iso"
@@ -126,7 +127,7 @@ def run_cmd(cmd: List[str | Path], cwd: Optional[Path] = None, env: Optional[Dic
 
 def get_kernel_version() -> str:
     pattern = re.compile(r'KERNEL_VERSION\s*=\s*"([^"]*)"')
-    for directory in (SRC_DIR, HEADER_DIR):
+    for directory in {SRC_DIR, HEADER_DIR}:
         for file in directory.rglob("*.[chS]"):
             try:
                 match = pattern.search(file.read_text(errors="ignore"))
