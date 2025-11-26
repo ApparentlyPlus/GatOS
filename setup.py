@@ -15,8 +15,7 @@ from time import time
 # Configuration
 ROOT_DIR = Path(__file__).parent.resolve()
 TOOLCHAIN_DIR = ROOT_DIR / "toolchain"
-SRC_DIR = ROOT_DIR / "src/impl"
-HEADER_DIR = ROOT_DIR / "src/headers"
+SRC_DIR = ROOT_DIR / "src"
 
 # URLs and Hashes
 CONFIG = {
@@ -54,16 +53,19 @@ class Colors:
 
 def get_kernel_version() -> str:
     pattern = re.compile(r'KERNEL_VERSION\s*=\s*"([^"]*)"')
-    for directory in (SRC_DIR, HEADER_DIR):
-        if not directory.exists(): continue
-        for file in directory.rglob("*.[chS]"):
-            try:
-                text = file.read_text(errors="ignore")
-                match = pattern.search(text)
-                if match:
-                    return match.group(1)
-            except Exception:
-                pass
+    
+    if not SRC_DIR.exists(): 
+        return "v0.0.0-unknown"
+    
+    for file in SRC_DIR.rglob("*.[chS]"):
+        try:
+            text = file.read_text(errors="ignore")
+            match = pattern.search(text)
+            if match:
+                return match.group(1)
+        except Exception:
+            pass
+            
     return "v0.0.0-unknown"
 
 def print_banner():
@@ -83,8 +85,9 @@ def print_banner():
     print(Colors.RESET)
 
     # Magenta Text on Black Background
-    print(f"{Colors.MAGENTA}>   GatOS Kernel {version} - Toolchain Setup Script   <\n{Colors.RESET}")
-    print(f"----------------------------------------------------------\n")
+    banner_text = f">   GatOS Kernel {version} - Toolchain Setup Script   <"
+    print(f"{Colors.MAGENTA}{banner_text}{Colors.RESET}")
+    print("_" * len(banner_text) + "\n")
 
 def get_platform_config():
     sys_plat = sys.platform
