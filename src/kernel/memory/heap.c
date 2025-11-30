@@ -62,7 +62,7 @@ typedef struct {
     heap_block_header_t* header;
     uint32_t magic;
     uint32_t red_zone_post;
-} heap_block_footer_t;
+} __attribute__((aligned(16))) heap_block_footer_t;
 
 // Arena structure
 struct heap_arena {
@@ -707,23 +707,36 @@ static void split_block(heap_t* heap, heap_block_header_t* block, size_t size) {
     if (!block || !heap) return;
 
     size_t remaining = block->size - size;
+    size_t overhead = sizeof(heap_block_header_t) + sizeof(heap_block_footer_t);
 
-    // Require room for another minimally sized block (payload + header/footer)
-    if (remaining < MIN_BLOCK_SIZE + sizeof(heap_block_header_t) +
-                        sizeof(heap_block_footer_t)) {
-        // not enough room to split; keep the block as-is.
+    if (remaining < MIN_BLOCK_SIZE + overhead) {
         return;
     }
 
-    // record whether block was already in free list (we'll re-insert conditionally)
     bool was_in_free_list = (block->magic == BLOCK_MAGIC_FREE);
 
     if (was_in_free_list) {
+        // CASE 1: Splitting a FREE block (Allocation path)
+        // We are consuming free space.
+        // The overhead reduces the total free space available.
         remove_from_free_list(heap, block);
-    }
+        stats_block_split(heap, block); 
+    } else {
+        // CASE 2: Splitting a USED block (Realloc shrinking path)
+        // We are creating NEW free space from used space.
+        // 1. We decrease allocated by the total chunk size we chopped off ('remaining')
+        // 2. We increase free by the new payload size ('remaining' - 'overhead')
+        // (The overhead is implicitly accounted for as "neither free nor alloc")
+        
+        size_t new_free_payload = remaining - overhead;
 
-    // account for new header/footer created by the split
-    stats_block_split(heap, block);
+        if (block->arena) {
+            block->arena->total_allocated -= remaining;
+            block->arena->total_free += new_free_payload;
+        }
+        heap->total_allocated -= remaining;
+        heap->total_free += new_free_payload;
+    }
 
     // shrink current block to requested size
     block->size = size;
@@ -1083,8 +1096,15 @@ void* krealloc(void* ptr, size_t size) {
         if (combined_size >= aligned_size) {
             remove_from_free_list(heap, next);
 
-            // account stats for absorption
-            stats_block_absorb(heap, block, next);
+            // Manual stats update for Used-Absorbs-Free
+            size_t reclaimed_overhead = sizeof(heap_block_header_t) + sizeof(heap_block_footer_t);
+
+            if (block->arena) {
+                block->arena->total_free -= next->size;
+                block->arena->total_allocated += (next->size + reclaimed_overhead);
+            }
+            heap->total_free -= next->size;
+            heap->total_allocated += (next->size + reclaimed_overhead);
 
             block->size = combined_size;
             block->total_size += next->total_size;
@@ -1315,8 +1335,15 @@ void* heap_realloc(heap_t* heap, void* ptr, size_t size) {
         if (combined_size >= aligned_size) {
             remove_from_free_list(heap, next);
 
-            // update stats for absorption
-            stats_block_absorb(heap, block, next);
+            // Manual stats update for Used-Absorbs-Free
+            size_t reclaimed_overhead = sizeof(heap_block_header_t) + sizeof(heap_block_footer_t);
+
+            if (block->arena) {
+                block->arena->total_free -= next->size;
+                block->arena->total_allocated += (next->size + reclaimed_overhead);
+            }
+            heap->total_free -= next->size;
+            heap->total_allocated += (next->size + reclaimed_overhead);
 
             block->size = combined_size;
             block->total_size += next->total_size;
