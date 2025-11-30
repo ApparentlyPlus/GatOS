@@ -218,7 +218,7 @@ static bool remove_specific(uint32_t order, uint64_t target_phys) {
  */
 static inline uint64_t buddy_of(uint64_t addr, uint32_t order) {
     uint64_t size = order_to_size(order);
-    return (((addr - g_range_start) ^ size) + g_range_start);
+    return (addr ^ size);
 }
 
 /*
@@ -687,12 +687,10 @@ bool pmm_verify_integrity(void) {
                 break;
             }
             
-            // Check alignment relative to block size
-            // A block is properly aligned if its offset from rangeStart is aligned
-            uint64_t offset = cur - g_range_start;
-            if ((offset & (size - 1)) != 0) {
-                LOGF("[PMM] Order %u: Block 0x%lx offset 0x%lx not aligned to size 0x%lx\n",
-                       order, cur, offset, size);
+            // Check natural alignment (address must be a multiple of size)
+            if ((cur & (size - 1)) != 0) {
+                LOGF("[PMM] Order %u: Block 0x%lx not naturally aligned to size 0x%lx\n",
+                        order, cur, size);
                 all_ok = false;
             }
             
