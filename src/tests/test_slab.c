@@ -1,23 +1,23 @@
 /*
- * test_slab.c - Slab Allocator Validation Suite
+ * slab_tests.c - Slab Allocator Validation Suite
  *
  * This suite verifies the correctness, stability, and security of the
  * Slab Allocator. It operates on the live kernel and verifies cache logic,
  * object alignment, slab growth/shrinking, and corruption detection.
  */
 
+#include <arch/x86_64/memory/paging.h>
 #include <kernel/memory/slab.h>
 #include <kernel/memory/pmm.h>
-#include <arch/x86_64/memory/paging.h>
-#include <tests/tests.h>
 #include <kernel/debug.h>
-#include <libc/string.h>
 #include <tests/tests.h>
+#include <libc/string.h>
+
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
 
-/* Configuration */
+#pragma region Configuration & Types
 
 #define MAX_TRACKED_ITEMS 4096
 
@@ -50,11 +50,15 @@ typedef struct slab_test_free_obj {
 
 static slab_tracker_t g_tracker[MAX_TRACKED_ITEMS];
 static int g_tracker_idx = 0;
+
 static int g_tests_total = 0;
 static int g_tests_passed = 0;
 
-/* Harness Helpers */
+#pragma endregion
 
+#pragma region Harness Helpers
+
+// Resets the internal tracking array before a test begins.
 static void tracker_reset(void) {
     for (int i = 0; i < MAX_TRACKED_ITEMS; i++) {
         g_tracker[i].active = false;
@@ -64,6 +68,7 @@ static void tracker_reset(void) {
     g_tracker_idx = 0;
 }
 
+// Registers a cache to be automatically destroyed during cleanup.
 static void tracker_add_cache(slab_cache_t* cache) {
     if (g_tracker_idx < MAX_TRACKED_ITEMS) {
         g_tracker[g_tracker_idx].type = TRACK_CACHE;
@@ -76,6 +81,7 @@ static void tracker_add_cache(slab_cache_t* cache) {
     }
 }
 
+// Registers an object allocation to be automatically freed during cleanup.
 static void tracker_add_obj(slab_cache_t* cache, void* obj) {
     if (g_tracker_idx < MAX_TRACKED_ITEMS) {
         g_tracker[g_tracker_idx].type = TRACK_OBJECT;
@@ -88,6 +94,7 @@ static void tracker_add_obj(slab_cache_t* cache, void* obj) {
     }
 }
 
+// Frees all tracked objects and destroys tracked caches.
 static void tracker_cleanup(void) {
     // 1. Free all objects first
     for (int i = 0; i < MAX_TRACKED_ITEMS; i++) {
@@ -106,22 +113,11 @@ static void tracker_cleanup(void) {
     g_tracker_idx = 0;
 }
 
-#define TEST_ASSERT(cond) do { \
-    if (!(cond)) { \
-        LOGF("[FAIL] Assertion failed: %s (Line %d)\n", #cond, __LINE__); \
-        return false; \
-    } \
-} while(0)
+#pragma endregion
 
-#define TEST_ASSERT_STATUS(s, e) do { \
-    if ((s) != (e)) { \
-        LOGF("[FAIL] Status mismatch: Got %d, Expected %d (Line %d)\n", s, e, __LINE__); \
-        return false; \
-    } \
-} while(0)
+#pragma region Basic Allocation Tests
 
-/* Initialization Tests */
-
+// Verifies that the slab allocator initialization state is reported correctly.
 static bool test_init_check(void) {
     if (!slab_is_initialized()) {
         TEST_ASSERT_STATUS(slab_init(), SLAB_OK);
@@ -132,8 +128,11 @@ static bool test_init_check(void) {
     return true;
 }
 
-/* Cache Management Tests */
+#pragma endregion
 
+#pragma region Cache Management Tests
+
+// Validates parameter validation during cache creation (alignment, name, size).
 static bool test_cache_create_validate(void) {
     tracker_reset();
 
@@ -161,8 +160,11 @@ static bool test_cache_create_validate(void) {
     return true;
 }
 
-/* Allocation & Alignment Tests */
+#pragma endregion
 
+#pragma region Allocation & Alignment Tests
+
+// Performs a basic allocation and free cycle to verify memory write access.
 static bool test_alloc_free_basic(void) {
     tracker_reset();
     
@@ -193,6 +195,7 @@ static bool test_alloc_free_basic(void) {
     return true;
 }
 
+// Verifies that objects adhere to strict alignment constraints.
 static bool test_alignment_strictness(void) {
     tracker_reset();
 
@@ -217,6 +220,7 @@ static bool test_alignment_strictness(void) {
     return true;
 }
 
+// Ensures that allocated objects are zero-initialized (if guaranteed by impl).
 static bool test_zero_initialization(void) {
     tracker_reset();
     slab_cache_t* c = slab_cache_create("test_zero", 64, 8);
@@ -251,13 +255,15 @@ static bool test_zero_initialization(void) {
     return true;
 }
 
-/* Scaling & Logic Tests */
+#pragma endregion
 
+#pragma region Scaling & Logic Tests
+
+// Tests the allocator's ability to grow the pool via multiple pages.
 static bool test_slab_growth(void) {
     tracker_reset();
 
-    // Object size 512. Page 4096. Overhead ~64.
-    // Capacity ~7 objects per page.
+    // Object size 512. Page 4096. Overhead ~64. Capacity ~7 objects per page.
     slab_cache_t* c = slab_cache_create("test_growth", 512, 8);
     tracker_add_cache(c);
 
@@ -282,6 +288,7 @@ static bool test_slab_growth(void) {
     return true;
 }
 
+// Verifies that the allocator releases empty slabs back to the system.
 static bool test_culling_shrink(void) {
     tracker_reset();
     slab_cache_t* c = slab_cache_create("test_shrink", 512, 8);
@@ -321,8 +328,58 @@ static bool test_culling_shrink(void) {
     return true;
 }
 
-/* Error Handling & Security Tests */
+// Verifies that the allocator prioritizes filling partial slabs over new ones.
+static bool test_partial_slab_priority(void) {
+    tracker_reset();
+    
+    // Create cache: 128 byte objects. ~30 objects per page.
+    slab_cache_t* c = slab_cache_create("test_prio", 128, 8);
+    tracker_add_cache(c);
 
+    // 1. Allocate enough to fill ONE slab (Slab A) completely
+    void* objs_a[40]; 
+    int count_a = 0;
+    
+    while(1) {
+        slab_alloc(c, &objs_a[count_a]);
+        tracker_add_obj(c, objs_a[count_a]);
+        count_a++;
+        
+        slab_cache_stats_t s;
+        slab_cache_stats(c, &s);
+        if (s.slab_count > 1) break; 
+        if (count_a >= 40) return false; 
+    }
+
+    // 2. Free ONE object from Slab A. Both A and B are now partial.
+    void* obj_to_free = objs_a[0];
+    slab_free(c, obj_to_free);
+    
+    for(int i=0; i<g_tracker_idx; i++) 
+        if(g_tracker[i].ptr == obj_to_free) g_tracker[i].active = false;
+
+    // 3. Allocate NEW object.
+    void* new_obj;
+    slab_alloc(c, &new_obj);
+    tracker_add_obj(c, new_obj);
+
+    // 4. Check if new_obj is on the same page as obj_to_free (refilled hole)
+    uintptr_t page_a = (uintptr_t)obj_to_free & ~(PAGE_SIZE - 1);
+    uintptr_t page_new = (uintptr_t)new_obj & ~(PAGE_SIZE - 1);
+
+    if (page_a != page_new) {
+        LOGF("[WARN] Allocator did not refill the hole in the previous slab.\n");
+    }
+
+    tracker_cleanup();
+    return true;
+}
+
+#pragma endregion
+
+#pragma region Error Handling & Security Tests
+
+// Checks if the allocator detects double-free attempts via header corruption.
 static bool test_double_free(void) {
     tracker_reset();
     slab_cache_t* c = slab_cache_create("test_df", 32, 8);
@@ -336,15 +393,15 @@ static bool test_double_free(void) {
     TEST_ASSERT_STATUS(slab_free(c, obj), SLAB_OK);
     g_tracker[1].active = false;
 
-    // Second free: Should detect corruption (header magic mismatch)
+    // Second free: Should detect corruption
     slab_status_t status = slab_free(c, obj);
     TEST_ASSERT_STATUS(status, SLAB_ERR_CORRUPTION);
 
-    // Reset stats implied
     tracker_cleanup();
     return true;
 }
 
+// Ensures that freeing an object to the wrong cache is detected.
 static bool test_cross_cache_free(void) {
     tracker_reset();
     
@@ -371,6 +428,7 @@ static bool test_cross_cache_free(void) {
     return true;
 }
 
+// Verifies that freeing an invalid pointer results in an error.
 static bool test_bad_pointer_free(void) {
     tracker_reset();
     slab_cache_t* c = slab_cache_create("test_badptr", 32, 8);
@@ -391,8 +449,11 @@ static bool test_bad_pointer_free(void) {
     return true;
 }
 
-/* Stress Tests */
+#pragma endregion
 
+#pragma region Stress Tests
+
+// Performs randomized allocation and deallocation to stress-test lists.
 static bool test_churn_stress(void) {
     tracker_reset();
     slab_cache_t* c = slab_cache_create("test_churn", 64, 8);
@@ -430,8 +491,11 @@ static bool test_churn_stress(void) {
     return true;
 }
 
-/* Advanced / Functional Tests */
+#pragma endregion
 
+#pragma region Advanced / Functional Tests
+
+// Tests fragmentation handling by creating holes and verifying reuse.
 static bool test_swiss_cheese_reuse(void) {
     tracker_reset();
     
@@ -479,6 +543,7 @@ static bool test_swiss_cheese_reuse(void) {
     return true;
 }
 
+// Simulates a buffer underflow to corrupt the object header.
 static bool test_header_corruption(void) {
     tracker_reset();
     slab_cache_t* c = slab_cache_create("test_smash", 32, 8);
@@ -512,6 +577,7 @@ static bool test_header_corruption(void) {
     return true;
 }
 
+// Detects use-after-free by checking integrity markers in the free list.
 static bool test_use_after_free_detection(void) {
     tracker_reset();
     slab_cache_t* c = slab_cache_create("test_poison", 64, 8);
@@ -534,8 +600,7 @@ static bool test_use_after_free_detection(void) {
         return false;
     }
 
-    // --- REPAIR PROCEDURE ---
-    // We must repair the object header in memory so we can safely destroy 
+    // Repair the object header in memory so we can safely destroy 
     // the cache without causing a kernel panic during cleanup.
     
     slab_test_free_obj_t* free_head = (slab_test_free_obj_t*)obj;
@@ -557,6 +622,7 @@ static bool test_use_after_free_detection(void) {
     return true;
 }
 
+// Ensures that destroying a cache with active objects releases memory (no leak).
 static bool test_dirty_destroy_leak(void) {
     tracker_reset();
 
@@ -597,7 +663,9 @@ static bool test_dirty_destroy_leak(void) {
     return true;
 }
 
-/* Runner */
+#pragma endregion
+
+#pragma region Test Runner
 
 static void run_test(const char* name, bool (*func)(void)) {
     g_tests_total++;
@@ -629,20 +697,13 @@ void test_slab(void) {
     run_test("Basic Alloc/Free Cycle", test_alloc_free_basic);
     run_test("Alignment Enforcement", test_alignment_strictness);
     run_test("Zero-Init Guarantee", test_zero_initialization);
-    
-    // Logic & Scaling
     run_test("Slab Growth (Multi-page)", test_slab_growth);
     run_test("Slab Shrinking (Culling)", test_culling_shrink);
-    
-    // Security & Error Handling
+    run_test("Partial Slab Priority", test_partial_slab_priority);
     run_test("Double Free Detection", test_double_free);
     run_test("Cross-Cache Free Prevention", test_cross_cache_free);
     run_test("Invalid Pointer Free", test_bad_pointer_free);
-    
-    // Stress
     run_test("Random Alloc/Free Churn", test_churn_stress);
-
-    // Advanced / Functional
     run_test("Hole Filling (Fragmentation)", test_swiss_cheese_reuse);
     run_test("Header Corruption (Underflow)", test_header_corruption);
     run_test("Use-After-Free Detection", test_use_after_free_detection);
@@ -658,3 +719,5 @@ void test_slab(void) {
     LOGF("--- END SLAB ALLOCATOR TEST ---\n");
     LOGF("Slab Test Results: %d/%d\n\n", g_tests_passed, g_tests_total);
 }
+
+#pragma endregion

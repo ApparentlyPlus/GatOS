@@ -11,12 +11,14 @@
 #include <kernel/memory/pmm.h>
 #include <kernel/memory/vmm.h>
 #include <kernel/debug.h>
+#include <tests/tests.h>
 #include <libc/string.h>
+
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
 
-/* Configuration */
+#pragma region Configuration & Types
 
 #define MAX_TRACKED_ITEMS 2048
 #define TEST_PAGE_SIZE 4096
@@ -30,7 +32,7 @@ typedef enum {
 
 typedef struct {
     track_type_t type;
-    vmm_t* vmm;         // The VMM instance this belongs to (or the instance itself)
+    vmm_t* vmm;         // The VMM instance or the instance owning the allocation
     void* addr;         // Virtual address (for alloc)
     size_t size;        // Size (for alloc)
     bool active;
@@ -40,12 +42,14 @@ typedef struct {
 static vmm_tracker_t g_tracker[MAX_TRACKED_ITEMS];
 static int g_tracker_idx = 0;
 
-// Statistics
 static int g_tests_total = 0;
 static int g_tests_passed = 0;
 
-/* Harness Helpers */
+#pragma endregion
 
+#pragma region Harness Helpers
+
+// Resets the internal tracking array before a test begins.
 static void tracker_reset(void) {
     for (int i = 0; i < MAX_TRACKED_ITEMS; i++) {
         g_tracker[i].active = false;
@@ -56,6 +60,7 @@ static void tracker_reset(void) {
     g_tracker_idx = 0;
 }
 
+// Registers a memory allocation to be automatically freed during cleanup.
 static void tracker_add_alloc(vmm_t* vmm, void* addr, size_t size) {
     if (g_tracker_idx < MAX_TRACKED_ITEMS) {
         g_tracker[g_tracker_idx].type = TRACK_ALLOC;
@@ -69,6 +74,7 @@ static void tracker_add_alloc(vmm_t* vmm, void* addr, size_t size) {
     }
 }
 
+// Registers a VMM instance to be automatically destroyed during cleanup.
 static void tracker_add_vmm(vmm_t* vmm) {
     if (g_tracker_idx < MAX_TRACKED_ITEMS) {
         g_tracker[g_tracker_idx].type = TRACK_VMM_INSTANCE;
@@ -80,15 +86,16 @@ static void tracker_add_vmm(vmm_t* vmm) {
     }
 }
 
+// Frees all tracked allocations and destroys tracked VMM instances.
 static void tracker_cleanup(void) {
-    // 1. Free all allocations first
+    // Free allocations first
     for (int i = 0; i < MAX_TRACKED_ITEMS; i++) {
         if (g_tracker[i].active && g_tracker[i].type == TRACK_ALLOC) {
             vmm_free(g_tracker[i].vmm, g_tracker[i].addr);
             g_tracker[i].active = false;
         }
     }
-    // 2. Destroy created VMM instances
+    // Destroy VMM instances
     for (int i = 0; i < MAX_TRACKED_ITEMS; i++) {
         if (g_tracker[i].active && g_tracker[i].type == TRACK_VMM_INSTANCE) {
             vmm_destroy(g_tracker[i].vmm);
@@ -98,7 +105,7 @@ static void tracker_cleanup(void) {
     g_tracker_idx = 0;
 }
 
-/* Hardware Page Table Walker */
+// Manually walks the x86_64 page tables to verify mapping existence and flags.
 static bool inspect_pte(uint64_t pt_root, void* virt, uint64_t* out_phys, uint64_t* out_flags) {
     uint64_t* pml4 = (uint64_t*)PHYSMAP_P2V(pt_root);
     
@@ -122,22 +129,11 @@ static bool inspect_pte(uint64_t pt_root, void* virt, uint64_t* out_phys, uint64
     return true;
 }
 
-#define TEST_ASSERT(cond) do { \
-    if (!(cond)) { \
-        LOGF("[FAIL] Assertion failed: %s (Line %d)\n", #cond, __LINE__); \
-        return false; \
-    } \
-} while(0)
+#pragma endregion
 
-#define TEST_ASSERT_STATUS(s, e) do { \
-    if ((s) != (e)) { \
-        LOGF("[FAIL] Status mismatch: Got %d, Expected %d (Line %d)\n", s, e, __LINE__); \
-        return false; \
-    } \
-} while(0)
+#pragma region Core Allocator Tests
 
-/* Allocator Logic Tests */
-
+// Checks if the Kernel VMM is in a valid initial state.
 static bool test_invariants(void) {
     vmm_t* k_vmm = vmm_kernel_get();
     TEST_ASSERT(k_vmm != NULL);
@@ -147,6 +143,7 @@ static bool test_invariants(void) {
     return true;
 }
 
+// Tests a standard allocation, write access, and free cycle.
 static bool test_basic_cycle(void) {
     tracker_reset();
     vmm_t* vmm = vmm_kernel_get();
@@ -172,6 +169,7 @@ static bool test_basic_cycle(void) {
     return true;
 }
 
+// Verifies allocation at a specific address, including alignment and overlap checks.
 static bool test_alloc_at(void) {
     tracker_reset();
     vmm_t* vmm = vmm_kernel_get();
@@ -179,21 +177,21 @@ static bool test_alloc_at(void) {
     uintptr_t target = vmm_get_alloc_base(vmm) + (TEST_PAGE_SIZE * 50);
     void* ptr;
     
-    // 1. Success
     TEST_ASSERT_STATUS(vmm_alloc_at(vmm, (void*)target, TEST_PAGE_SIZE, VM_FLAG_WRITE, NULL, &ptr), VMM_OK);
     tracker_add_alloc(vmm, ptr, TEST_PAGE_SIZE);
     TEST_ASSERT((uintptr_t)ptr == target);
 
-    // 2. Unaligned (Fail)
+    // Test unaligned address
     TEST_ASSERT_STATUS(vmm_alloc_at(vmm, (void*)(target + 1), TEST_PAGE_SIZE, VM_FLAG_WRITE, NULL, &ptr), VMM_ERR_NOT_ALIGNED);
 
-    // 3. Overlap (Fail)
+    // Test overlap
     TEST_ASSERT_STATUS(vmm_alloc_at(vmm, (void*)target, TEST_PAGE_SIZE, VM_FLAG_WRITE, NULL, &ptr), VMM_ERR_ALREADY_MAPPED);
 
     tracker_cleanup();
     return true;
 }
 
+// Tests the resizing (expanding and shrinking) of existing allocations.
 static bool test_resize_logic(void) {
     tracker_reset();
     vmm_t* vmm = vmm_kernel_get();
@@ -203,20 +201,17 @@ static bool test_resize_logic(void) {
     TEST_ASSERT_STATUS(vmm_alloc(vmm, size, VM_FLAG_WRITE, NULL, &ptr), VMM_OK);
     tracker_add_alloc(vmm, ptr, size);
 
-    // Grow
     size_t new_size = TEST_PAGE_SIZE * 4;
     TEST_ASSERT_STATUS(vmm_resize(vmm, ptr, new_size), VMM_OK);
     g_tracker[0].size = new_size;
 
     volatile uint8_t* byte_ptr = (volatile uint8_t*)ptr;
-    byte_ptr[size + 10] = 0xAA; // Write to new area
+    byte_ptr[size + 10] = 0xAA; // Access extended area
     TEST_ASSERT(byte_ptr[size + 10] == 0xAA);
 
-    // Shrink
     TEST_ASSERT_STATUS(vmm_resize(vmm, ptr, TEST_PAGE_SIZE), VMM_OK);
     g_tracker[0].size = TEST_PAGE_SIZE;
 
-    // Verify metadata
     vm_object* obj = vmm_find_mapped_object(vmm, ptr);
     TEST_ASSERT(obj != NULL);
     TEST_ASSERT(obj->length == TEST_PAGE_SIZE);
@@ -225,6 +220,7 @@ static bool test_resize_logic(void) {
     return true;
 }
 
+// Ensures resizing fails correctly when expanding into occupied memory.
 static bool test_resize_collision(void) {
     tracker_reset();
     vmm_t* vmm = vmm_kernel_get();
@@ -236,13 +232,13 @@ static bool test_resize_collision(void) {
     TEST_ASSERT_STATUS(vmm_alloc(vmm, TEST_PAGE_SIZE, VM_FLAG_WRITE, NULL, &p2), VMM_OK);
     tracker_add_alloc(vmm, p2, TEST_PAGE_SIZE);
 
-    // Try to grow p1 into p2
     TEST_ASSERT_STATUS(vmm_resize(vmm, p1, TEST_PAGE_SIZE * 2), VMM_ERR_OOM);
 
     tracker_cleanup();
     return true;
 }
 
+// Verifies that page permissions can be modified dynamically.
 static bool test_protection(void) {
     tracker_reset();
     vmm_t* vmm = vmm_kernel_get();
@@ -263,11 +259,11 @@ static bool test_protection(void) {
     return true;
 }
 
+// Tests mapping specific physical addresses (simulated MMIO) to virtual space.
 static bool test_mmio_mapping(void) {
     tracker_reset();
     vmm_t* vmm = vmm_kernel_get();
     
-    // Allocate a safe physical page to pretend it's MMIO
     uint64_t phys;
     pmm_alloc(TEST_PAGE_SIZE, &phys); 
     
@@ -281,34 +277,31 @@ static bool test_mmio_mapping(void) {
     TEST_ASSERT(vmm_check_flags(vmm, ptr, VM_FLAG_MMIO));
 
     tracker_cleanup();
-    pmm_free(phys, TEST_PAGE_SIZE); // Return the stolen page
+    pmm_free(phys, TEST_PAGE_SIZE);
     return true;
 }
 
+// Tests manual mapping and unmapping of a physical range to a high virtual address.
 static bool test_manual_map_range(void) {
     tracker_reset();
     vmm_t* vmm = vmm_kernel_get();
     
     uint64_t phys_base;
     size_t size = TEST_PAGE_SIZE * 4;
-    if (pmm_alloc(size, &phys_base) != PMM_OK) return true; // Skip if OOM
+    if (pmm_alloc(size, &phys_base) != PMM_OK) return true;
     
-    void* virt_addr = (void*)0xC00000000; // High memory
+    void* virt_addr = (void*)0xC00000000;
     
-    // Map manually
     TEST_ASSERT_STATUS(vmm_map_range(vmm, phys_base, virt_addr, size, VM_FLAG_WRITE | VM_FLAG_MMIO), VMM_OK);
     
-    // Verify mapping
     for(size_t off=0; off<size; off+=TEST_PAGE_SIZE) {
         uint64_t p;
         TEST_ASSERT(vmm_get_physical(vmm, (void*)((uintptr_t)virt_addr + off), &p));
         TEST_ASSERT(p == phys_base + off);
     }
     
-    // Unmap manually
     TEST_ASSERT_STATUS(vmm_unmap_range(vmm, virt_addr, size), VMM_OK);
     
-    // Verify gone
     uint64_t p;
     if (vmm_get_physical(vmm, virt_addr, &p)) {
         LOGF("[FAIL] Manual unmap failed, address still resolves\n");
@@ -320,14 +313,17 @@ static bool test_manual_map_range(void) {
     return true;
 }
 
-/* System Inspection & Hardware Tests */
+#pragma endregion
 
+#pragma region System Inspection & Hardware Tests
+
+// Verifies that hardware page table flags match the requested permissions.
 static bool test_pt_flags(void) {
     tracker_reset();
     vmm_t* kvmm = vmm_kernel_get();
     void* kptr;
     
-    // Kernel Alloc: Should be PRESENT | WRITABLE | NO USER
+    // Check Kernel Flags
     TEST_ASSERT_STATUS(vmm_alloc(kvmm, TEST_PAGE_SIZE, VM_FLAG_WRITE, NULL, &kptr), VMM_OK);
     tracker_add_alloc(kvmm, kptr, TEST_PAGE_SIZE);
     
@@ -337,7 +333,7 @@ static bool test_pt_flags(void) {
     TEST_ASSERT(flags & PAGE_WRITABLE);
     TEST_ASSERT(!(flags & PAGE_USER)); 
     
-    // User Alloc
+    // Check User Flags
     vmm_t* uvmm = vmm_create(TEST_USER_BASE, TEST_USER_END);
     tracker_add_vmm(uvmm);
     
@@ -353,6 +349,7 @@ static bool test_pt_flags(void) {
     return true;
 }
 
+// Ensures that two VMM instances map the same virtual address to different physical pages.
 static bool test_isolation(void) {
     tracker_reset();
     
@@ -383,6 +380,7 @@ static bool test_isolation(void) {
     return true;
 }
 
+// Tests VMM context switching and verification of active memory mappings.
 static bool test_context_switch(void) {
     tracker_reset();
     vmm_t* original = vmm_kernel_get();
@@ -393,16 +391,13 @@ static bool test_context_switch(void) {
     void* ptr;
     TEST_ASSERT_STATUS(vmm_alloc(task_vmm, TEST_PAGE_SIZE, VM_FLAG_WRITE, NULL, &ptr), VMM_OK);
     
-    // Write directly to physical memory to verify mapping later
     uint64_t phys;
     TEST_ASSERT(vmm_get_physical(task_vmm, ptr, &phys));
     uint64_t* p_phys = (uint64_t*)PHYSMAP_P2V(phys);
     *p_phys = 0xdef1234;
     
-    // Switch to Task VMM
     vmm_switch(task_vmm);
     
-    // Verify we can read the secret via virtual address
     uint64_t* p_virt = (uint64_t*)ptr;
     if (*p_virt != 0xdef1234) {
         vmm_switch(original);
@@ -410,13 +405,13 @@ static bool test_context_switch(void) {
         return false;
     }
     
-    // Switch back
     vmm_switch(original);
     
     tracker_cleanup();
     return true;
 }
 
+// Checks that kernel mappings are visible within a user VMM instance.
 static bool test_kernel_persistence(void) {
     tracker_reset();
     
@@ -425,7 +420,6 @@ static bool test_kernel_persistence(void) {
     vmm_t* uvmm = vmm_create(TEST_USER_BASE, TEST_USER_END);
     tracker_add_vmm(uvmm);
     
-    // Verify kernel address resolves in User VMM Page Tables
     uint64_t phys;
     if (!inspect_pte(uvmm->pt_root, (void*)k_var_addr, &phys, NULL)) {
         LOGF("[FAIL] Kernel address 0x%lx not mapped in User VMM\n", k_var_addr);
@@ -436,25 +430,22 @@ static bool test_kernel_persistence(void) {
     return true;
 }
 
+// Verifies that internal page table structures are removed when pages are freed.
 static bool test_pt_cleanup(void) {
     tracker_reset();
     
-    // Use a custom VMM to test high memory allocation (kernel VMM might limit range)
     vmm_t* vmm = vmm_create(0x400000, 0x8000000000ULL);
     if (!vmm) return false;
     tracker_add_vmm(vmm);
     
-    // Alloc at 256GB to force new PDPT/PD structure creation
+    // Alloc in high memory to force new PDPT/PD creation
     void* ptr = (void*)(0x4000000000ULL); 
     TEST_ASSERT_STATUS(vmm_alloc_at(vmm, ptr, TEST_PAGE_SIZE, VM_FLAG_WRITE, NULL, &ptr), VMM_OK);
     
-    // Verify tables exist
     TEST_ASSERT(inspect_pte(vmm->pt_root, ptr, NULL, NULL));
     
-    // Free
     TEST_ASSERT_STATUS(vmm_free(vmm, ptr), VMM_OK);
     
-    // Verify tables are gone
     if (inspect_pte(vmm->pt_root, ptr, NULL, NULL)) {
         LOGF("[WARN] Page tables for 0x%lx still present after free (Efficiency issue?)\n", ptr);
     }
@@ -463,8 +454,11 @@ static bool test_pt_cleanup(void) {
     return true;
 }
 
-/* Stress & Security Tests */
+#pragma endregion
 
+#pragma region Stress & Security Tests
+
+// Performs interleaved allocations and frees to stress the allocator's gap finding logic.
 static bool test_fragmentation_stress(void) {
     tracker_reset();
     vmm_t* vmm = vmm_kernel_get();
@@ -472,19 +466,16 @@ static bool test_fragmentation_stress(void) {
     #define STRESS_COUNT 256
     void* ptrs[STRESS_COUNT];
     
-    // 1. Alloc
     for(int i=0; i<STRESS_COUNT; i++) {
         if(vmm_alloc(vmm, TEST_PAGE_SIZE, VM_FLAG_WRITE, NULL, &ptrs[i]) != VMM_OK) return false;
         tracker_add_alloc(vmm, ptrs[i], TEST_PAGE_SIZE);
     }
     
-    // 2. Free odd indices
     for(int i=1; i<STRESS_COUNT; i+=2) {
         vmm_free(vmm, ptrs[i]);
         for(int t=0; t<g_tracker_idx; t++) if(g_tracker[t].addr == ptrs[i]) g_tracker[t].active = false;
     }
     
-    // 3. Alloc again
     for(int i=0; i<128; i++) {
         void* p;
         if(vmm_alloc(vmm, TEST_PAGE_SIZE, VM_FLAG_WRITE, NULL, &p) != VMM_OK) {
@@ -498,6 +489,7 @@ static bool test_fragmentation_stress(void) {
     return true;
 }
 
+// Verifies that the allocator correctly reports OOM when limits are reached.
 static bool test_oom_limit(void) {
     tracker_reset();
     
@@ -521,6 +513,7 @@ static bool test_oom_limit(void) {
     return true;
 }
 
+// Tests unmapping and remapping pages within a large contiguous block.
 static bool test_large_remap(void) {
     tracker_reset();
     vmm_t* vmm = vmm_kernel_get();
@@ -531,7 +524,6 @@ static bool test_large_remap(void) {
     TEST_ASSERT_STATUS(vmm_alloc(vmm, size, VM_FLAG_WRITE, NULL, &ptr), VMM_OK);
     tracker_add_alloc(vmm, ptr, size);
     
-    // Unmap middle page
     void* mid = (void*)((uintptr_t)ptr + (256 * TEST_PAGE_SIZE));
     TEST_ASSERT_STATUS(vmm_unmap_page(vmm, mid), VMM_OK);
     
@@ -540,7 +532,6 @@ static bool test_large_remap(void) {
         return false;
     }
     
-    // Manual re-map
     uint64_t phys;
     pmm_alloc(TEST_PAGE_SIZE, &phys); 
     TEST_ASSERT_STATUS(vmm_map_page(vmm, phys, mid, VM_FLAG_WRITE), VMM_OK);
@@ -551,6 +542,7 @@ static bool test_large_remap(void) {
     return true;
 }
 
+// Checks if reused physical memory retains old data (Security Check).
 static bool test_dirty_reuse(void) {
     tracker_reset();
     vmm_t* kvmm = vmm_kernel_get();
@@ -584,6 +576,7 @@ static bool test_dirty_reuse(void) {
     return true;
 }
 
+// Tests robustness of cleanup by creating scattered allocations across a large range.
 static bool test_swiss_cheese_cleanup(void) {
     tracker_reset();
     
@@ -625,7 +618,45 @@ static bool test_swiss_cheese_cleanup(void) {
     return true;
 }
 
-/* Runner */
+// Verifies that the NX (No-Execute) bit is correctly set on non-executable pages.
+static bool test_nx_bit_enforcement(void) {
+    tracker_reset();
+    vmm_t* vmm = vmm_kernel_get();
+
+    // Test Data Page (RW, No Exec)
+    void* ptr;
+    TEST_ASSERT_STATUS(vmm_alloc(vmm, TEST_PAGE_SIZE, VM_FLAG_WRITE, NULL, &ptr), VMM_OK);
+    tracker_add_alloc(vmm, ptr, TEST_PAGE_SIZE);
+
+    uint64_t phys, flags;
+    TEST_ASSERT(inspect_pte(vmm->pt_root, ptr, &phys, &flags));
+
+    bool nx_set = (flags & (1ULL << 63));
+    
+    if (!nx_set) {
+        LOGF("[WARN] NX bit not set on data page. (Is EFER.NXE enabled?)\n");
+    }
+
+    // Test Code Page (RX, Exec)
+    void* code_ptr;
+    TEST_ASSERT_STATUS(vmm_alloc(vmm, TEST_PAGE_SIZE, VM_FLAG_EXEC, NULL, &code_ptr), VMM_OK);
+    tracker_add_alloc(vmm, code_ptr, TEST_PAGE_SIZE);
+
+    inspect_pte(vmm->pt_root, code_ptr, NULL, &flags);
+    nx_set = (flags & (1ULL << 63));
+
+    if (nx_set) {
+        LOGF("[FAIL] NX bit SET on executable page!\n");
+        return false;
+    }
+
+    tracker_cleanup();
+    return true;
+}
+
+#pragma endregion
+
+#pragma region Test Runner
 
 static void run_test(const char* name, bool (*func)(void)) {
     g_tests_total++;
@@ -657,6 +688,7 @@ void test_vmm(void) {
 
     LOGF("\n--- BEGIN VMM TEST ---\n");
     
+    // Core Allocator Tests
     run_test("Invariants Check", test_invariants);
     run_test("Basic Alloc/Free Cycle", test_basic_cycle);
     run_test("Fixed Address Alloc", test_alloc_at);
@@ -672,6 +704,7 @@ void test_vmm(void) {
     run_test("Kernel Mapping Persistence", test_kernel_persistence);
     run_test("Context Switching", test_context_switch);
     run_test("Page Table Cleanup", test_pt_cleanup);
+    run_test("NX Bit Enforcement", test_nx_bit_enforcement);
     
     // Stress Tests
     run_test("Fragmentation Stress", test_fragmentation_stress);
@@ -683,3 +716,5 @@ void test_vmm(void) {
     LOGF("--- END VMM TEST ---\n");
     LOGF("VMM Test Results: %d/%d\n\n", g_tests_passed, g_tests_total);
 }
+
+#pragma endregion

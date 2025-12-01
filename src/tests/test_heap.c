@@ -1,9 +1,10 @@
 /*
  * test_heap.c - Kernel Heap Manager Validation Suite (White Box)
  *
- * Verifies correctness, stability, and security of the Multi-Arena Heap Allocator.
- * Mirrors internal structures to verify boundary tags, coalescing logic, and
- * protection mechanisms.
+ * This suite verifies the correctness, stability, and security of the
+ * Multi-Arena Heap Allocator. It mirrors internal structures to verify 
+ * boundary tags, coalescing logic, and protection mechanisms on the 
+ * live kernel.
  */
 
 #include <kernel/memory/heap.h>
@@ -12,11 +13,47 @@
 #include <kernel/debug.h>
 #include <tests/tests.h>
 #include <libc/string.h>
+
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
 
-/* Internal Structure Mirrors */
+#pragma region Configuration & Types
+
+#define MAX_TRACKED_ITEMS 1024
+
+// Constants from heap.c
+#define HEAP_MAGIC       0xF005BA11
+#define BLOCK_MAGIC_USED 0xABADCAFE
+#define BLOCK_MAGIC_FREE 0xA110CA7E
+#define BLOCK_RED_ZONE   0x8BADF00D
+#define HEAP_MIN_ALIGN   16
+#define MIN_BLOCK_SIZE   32
+
+typedef enum {
+    TRACK_KERNEL,
+    TRACK_USER_HEAP
+} track_source_t;
+
+typedef struct {
+    bool active;
+    track_source_t source;
+    void* ptr;
+    heap_t* heap_inst;
+} heap_tracker_t;
+
+// Mirror of heap_arena_t
+typedef struct heap_test_arena {
+    uint32_t magic;
+    struct heap_test_arena* next;
+    struct heap_test_arena* prev;
+    uintptr_t start;
+    uintptr_t end;
+    size_t size;
+    void* first_block;
+    size_t total_free;
+    size_t total_allocated;
+} heap_test_arena_t;
 
 // Mirror of heap_t
 typedef struct {
@@ -34,19 +71,6 @@ typedef struct {
     size_t allocation_count;
     size_t arena_count;
 } heap_test_struct_t;
-
-// Mirror of heap_arena_t
-typedef struct heap_test_arena {
-    uint32_t magic;
-    struct heap_test_arena* next;
-    struct heap_test_arena* prev;
-    uintptr_t start;
-    uintptr_t end;
-    size_t size;
-    void* first_block;
-    size_t total_free;
-    size_t total_allocated;
-} heap_test_arena_t;
 
 // Mirror of heap_block_header_t
 typedef struct heap_test_header {
@@ -68,37 +92,16 @@ typedef struct {
     uint32_t red_zone_post;
 } __attribute__((aligned(16))) heap_test_footer_t;
 
-// Constants from heap.c
-#define HEAP_MAGIC       0xF005BA11
-#define BLOCK_MAGIC_USED 0xABADCAFE
-#define BLOCK_MAGIC_FREE 0xA110CA7E
-#define BLOCK_RED_ZONE   0x8BADF00D
-#define HEAP_MIN_ALIGN   16
-#define MIN_BLOCK_SIZE   32
-
-/* Configuration & Tracking */
-
-#define MAX_TRACKED_ITEMS 512
-
-typedef enum {
-    TRACK_KERNEL,
-    TRACK_USER_HEAP
-} track_source_t;
-
-typedef struct {
-    bool active;
-    track_source_t source;
-    void* ptr;
-    heap_t* heap_inst;
-} heap_tracker_t;
-
 static heap_tracker_t g_tracker[MAX_TRACKED_ITEMS];
 static int g_tracker_idx = 0;
 static int g_tests_total = 0;
 static int g_tests_passed = 0;
 
-/* Helpers */
+#pragma endregion
 
+#pragma region Harness Helpers
+
+// Resets the internal tracking array before a test begins.
 static void tracker_reset(void) {
     for (int i = 0; i < MAX_TRACKED_ITEMS; i++) {
         g_tracker[i].active = false;
@@ -108,6 +111,7 @@ static void tracker_reset(void) {
     g_tracker_idx = 0;
 }
 
+// Registers a kernel heap allocation to be freed during cleanup.
 static void tracker_add_k(void* ptr) {
     if (g_tracker_idx < MAX_TRACKED_ITEMS) {
         g_tracker[g_tracker_idx] = (heap_tracker_t){ .active = true, .source = TRACK_KERNEL, .ptr = ptr };
@@ -117,6 +121,7 @@ static void tracker_add_k(void* ptr) {
     }
 }
 
+// Registers a user heap allocation to be freed during cleanup.
 static void tracker_add_u(heap_t* heap, void* ptr) {
     if (g_tracker_idx < MAX_TRACKED_ITEMS) {
         g_tracker[g_tracker_idx] = (heap_tracker_t){ .active = true, .source = TRACK_USER_HEAP, .ptr = ptr, .heap_inst = heap };
@@ -126,6 +131,7 @@ static void tracker_add_u(heap_t* heap, void* ptr) {
     }
 }
 
+// Frees all tracked allocations based on their source.
 static void tracker_cleanup(void) {
     for (int i = 0; i < MAX_TRACKED_ITEMS; i++) {
         if (g_tracker[i].active) {
@@ -166,8 +172,11 @@ static heap_test_struct_t* access_heap(heap_t* h) {
     } \
 } while(0)
 
-/* Tests */
+#pragma endregion
 
+#pragma region Basic Allocation Tests
+
+// Verifies kernel heap initialization and basic allocation metadata.
 static bool test_kernel_init_and_basic_alloc(void) {
     tracker_reset();
 
@@ -197,6 +206,7 @@ static bool test_kernel_init_and_basic_alloc(void) {
     return true;
 }
 
+// Checks alignment guarantees and zeroing behavior of calloc.
 static bool test_alignment_and_calloc(void) {
     tracker_reset();
 
@@ -221,6 +231,7 @@ static bool test_alignment_and_calloc(void) {
     return true;
 }
 
+// Tests reallocation logic when expanding into adjacent free space.
 static bool test_realloc_logic(void) {
     tracker_reset();
 
@@ -246,6 +257,63 @@ static bool test_realloc_logic(void) {
     return true;
 }
 
+// Verifies standard compliance for realloc with NULL or zero size.
+static bool test_realloc_compliance(void) {
+    tracker_reset();
+
+    // 1. realloc(NULL, size) -> malloc(size)
+    void* p1 = krealloc(NULL, 64);
+    TEST_ASSERT(p1 != NULL);
+    tracker_add_k(p1);
+    
+    heap_test_header_t* h = get_header(p1);
+    TEST_ASSERT(h->size >= 64);
+
+    // 2. realloc(ptr, 0) -> free(ptr)
+    void* p2 = krealloc(p1, 0);
+    // Standard varies, but often returns NULL or a specific unique pointer. 
+    // This implementation calls kfree and returns NULL.
+    TEST_ASSERT(p2 == NULL);
+    
+    // Verify p1 is actually free
+    TEST_ASSERT(h->magic == BLOCK_MAGIC_FREE);
+    g_tracker[0].active = false; // Manually untrack p1
+
+    tracker_cleanup();
+    return true;
+}
+
+// Checks edge case handling for NULL pointers, zero allocation, and overflow.
+static bool test_edge_cases(void) {
+    tracker_reset();
+
+    // 1. NULL Free (Should be no-op)
+    kfree(NULL);
+
+    // 2. Zero-size alloc (Implementation defined, but safe)
+    void* p = kmalloc(0);
+    if (p) kfree(p);
+
+    // 3. Overflow check
+    void* p2 = kcalloc(SIZE_MAX, 2);
+    TEST_ASSERT(p2 == NULL);
+
+    // 4. Large aligned realloc to ensure we handle alignment padding + resize
+    void* p3 = kmalloc(128);
+    tracker_add_k(p3);
+    void* p4 = krealloc(p3, 256);
+    TEST_ASSERT(p4 != NULL);
+    g_tracker[0].ptr = p4; // update tracker
+
+    tracker_cleanup();
+    return true;
+}
+
+#pragma endregion
+
+#pragma region Core Logic Tests
+
+// Tests coalescing of free blocks (forward and backward merging).
 static bool test_coalescing(void) {
     tracker_reset();
     
@@ -272,6 +340,7 @@ static bool test_coalescing(void) {
     return true;
 }
 
+// Verifies that blocks are only split if the remainder exceeds the threshold.
 static bool test_splitting_threshold(void) {
     tracker_reset();
     
@@ -293,6 +362,7 @@ static bool test_splitting_threshold(void) {
     return true;
 }
 
+// Checks that the free list maintains correct sorting order (by size).
 static bool test_free_list_sorting(void) {
     tracker_reset();
     
@@ -329,27 +399,7 @@ static bool test_free_list_sorting(void) {
     return true;
 }
 
-static bool test_arena_shrinking(void) {
-    tracker_reset();
-    heap_t* heap = heap_kernel_get();
-    heap_test_struct_t* h_struct = access_heap(heap);
-    
-    size_t start_arenas = h_struct->arena_count;
-
-    void* big = kmalloc(1024 * 1024); // 1MB
-    tracker_add_k(big);
-
-    TEST_ASSERT(h_struct->arena_count > start_arenas);
-
-    kfree(big);
-    g_tracker[0].active = false;
-
-    // Should drop back down
-    TEST_ASSERT(h_struct->arena_count == start_arenas);
-
-    return true;
-}
-
+// Tests that the heap expands by creating new arenas when necessary.
 static bool test_arena_expansion(void) {
     tracker_reset();
     heap_t* heap = heap_kernel_get();
@@ -372,33 +422,33 @@ static bool test_arena_expansion(void) {
     return true;
 }
 
-static bool test_edge_cases(void) {
+// Tests that arenas are released when fully freed.
+static bool test_arena_shrinking(void) {
     tracker_reset();
+    heap_t* heap = heap_kernel_get();
+    heap_test_struct_t* h_struct = access_heap(heap);
+    
+    size_t start_arenas = h_struct->arena_count;
 
-    // 1. NULL Free (Should be no-op)
-    kfree(NULL);
+    void* big = kmalloc(1024 * 1024); // 1MB
+    tracker_add_k(big);
 
-    // 2. Zero-size alloc (Implementation defined, but safe)
-    void* p = kmalloc(0);
-    if (p) kfree(p);
+    TEST_ASSERT(h_struct->arena_count > start_arenas);
 
-    // 3. Overflow check
-    void* p2 = kcalloc(SIZE_MAX, 2);
-    TEST_ASSERT(p2 == NULL);
+    kfree(big);
+    g_tracker[0].active = false;
 
-    // 4. Large aligned realloc to ensure we handle alignment padding + resize
-    void* p3 = kmalloc(128);
-    tracker_add_k(p3);
-    void* p4 = krealloc(p3, 256);
-    TEST_ASSERT(p4 != NULL);
-    g_tracker[0].ptr = p4; // update tracker
+    // Should drop back down
+    TEST_ASSERT(h_struct->arena_count == start_arenas);
 
-    tracker_cleanup();
     return true;
 }
 
-/* Security Tests */
+#pragma endregion
 
+#pragma region Security & Integrity Tests
+
+// Checks if double-free attempts are detected without crashing.
 static bool test_double_free_protection(void) {
     tracker_reset();
     void* p = kmalloc(32);
@@ -413,6 +463,7 @@ static bool test_double_free_protection(void) {
     return true;
 }
 
+// Verifies detection of corrupted block headers.
 static bool test_header_corruption_detection(void) {
     tracker_reset();
     void* p = kmalloc(32);
@@ -431,6 +482,7 @@ static bool test_header_corruption_detection(void) {
     return true;
 }
 
+// Verifies detection of corrupted block footers.
 static bool test_footer_corruption_detection(void) {
     tracker_reset();
     void* p = kmalloc(32);
@@ -450,6 +502,7 @@ static bool test_footer_corruption_detection(void) {
     return true;
 }
 
+// Ensures RedZone integrity checks detect buffer overflows.
 static bool test_redzone_check(void) {
     tracker_reset();
     void* p = kmalloc(32);
@@ -467,8 +520,11 @@ static bool test_redzone_check(void) {
     return true;
 }
 
-/* User Heap Tests */
+#pragma endregion
 
+#pragma region Isolation & Stress Tests
+
+// Validates the lifecycle of a separate user-space heap instance.
 static bool test_user_heap_lifecycle(void) {
     tracker_reset();
 
@@ -492,8 +548,7 @@ static bool test_user_heap_lifecycle(void) {
     return true;
 }
 
-/* Stress Test */
-
+// Performs randomized allocation/deallocation churn to stress stability.
 static bool test_heap_stress_churn(void) {
     tracker_reset();
 
@@ -537,7 +592,9 @@ static bool test_heap_stress_churn(void) {
     return true;
 }
 
-/* Runner */
+#pragma endregion
+
+#pragma region Test Runner
 
 static void run_test(const char* name, bool (*func)(void)) {
     g_tests_total++;
@@ -571,6 +628,7 @@ void test_heap(void) {
     run_test("Alignment & Calloc", test_alignment_and_calloc);
     run_test("Edge Cases (Null/Overflow)", test_edge_cases);
     run_test("Realloc Logic (Grow/Move)", test_realloc_logic);
+    run_test("Realloc Compliance (NULL/0)", test_realloc_compliance);
     
     // Core Logic
     run_test("Block Coalescing (Merge)", test_coalescing);
@@ -594,3 +652,5 @@ void test_heap(void) {
     LOGF("--- END HEAP MANAGER TEST ---\n");
     LOGF("Heap Test Results: %d/%d\n\n", g_tests_passed, g_tests_total);
 }
+
+#pragma endregion
