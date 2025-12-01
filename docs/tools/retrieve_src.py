@@ -10,6 +10,8 @@ def map_and_display_files():
     for root, _, files in os.walk(script_dir):
         for filename in files:
             file_path = os.path.join(root, filename)
+            if "toolchain" in file_path.lower():
+                continue  # Skip toolchain files
             if file_path == os.path.abspath(__file__):
                 continue  # Skip the script itself
             all_files.append(file_path)

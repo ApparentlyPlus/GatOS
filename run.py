@@ -82,14 +82,13 @@ elif OS_NAME == "macos":
 
 # Compiler Flags & Profiles
 
-CFLAGS_BASE = ["-m64", "-ffreestanding", "-nostdlib", "-fno-pic", "-mcmodel=kernel", f"-I{HEADER_DIR}"]
+CFLAGS_BASE = ["-m64", "-ffreestanding", "-nostdlib", "-fno-pic", "-mcmodel=kernel", "-mno-red-zone", f"-I{HEADER_DIR}"]
 CPPFLAGS = [f"-I{HEADER_DIR}", "-D__ASSEMBLER__"]
 LDFLAGS = ["-n", "-nostdlib", f"-T{ROOT_DIR / 'targets/x86_64/linker.ld'}", "--no-relax", "-g"]
 
 # Optimization Levels
 CFLAGS_FAST = ["-O2", "-fomit-frame-pointer", "-fpredictive-commoning", "-fstrict-aliasing"]
-CFLAGS_VFAST = ["-O3", "-funroll-loops", "-fomit-frame-pointer", "-fno-stack-protector", "-fstrict-aliasing"]
-
+CFLAGS_VFAST = ["-O3", "-fpredictive-commoning", "-fstrict-aliasing", "-fno-delete-null-pointer-checks", "-fomit-frame-pointer", "-fno-stack-protector"]
 # Profile Definitions
 BUILD_PROFILES = {
     "default": {
@@ -107,7 +106,7 @@ BUILD_PROFILES = {
     "vfast": {
         "flags": CFLAGS_VFAST, 
         "confirm": True,
-        "msg": "WARNING: 'vfast' uses aggressive optimizations (-O3, -funroll-loops) which may cause unexpected kernel behavior or instability."
+        "msg": "WARNING: 'vfast' uses aggressive optimizations (-O3, -fno-stack-protector) which may cause unexpected kernel behavior or instability."
     }
 }
 
@@ -303,7 +302,7 @@ def main():
     c_src = list(SRC_DIR.rglob("*.c"))
     asm_src = list(SRC_DIR.rglob("*.S"))
     obj_files = [BUILD_DIR / f.relative_to(SRC_DIR).with_suffix(".o") for f in c_src + asm_src]
-    iso_name = f"GatOS-{get_kernel_version()}.iso"
+    iso_name = f"GatOS-{"Test-Build-" if profile == "test" else ""}{get_kernel_version()}.iso"
 
     if command == "clean":
         clean()

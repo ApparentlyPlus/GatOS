@@ -37,7 +37,6 @@ static uint8_t multiboot_buffer[8 * 1024];
 void kernel_test(void* mb_info, char* KERNEL_VERSION) {
 
 	// Clear the console and print a welcome message
-
 	console_clear();
 	print_test_banner(KERNEL_VERSION);
 
@@ -52,6 +51,7 @@ void kernel_test(void* mb_info, char* KERNEL_VERSION) {
 	enable_interrupts();
 	cpu_init();
 
+	// Initialize multiboot parser
 	multiboot_parser_t multiboot = {0};
     multiboot_init(&multiboot, mb_info, multiboot_buffer, sizeof(multiboot_buffer));
 	if (!multiboot.initialized) {
@@ -60,16 +60,21 @@ void kernel_test(void* mb_info, char* KERNEL_VERSION) {
     	return;
     }
 
+	// Memory management setup
 	reserve_required_tablespace(&multiboot);
 	cleanup_kernel_page_tables(0x0, get_kend(false));
 	unmap_identity();
 	build_physmap();
+
+	// Initialize ACPI
 	acpi_init(&multiboot);
 
     console_set_color(CONSOLE_COLOR_GREEN, CONSOLE_COLOR_BLACK);
     printf("[+] Kernel initialization succeded!\n\n");
     QEMU_LOG("Kernel initialization succeeded!", TOTAL_DBG);
     console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
+
+	// Run tests for each subsystem
 
 	pmm_status_t pmm_status = pmm_init(get_kend(false) + PAGE_SIZE, PHYSMAP_V2P(get_physmap_end()), PAGE_SIZE);
 	if(pmm_status != PMM_OK){
