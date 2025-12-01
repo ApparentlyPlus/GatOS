@@ -21,6 +21,12 @@
     } \
 } while(0)
 
+// For test builds, we should run kernel_test from kmain.c:
+
+#ifdef TEST_BUILD
+void kernel_test(void* mb_info, char* KERNEL_VERSION);
+#endif
+
 // Function declarations for individual test suites
 
 void test_pmm();

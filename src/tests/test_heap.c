@@ -651,6 +651,21 @@ void test_heap(void) {
 
     LOGF("--- END HEAP MANAGER TEST ---\n");
     LOGF("Heap Test Results: %d/%d\n\n", g_tests_passed, g_tests_total);
+
+    #ifdef TEST_BUILD
+    #include <kernel/drivers/vga_console.h>
+    #include <kernel/drivers/vga_stdio.h>
+    if (g_tests_passed != g_tests_total) {
+        console_set_color(CONSOLE_COLOR_RED, CONSOLE_COLOR_BLACK);
+        printf("[-] Some tests failed (%d/%d). Please check the debug log for details.\n", g_tests_passed, g_tests_total);
+        console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
+    }
+    else{
+        console_set_color(CONSOLE_COLOR_GREEN, CONSOLE_COLOR_BLACK);
+        printf("[+] All tests passed successfully! (%d/%d)\n", g_tests_passed, g_tests_total);
+        console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
+    }
+    #endif
 }
 
 #pragma endregion

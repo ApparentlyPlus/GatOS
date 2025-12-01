@@ -96,6 +96,10 @@ BUILD_PROFILES = {
         "flags": [], 
         "confirm": False
     },
+    "test": {
+        "flags": ["-DTEST_BUILD"], 
+        "confirm": False
+    },
     "fast": {
         "flags": CFLAGS_FAST, 
         "confirm": False

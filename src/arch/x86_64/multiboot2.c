@@ -240,8 +240,10 @@ void multiboot_init(multiboot_parser_t* parser, void* mb_info, uint8_t* buffer, 
     
     parser->initialized = 1;
     
+    #ifndef TEST_BUILD
     printf("[MB2] Initialization complete (used %d of %d bytes)\n",
            (int)parser->buffer_used, (int)buffer_size);
+    #endif
 }
 
 /*

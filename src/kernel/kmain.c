@@ -26,13 +26,24 @@
 
 #define TOTAL_DBG 15
 
-static char* KERNEL_VERSION = "v1.7.3-alpha";
-static uint8_t multiboot_buffer[8 * 1024]; // 8KB should be more than enough
+static char* KERNEL_VERSION = "v1.7.4-alpha";
+
+// If it is a test build, the multiboot buffer will be defined in tests.c
+#ifndef TEST_BUILD
+static uint8_t multiboot_buffer[8 * 1024];
+#endif
 
 /*
  * kernel_main - Main entry point for the GatOS kernel
  */
 void kernel_main(void* mb_info) {
+
+	// If this is a test build, run the test suite instead
+	#ifdef TEST_BUILD
+		#include <tests/tests.h>
+		kernel_test(mb_info, KERNEL_VERSION);
+		return;
+	#else
 
 	// Clear the console and print the banner
 
@@ -158,4 +169,6 @@ void kernel_main(void* mb_info) {
 	// Final sanity check
 	
 	QEMU_LOG("Reached kernel end", TOTAL_DBG);
+
+	#endif
 }

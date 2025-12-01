@@ -38,6 +38,27 @@ void print_banner(char* KERNEL_VERSION){
 }
 
 /*
+ * print_test_banner - Prints the GatOS kernel test build banner
+ */
+void print_test_banner(char* KERNEL_VERSION){
+    console_set_color(CONSOLE_COLOR_CYAN, CONSOLE_COLOR_BLACK);
+    
+    printf(
+    " @@@@@@@@   @@@@@@   @@@@@@@   @@@@@@    @@@@@@   \n"
+    "@@@@@@@@@  @@@@@@@@  @@@@@@@  @@@@@@@@  @@@@@@@   \n"
+    "!@@        @@!  @@@    @@!    @@!  @@@  !@@       \n"
+    "!@!        !@!  @!@    !@!    !@!  @!@  !@!       \n"
+    "!@! @!@!@  @!@!@!@!    @!!    @!@  !@!  !!@@!!    \n"
+    "!!! !!@!!  !!!@!!!!    !!!    !@!  !!!   !!@!!!   \n"
+    ":!!   !!:  !!:  !!!    !!:    !!:  !!!       !:!  \n"
+    ":!:   !::  :!:  !:!    :!:    :!:  !:!      !:!   \n"
+    " ::: ::::  ::   :::     ::    ::::: ::  :::: ::   \n"
+    " :: :: :    :   : :     :      : :  :   :: : :    \n\n");
+    console_set_color(CONSOLE_COLOR_MAGENTA, CONSOLE_COLOR_BLACK);
+    printf("Welcome to the GatOS Kernel %s Test Build!\n\n", KERNEL_VERSION);
+}
+
+/*
  * int_to_str - Converts integer to string representation
  */
 int int_to_str(int num, char *str) {
