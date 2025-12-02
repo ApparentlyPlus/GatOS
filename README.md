@@ -123,10 +123,10 @@ To build GatOS using the toolchain binaries:
 
 ```bash
 # One time setup: Install and configure the toolchain
-python3 setup.py
+python setup.py
 
 # Build and run the kernel in QEMU
-python3 run.py
+python run.py
 
 # That's it!
 ```
@@ -136,19 +136,19 @@ python3 run.py
 The `run.py` script supports several commands and options:
 ```bash
 # Clean build artifacts
-python3 run.py clean
+python run.py clean
 
 # Build without running in QEMU
-python3 run.py build
+python run.py build
 
 # Build (or build & run) an optimized (fast) image
-python3 run.py [build] fast
+python run.py [build] fast
 
 # Build (or build & run) a highly optimized (very fast) image
-python3 run.py [build] vfast
+python run.py [build] vfast
 
 # Display all available commands and options
-python3 run.py help
+python run.py help
 ```
 
 > [!NOTE]
@@ -182,36 +182,33 @@ These scripts exist solely for transparency and educational insight, not as a su
 
 ## Testing
 
-Currently, there is no formal testing suite built into the project. I'm working with a more... let's call it "primitive" approach, haha. Well, OS-dev doesn't give you any leeway for testing tools anyway :)
-
-### Current Testing Approach
-
-The testing is done through runtime debugging and manual verification:
-
-- **Debug Output**: We use the `DEBUG_LOG(string, TOTAL_DBG)` function in C to output messages to QEMU's serial console
-- **Manual Verification**: Check the QEMU serial output to see if we've hit specific points in the code
-- **GitHub Actions**: There's a workflow that checks the QEMU serial output for basic functionality validation
-
-It's not pretty, but it works for now while the core functionality is being developed.
+As of GatOS version `1.7.5-alpha`, a test suite has been included in the kernel itself. It is built to be run in a live environment, which means, the kernel itself will run the tests if you instruct it to do so.
 
 ### Running Tests
 
-Since there's no automated test suite, "testing" means running the kernel and checking if your debug messages appear:
+To build a GatOS Test image, all you need to do is specify it in `run.py`:
 
-```c
-#include <debug.h>
-#define TOTAL_DBG 2 # Number of total DEBUG calls
-
-void my_function() {
-    DEBUG_LOG("Made it to my_function - things are working!", TOTAL_DBG);
-    
-    // Your code here
-    
-    DEBUG_LOG("Still alive after doing stuff", TOTAL_DBG);
-}
+```python
+python run.py build test
 ```
 
-Then run `./run.sh` and watch the serial output to see if your messages appear.
+To run it (aka, to run the tests):
+
+```python
+python run.py test
+```
+
+### Current Testing Approach
+
+Currently, most of the tests are ran locally before deployment. It is not pretty, but it works while the core functionality is being developed. There are workflows that check the debug log output for the built-in tests as well.
+
+If you want to automate the test process in a server (just like my Github runners), you can run a headless version of QEMU with a timeout, like so:
+
+```python
+python run.py test headless timeout=15s
+```
+
+The timeout is for the runner to stop QEMU after the specified time has elapsed. After that, you are free to write your own logic to parse `debug.log` and see if any tests have failed.
 
 ## Development
 
@@ -226,21 +223,25 @@ The development process follows a pretty standard Git workflow:
 
 ### Debugging
 
-The main debugging tool is the `DEBUG_LOG()` function. It's your best friend for figuring out what's happening (or not happening) in the kernel:
+The main debugging tool is the `QEMU_LOG()` function. It's your best friend for figuring out what's happening (or not happening) in the kernel:
 
 ```c
-DEBUG_LOG("Kernel booting...", TOTAL_DBG);
+QEMU_LOG("Kernel booting...", TOTAL_DBG);
 // ... some code ...
-DEBUG_LOG("Memory manager initialized", TOTAL_DBG);
+QEMU_LOG("Memory manager initialized", TOTAL_DBG);
 // ... more code ...
-DEBUG_LOG("Ready to handle interrupts", TOTAL_DBG);
+QEMU_LOG("Ready to handle interrupts", TOTAL_DBG);
 ```
 
-You can also use all functions defined in `debug.h`, such as `DEBUG_DUMP_PMT` for example, which dumps your page table structure in QEMU.
+You can also use all functions defined in `debug.h`, such as `QEMU_DUMP_PMT` for example, which dumps your page table structure in QEMU.
 
 ## Documentation
 
 A lot of documentation and writeups are available in the [`docs/`](./docs/) folder, though this is not the focus of the project. This includes development notes, architecture decisions, learning resources, and basically everything I've figured out (or struggled with) during this journey.
+
+Please note that the documentation is NOT always up to date. This is because new features (which are merged from new branches) are subject to change. It wouldn't be smart to update the documentation with every new release, if the next one will tweak things again.
+
+For this reason, documentation gets updated after every 2-3 merges, when features have been solidifed into the kernel.
 
 Again, a reminder that [Skyl-OS](https://github.com/Billyzeim/Skyl-OS) is a much better resource for beginners!
 
