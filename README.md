@@ -15,6 +15,7 @@ The first section of this README focuses on providing some insight as to the vis
 
 - [Project Overview & Background](#project-overview--background)
 - [Getting Started](#getting-started)
+- [Building the Toolchain from Source](#building-the-toolchain-from-source)
 - [Testing](#testing)
 - [Development](#development)
 - [Documentation](#documentation)
@@ -90,68 +91,124 @@ This is either a feat of legendary ambition or an elaborate self-inflicted stres
 
 ## Getting Started
 
+These instructions will get you a copy of the project up and running on your local machine for development and testing purposes.
+
 > [!IMPORTANT]
 > This project is a work in progress and building is not seamless yet. The project is not ready to be run locally in general, but if you're feeling adventurous and have the right setup, you can give it a shot.
 
-These instructions will get you a copy of the project up and running on your local machine for development and testing purposes.
-
 ### Prerequisites
 
-Currently supported systems:
-- **Ubuntu/Debian Linux** (including WSL)
-- Systems with `apt` package manager
+Starting with `GatOS v1.7.5`, the build system's toolchain (GCC, Binutils, QEMU, GRUB, mtools, xorriso) has been statically cross-compiled for all major platforms. This enables a truly portable build system, allowing users to build the kernel on any mainstream operating system without installing dependencies.
 
-If you have `apt` as your package manager and run on Ubuntu or Debian in Linux or WSL, you should be able to just run the setup script for prerequisites.
+### Supported Platforms
 
-### Quick Start (Ubuntu/Debian)
+The following platforms are fully supported:
+
+- **Linux** - Almost all distributions (including WSL) with Python 3.13+
+- **Windows** - All versions that support Python 3.13+
+- **macOS** - Both Intel and Apple Silicon (ARM) with Python 3.13+
+
+### Quick Start
+
+To build GatOS using the toolchain binaries:
+
+1. Ensure Python 3.13+ is installed
+2. Run the setup script to install and configure the toolchain (one-time setup)
+3. Use the run script to build and execute the kernel
+
+> [!NOTE]
+> The prebuilt binaries are stable and will **NOT** be updated unless absolutely necessary.
+
+#### Basic Usage:
 
 ```bash
-# Exec permissions for setup and run bash scripts
-chmod +x setup.sh
-chmod +x run.sh
+# One time setup: Install and configure the toolchain
+python setup.py
 
-# Install prerequisites (don't forget to restart your terminal)
-./setup.sh
+# Build and run the kernel in QEMU
+python run.py
 
-# Run the kernel in QEMU
-./run.sh
+# That's it!
+```
+
+#### Build Options:
+
+The `run.py` script supports several commands and options:
+```bash
+# Clean build artifacts
+python run.py clean
+
+# Build without running in QEMU
+python run.py build
+
+# Build (or build & run) an optimized (fast) image
+python run.py [build] fast
+
+# Build (or build & run) a highly optimized (very fast) image
+python run.py [build] vfast
+
+# Display all available commands and options
+python run.py help
 ```
 
 > [!NOTE]
-> These scripts are for development purposes. The system may not work as expected, and features are subject to change as the project evolves.
+> These scripts are intended for development purposes. The system is under active development, and features may change as the project evolves.
+
+
+## Building the Toolchain from Source
+
+> [!CAUTION]
+> **This is strongly discouraged**, even for experienced developers.
+> Attempt this only if you fully understand the scale of the undertaking.
+
+While you *can try* to build the entire toolchain statically for your own platform if you do not wish to rely on the prebuilt binaries, please understand the following realities:
+
+* The process is **extremely complex**, fragile, and heavily dependent on the host environment.
+* It required **over 3 weeks** of nonstop trial and error to complete the provided build.
+* Multiple components required **custom patching**, chaining patches on top of patches just to get them to compile.
+* Keeping these builds working across platforms and versions would essentially require maintaining **an entirely separate project in its own right**.
+* **No support will be provided** for source builds, because quite frankly it is outside the scope of the project.
+
+Because I understand how difficult this process is, a small collection of experimental, incomplete, and largely unmaintained build scripts is included under `docs/toolchain/`. 
+
+They:
+
+* are **not guaranteed to work**,
+* are **not tested**,
+* can **break without warning**, and
+* will almost certainly require **manual intervention** and fresh patching for newer upstream releases.
+
+These scripts exist solely for transparency and educational insight, not as a supported or reliable build pipeline. For almost all users, including developers, using the prebuilt portable toolchain is the strongly recommended and intended workflow.
 
 ## Testing
 
-Currently, there is no formal testing suite built into the project. I'm working with a more... let's call it "primitive" approach, haha. Well, OS-dev doesn't give you any leeway for testing tools anyway :)
-
-### Current Testing Approach
-
-The testing is done through runtime debugging and manual verification:
-
-- **Debug Output**: We use the `DEBUG_LOG(string, TOTAL_DBG)` function in C to output messages to QEMU's serial console
-- **Manual Verification**: Check the QEMU serial output to see if we've hit specific points in the code
-- **GitHub Actions**: There's a workflow that checks the QEMU serial output for basic functionality validation
-
-It's not pretty, but it works for now while the core functionality is being developed.
+As of GatOS version `1.7.5-alpha`, a test suite has been included in the kernel itself. It is built to be run in a live environment, which means, the kernel itself will run the tests if you instruct it to do so.
 
 ### Running Tests
 
-Since there's no automated test suite, "testing" means running the kernel and checking if your debug messages appear:
+To build a GatOS Test image, all you need to do is specify it in `run.py`:
 
-```c
-#include <debug.h>
-#define TOTAL_DBG 2 # Number of total DEBUG calls
-
-void my_function() {
-    DEBUG_LOG("Made it to my_function - things are working!", TOTAL_DBG);
-    
-    // Your code here
-    
-    DEBUG_LOG("Still alive after doing stuff", TOTAL_DBG);
-}
+```bash
+python run.py build test
 ```
 
-Then run `./run.sh` and watch the serial output to see if your messages appear.
+To run it (aka, to run the tests):
+
+```bash
+python run.py test
+```
+
+### Current Testing Approach
+
+Currently, most of the tests are ran locally before deployment. It is not pretty, but it works while the core functionality is being developed. There are workflows that check the debug log output for the built-in tests as well.
+
+If you want to automate the test process in a server (just like my Github runners), you can run a headless version of QEMU with a timeout, like so:
+
+```python
+python run.py test headless timeout=15s
+```
+
+The timeout is for the runner to stop QEMU after the specified time has elapsed. After that, you are free to write your own logic to parse `debug.log` and see if any tests have failed.
 
 ## Development
 
@@ -166,21 +223,25 @@ The development process follows a pretty standard Git workflow:
 
 ### Debugging
 
-The main debugging tool is the `DEBUG_LOG()` function. It's your best friend for figuring out what's happening (or not happening) in the kernel:
+The main debugging tool is the `QEMU_LOG()` function. It's your best friend for figuring out what's happening (or not happening) in the kernel:
 
 ```c
-DEBUG_LOG("Kernel booting...", TOTAL_DBG);
+QEMU_LOG("Kernel booting...", TOTAL_DBG);
 // ... some code ...
-DEBUG_LOG("Memory manager initialized", TOTAL_DBG);
+QEMU_LOG("Memory manager initialized", TOTAL_DBG);
 // ... more code ...
-DEBUG_LOG("Ready to handle interrupts", TOTAL_DBG);
+QEMU_LOG("Ready to handle interrupts", TOTAL_DBG);
 ```
 
-You can also use all functions defined in `debug.h`, such as `DEBUG_DUMP_PMT` for example, which dumps your page table structure in QEMU.
+You can also use all functions defined in `debug.h`, such as `QEMU_DUMP_PMT` for example, which dumps your page table structure in QEMU.
 
 ## Documentation
 
 A lot of documentation and writeups are available in the [`docs/`](./docs/) folder, though this is not the focus of the project. This includes development notes, architecture decisions, learning resources, and basically everything I've figured out (or struggled with) during this journey.
+
+Please note that the documentation is NOT always up to date. This is because new features (which are merged from new branches) are subject to change. It wouldn't be smart to update the documentation with every new release, if the next one will tweak things again.
+
+For this reason, documentation gets updated after every 2-3 merges, when features have been solidifed into the kernel.
 
 Again, a reminder that [Skyl-OS](https://github.com/Billyzeim/Skyl-OS) is a much better resource for beginners!
 

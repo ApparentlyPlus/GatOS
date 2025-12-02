@@ -1,0 +1,69 @@
+name: GatOS Windows
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'targets/**'
+      - '*.py'
+
+jobs:
+  windows-test:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python 3.13
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+
+    - name: Install Toolchain
+      run: python setup.py
+
+    - name: Build and Run Kernel (Headless)
+      run: python run.py test headless timeout=15s
+
+    - name: Parse Test Results
+      shell: powershell
+      run: |
+        if (-not (Test-Path debug.log)) {
+            Write-Error "debug.log not found!"
+            exit 1
+        }
+
+        $content = Get-Content debug.log
+        $matches = $content | Select-String "Test Results:\s*(\d+)/(\d+)"
+        
+        if (-not $matches) {
+            Write-Error "No test result summaries found in logs!"
+            exit 1
+        }
+
+        $failed = $false
+
+        foreach ($match in $matches) {
+            Write-Host "Analyzing: $($match.Line)"
+            $passed = [int]$match.Matches.Groups[1].Value
+            $total = [int]$match.Matches.Groups[2].Value
+
+            if ($passed -ne $total) {
+                Write-Error "FAILURE detected in: $($match.Line)"
+                $failed = $true
+            }
+        }
+
+        if ($failed) {
+            exit 1
+        }
+        Write-Host "SUCCESS: All test suites passed."
+
+    - name: Upload Debug Log
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: debug-log-windows
+        path: debug.log
