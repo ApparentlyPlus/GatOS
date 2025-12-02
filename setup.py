@@ -182,6 +182,9 @@ def verify_tools_exist(toolchain_root, os_key):
 # Main Logic
 
 def main():
+    if sys.stdout.encoding != 'utf-8':
+        sys.stdout.reconfigure(encoding='utf-8')
+        
     print_banner()
 
     #OS Detection

@@ -11,6 +11,8 @@ on:
 jobs:
   windows-test:
     runs-on: windows-latest
+    env:
+      PYTHONUTF8: "1"
     
     steps:
     - name: Checkout code
@@ -22,10 +24,10 @@ jobs:
         python-version: '3.13'
 
     - name: Install Toolchain
-      run: python setup.py
+      run: python -X utf8 setup.py
 
     - name: Build and Run Kernel (Headless)
-      run: python run.py test headless timeout=15s
+      run: python -X utf8 run.py test headless timeout=15s
 
     - name: Parse Test Results
       shell: powershell
