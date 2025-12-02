@@ -20,6 +20,7 @@ GREEN = '\033[1;32m'
 RED = '\033[1;31m'
 YELLOW = '\033[1;33m'
 BLUE = '\033[1;34m'
+CYAN = '\033[1;36m'
 
 if os.name == 'nt':
     OS_NAME = "win"
@@ -112,14 +113,20 @@ BUILD_PROFILES = {
 
 # Core Functions
 
-def run_cmd(cmd: List[str | Path], cwd: Optional[Path] = None, env: Optional[Dict] = None, check: bool = True) -> bool:
+def run_cmd(cmd: List[str | Path], cwd: Optional[Path] = None, env: Optional[Dict] = None, check: bool = True, timeout: int = None) -> bool:
     cmd_str = [str(c) for c in cmd]
     print(f"{BLUE}>>> {' '.join(cmd_str)}{f' (in {cwd})' if cwd else ''}{NC}")
+    
     run_env = os.environ.copy()
     if env: run_env.update(env)
+    
     try:
-        subprocess.run(cmd_str, cwd=cwd, env=run_env, check=check, text=True)
+        subprocess.run(cmd_str, cwd=cwd, env=run_env, check=check, text=True, timeout=timeout)
         return True
+    except subprocess.TimeoutExpired:
+        # Caller handles specific logic, but we print a generic warning here
+        sys.stderr.write(f"\n{YELLOW}[WARN] Process timed out after {timeout}s (This is expected for timeout tests).{NC}\n")
+        return False
     except subprocess.CalledProcessError as e:
         sys.stderr.write(f"{RED}[ERROR] Command failed with exit code {e.returncode}{NC}\n")
         if check: sys.exit(e.returncode)
@@ -271,38 +278,107 @@ def find_iso_file() -> Optional[Path]:
     isos.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     return isos[0]
 
-def run_qemu(iso_file: Path):
+# Parse headless and timeout options
+
+def parse_timeout(val: str) -> Optional[int]:
+    """Parses 10s, 2m, 1h into seconds."""
+    match = re.match(r"^(\d+)([smh])$", val)
+    if not match:
+        sys.stderr.write(f"{YELLOW}[WARN] Invalid timeout format '{val}'. Ignoring. Use 10s, 5m, etc.{NC}\n")
+        return None
+    num, unit = int(match.group(1)), match.group(2)
+    if unit == 's': return num
+    if unit == 'm': return num * 60
+    if unit == 'h': return num * 3600
+    return None
+
+def run_qemu(iso_file: Path, headless: bool = False, timeout: Optional[int] = None):
     print(f"{GREEN}[SUCCESS] Starting QEMU with {iso_file.name}...{NC}")
+    print(f"{CYAN}   > Mode: {'Headless' if headless else 'GUI'}")
+    print(f"   > Timeout: {f'{timeout} seconds' if timeout else 'None'}{NC}")
+    
     qemu_cmd = [str(QEMU_EXEC)]
     if OS_NAME == "linux": qemu_cmd.append("qemu-system-x86_64")
-    run_cmd([*qemu_cmd, "-cdrom", str(iso_file), "-serial", "mon:stdio", "-serial", f"file:{DEBUG_LOG}"], check=False)
+    
+    # QEMU Flags
+    args = [
+        "-cdrom", str(iso_file),
+        "-serial", "mon:stdio",
+        "-serial", f"file:{DEBUG_LOG}"
+    ]
+    
+    if headless:
+        args.append("-nographic")
+    
+    qemu_cmd.extend(args)
+    
+    # We use run_cmd but need to handle the fact that timeout might kill it cleanly
+    run_cmd(qemu_cmd, check=False, timeout=timeout)
+    
+    if timeout:
+        print(f"{GREEN}[INFO] QEMU session ended (Timeout enforced).{NC}")
+
+def print_help():
+    print(f"""
+{GREEN}GatOS Build System{NC}
+{CYAN}Usage: python run.py [COMMAND] [BUILD PROFILE] [RUN OPTIONS]{NC}
+
+{YELLOW}Commands:{NC}
+  {GREEN}all{NC}       Clean, Build, and Run (Default if no command specified)
+  {GREEN}build{NC}     Build the ISO only
+  {GREEN}clean{NC}     Remove all build artifacts
+  {GREEN}help{NC}      Show this help menu
+
+{YELLOW}Build Profiles (Optional):{NC}
+  {GREEN}default{NC}   Standard debug build
+  {GREEN}test{NC}      Defines -DTEST_BUILD
+  {GREEN}fast{NC}      -O2 optimizations
+  {GREEN}vfast{NC}     -O3 aggressive optimizations (Requires confirmation)
+
+{YELLOW}Run Options (QEMU):{NC}
+  {GREEN}headless{NC}      Run QEMU without a GUI (uses -nographic)
+  {GREEN}timeout=XX{NC}    Kill QEMU after XX duration (e.g., 10s, 2m, 1h)
+
+{BLUE}Examples:{NC}
+  python run.py all vfast headless
+  python run.py build test
+  python run.py all timeout=30s
+    """)
 
 # Entry Point
 
 def main():
-    parser = argparse.ArgumentParser(description="GatOS Build System")
-    parser.add_argument("args", nargs="*", help="Command (clean, build, all) and/or Profile (fast, vfast)")
+    parser = argparse.ArgumentParser(description="GatOS Build System", add_help=False)
+    parser.add_argument("args", nargs="*", help="Flexible arguments")
     args_parsed = parser.parse_args()
     user_args = args_parsed.args
 
+    # State
     command = "all"
-    profile = "default"
+    build_profile = "default"
+    run_headless = False
+    run_timeout = None
 
-    valid_commands = {"all", "build", "clean"}
-    valid_profiles = set(BUILD_PROFILES.keys())
+    valid_commands = {"all", "build", "clean", "help"}
+    valid_build_profiles = set(BUILD_PROFILES.keys())
 
+    # Improved Parser
     for arg in user_args:
-        if arg in valid_commands:
-            command = arg
-        elif arg in valid_profiles:
-            profile = arg
+        arg_lower = arg.lower()
+        
+        if arg_lower == "help":
+            print_help()
+            sys.exit(0)
+        elif arg_lower in valid_commands:
+            command = arg_lower
+        elif arg_lower in valid_build_profiles:
+            build_profile = arg_lower
+        elif arg_lower == "headless":
+            run_headless = True
+        elif arg_lower.startswith("timeout="):
+            run_timeout = parse_timeout(arg_lower.split("=")[1])
         else:
             print(f"{YELLOW}[WARN] Unknown argument '{arg}', ignoring.{NC}")
-
-    c_src = list(SRC_DIR.rglob("*.c"))
-    asm_src = list(SRC_DIR.rglob("*.S"))
-    obj_files = [BUILD_DIR / f.relative_to(SRC_DIR).with_suffix(".o") for f in c_src + asm_src]
-    iso_name = f"GatOS-{"Test-Build-" if profile == "test" else ""}{get_kernel_version()}.iso"
 
     if command == "clean":
         clean()
@@ -310,15 +386,22 @@ def main():
 
     if not verify_environment(): sys.exit(1)
 
+    c_src = list(SRC_DIR.rglob("*.c"))
+    asm_src = list(SRC_DIR.rglob("*.S"))
+    obj_files = [BUILD_DIR / f.relative_to(SRC_DIR).with_suffix(".o") for f in c_src + asm_src]
+    iso_name = f"GatOS-{"Test-Build-" if build_profile == "test" else ""}{get_kernel_version()}.iso"
+
     if command == "build":
         clean()
-        build_iso(c_src, asm_src, obj_files, iso_name, profile)
+        build_iso(c_src, asm_src, obj_files, iso_name, build_profile)
     elif command == "all":
         try: clean()
         except Exception: pass
-        build_iso(c_src, asm_src, obj_files, iso_name, profile)
+        build_iso(c_src, asm_src, obj_files, iso_name, build_profile)
+        
         iso = find_iso_file()
-        if iso: run_qemu(iso)
+        if iso: 
+            run_qemu(iso, headless=run_headless, timeout=run_timeout)
         else:
             sys.stderr.write(f"{RED}[ERROR] ISO file not found after build.{NC}\n")
             sys.exit(1)
