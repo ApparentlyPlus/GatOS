@@ -26,7 +26,7 @@
 
 #define TOTAL_DBG 15
 
-static char* KERNEL_VERSION = "v1.7.4-alpha";
+static char* KERNEL_VERSION = "v1.7.5-alpha";
 
 // If it is a test build, the multiboot buffer will be defined in tests.c
 #ifndef TEST_BUILD

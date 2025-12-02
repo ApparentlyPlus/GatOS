@@ -1,0 +1,73 @@
+name: GatOS macOS
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'targets/**'
+      - '*.py'
+
+jobs:
+  macos-test:
+    runs-on: macos-14
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python 3.13
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+
+    - name: Install Toolchain
+      run: python setup.py
+
+    - name: Build and Run Kernel (Headless)
+      run: python run.py test headless timeout=15s
+
+    - name: Parse Test Results
+      shell: bash
+      run: |
+        if [ ! -f debug.log ]; then
+          echo "::error::debug.log not found!"
+          exit 1
+        fi
+
+        failures=0
+        found_tests=0
+
+        while IFS= read -r line; do
+          found_tests=$((found_tests+1))
+          echo "Analyzing: $line"
+          
+          if [[ $line =~ ([0-9]+)/([0-9]+) ]]; then
+            passed=${BASH_REMATCH[1]}
+            total=${BASH_REMATCH[2]}
+            
+            if [ "$passed" -ne "$total" ]; then
+              echo "::error::FAILURE detected in: $line"
+              failures=$((failures+1))
+            fi
+          fi
+        done < <(grep "Test Results:" debug.log)
+
+        if [ "$found_tests" -eq 0 ]; then
+          echo "::error::No test result summaries found in logs!"
+          exit 1
+        fi
+
+        if [ "$failures" -ne 0 ]; then
+          echo "::error::$failures test suites failed."
+          exit 1
+        fi
+
+        echo "SUCCESS: All $found_tests test suites passed."
+
+    - name: Upload Debug Log
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: debug-log-macos
+        path: debug.log
