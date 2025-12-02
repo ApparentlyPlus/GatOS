@@ -188,13 +188,13 @@ As of GatOS version `1.7.5-alpha`, a test suite has been included in the kernel 
 
 To build a GatOS Test image, all you need to do is specify it in `run.py`:
 
-```python
+```bash
 python run.py build test
 ```
 
 To run it (aka, to run the tests):
 
-```python
+```bash
 python run.py test
 ```
 
