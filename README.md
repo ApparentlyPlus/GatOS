@@ -1,6 +1,8 @@
 # GatOS: A Versatile, Modular Kernel for Toy-OS Builds
 
-[![GatOS CI](https://github.com/ApparentlyPlus/GatOS/actions/workflows/kernel.yml/badge.svg)](https://github.com/ApparentlyPlus/GatOS/actions/workflows/kernel.yml)
+[![GatOS Linux](https://github.com/ApparentlyPlus/GatOS/actions/workflows/linux.yml/badge.svg)](https://github.com/ApparentlyPlus/GatOS/actions/workflows/linux.yml)
+[![GatOS Windows](https://github.com/ApparentlyPlus/GatOS/actions/workflows/windows.yml/badge.svg)](https://github.com/ApparentlyPlus/GatOS/actions/workflows/windows.yml)
+[![GatOS macOS](https://github.com/ApparentlyPlus/GatOS/actions/workflows/macOS.yml/badge.svg)](https://github.com/ApparentlyPlus/GatOS/actions/workflows/macOS.yml)
 [![License: Custom](https://img.shields.io/badge/License-Custom-red.svg)](#license)
 
 GatOS is a cleanly designed, modular kernel serving as the foundational layer for building toy operating systems. It is also part of my undergraduate thesis at the [University of Macedonia](https://www.uom.gr/en/dai), and serves as the backbone of a configurable, toy-OS building toolchain called PawStack.
