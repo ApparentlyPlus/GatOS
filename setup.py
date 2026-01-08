@@ -135,13 +135,89 @@ def extract_toolchain(zip_path, extract_to):
         sys.exit(1)
 
 def fix_mac_quarantine(folder):
-    if sys.platform == "darwin":
-        print(f"{Colors.YELLOW}[INFO] Removing macOS quarantine attributes...{Colors.RESET}")
+    if sys.platform != "darwin":
+        return
+
+    print(f"{Colors.YELLOW}[INFO] MacOS Detected: Analyzing binaries and fixing Gatekeeper...{Colors.RESET}")
+    
+    target_path = Path(folder)
+    
+    # Mach-O Magic Bytes (covers 32/64 bit LE/BE and Universal binaries)
+    # This identifies executables AND dylibs (dependencies)
+    MACHO_MAGIC = {
+        b'\xfe\xed\xfa\xce', b'\xfe\xed\xfa\xcf',
+        b'\xce\xfa\xed\xfe', b'\xcf\xfa\xed\xfe',
+        b'\xca\xfe\xba\xbe'
+    }
+
+    # State for sudo persistence
+    use_sudo = False
+
+    def run_secure(cmd_list, file_desc):
+        nonlocal use_sudo
+        
+        # Prepare command
+        cmd = ["sudo"] + cmd_list if use_sudo else cmd_list
+        
+        # Run command
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        
+        # Check for permission denied
+        if res.returncode != 0 and "Permission denied" in res.stderr:
+            if not use_sudo:
+                print(f"{Colors.YELLOW}[WARN] Permission denied while processing {file_desc}.{Colors.RESET}")
+                choice = input(f"{Colors.CYAN}    > The script needs 'sudo' to fix this. Allow? (y/N): {Colors.RESET}").strip().lower()
+                
+                if choice == 'y':
+                    use_sudo = True
+                    # Retry with sudo
+                    cmd = ["sudo"] + cmd_list
+                    res = subprocess.run(cmd, capture_output=True, text=True)
+                else:
+                    print(f"{Colors.RED}[ERR] Skipping {file_desc} (No permission).{Colors.RESET}")
+                    return res
+            else:
+                # Failed even with sudo
+                return res
+        
+        return res
+
+    count = 0
+    # Recursive walk
+    for file_path in target_path.rglob("*"):
+        if not file_path.is_file() or file_path.is_symlink():
+            continue
+
+        # Check if file is a Mach-O binary or dylib
+        is_binary = False
         try:
-            subprocess.run(["xattr", "-r", "-d", "com.apple.quarantine", str(folder)], 
-                           check=False, capture_output=True)
+            with open(file_path, "rb") as f:
+                header = f.read(4)
+                if header in MACHO_MAGIC:
+                    is_binary = True
+        except PermissionError:
+            # If we can't read it, we likely need sudo to handle it anyway
+            is_binary = True 
         except Exception:
-            pass # Ignore if xattr isn't found or fails
+            continue
+
+        if is_binary:
+            # Remove Quarantine
+            # We explicitly ignore "No such xattr" errors (return code != 0 but typical stderr)
+            # We ONLY care if it failed due to permissions, which run_secure handles.
+            run_secure(["xattr", "-d", "com.apple.quarantine", str(file_path)], file_path.name)
+            
+            # Ad-hoc Sign
+            # codesign -f -s - <file>
+            res_sign = run_secure(["codesign", "--force", "--sign", "-", str(file_path)], file_path.name)
+            
+            if res_sign.returncode != 0:
+                # Log actual signing errors
+                print(f"{Colors.RED}[FAIL] Signing error on {file_path.name}: {res_sign.stderr.strip()}{Colors.RESET}")
+            else:
+                count += 1
+
+    print(f"{Colors.GREEN}[DONE] Security patches applied to {count} binaries/libs.{Colors.RESET}")
 
 def verify_tools_exist(toolchain_root, os_key):
     exe_ext = ".exe" if os_key == "win" else ""
