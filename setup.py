@@ -26,7 +26,7 @@ CONFIG = {
     },
     "darwin": {
         "url": "https://github.com/ApparentlyPlus/GatOS/releases/download/build-toolchain/x86_64-macOS.zip",
-        "hash": "55b5779aba491a87b4f7ff87c2283bfaf70faaaee7bc4c8287ecbb82d648cb52",
+        "hash": "1a35a1cb6169f684ae90c3d1841c40351767bce763c9bafbda66b192e3b45a1a",
         "folder_name": "x86_64-macos"
     },
     "win32": {
