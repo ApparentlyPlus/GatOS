@@ -1,0 +1,1 @@
+Build or get the binaries from https://github.com/lordmilko/i686-elf-tools (instructions are crystal clear)
