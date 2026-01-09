@@ -93,49 +93,42 @@ This is either a feat of legendary ambition or an elaborate self-inflicted stres
 
 ## Getting Started
 
-These instructions will get you a copy of the project up and running on your local machine for development and testing purposes.
-
-> [!IMPORTANT]
-> This project is a work in progress and building is not seamless yet. The project is not ready to be run locally in general, but if you're feeling adventurous and have the right setup, you can give it a shot.
-
-### Prerequisites
-
-Starting with `GatOS v1.7.5`, the build system's toolchain (GCC, Binutils, QEMU, GRUB, mtools, xorriso) has been statically cross-compiled for all major platforms. This enables a truly portable build system, allowing users to build the kernel on any mainstream operating system without installing dependencies.
-
-### Supported Platforms
-
-The following platforms are fully supported:
-
-- **Linux** - Almost all distributions (including WSL) with Python 3.13+
-- **Windows** - All versions that support Python 3.13+
-- **macOS** - Both Intel and Apple Silicon (ARM) with Python 3.13+
-
-### Quick Start
-
-To build GatOS using the toolchain binaries:
-
-1. Ensure Python 3.13+ is installed
-2. Run the setup script to install and configure the toolchain (one-time setup)
-3. Use the run script to build and execute the kernel
-
-> [!NOTE]
-> The prebuilt binaries are stable and will **NOT** be updated unless absolutely necessary.
-
-#### Basic Usage:
+Building and running GatOS is designed to be exceedingly simple. If you have **Python 3.13+**, you can go from zero to running the kernel in two steps:
 
 ```bash
-# One time setup: Install and configure the toolchain
-python setup.py
+# 1. Install and configure the portable toolchain
+python3 setup.py
 
-# Build and run the kernel in QEMU
-python run.py
-
-# That's it!
+# 2. Build and run the kernel in QEMU
+python3 run.py
 ```
 
-#### Build Options:
+> [!IMPORTANT]
+> While the *build process* is seamless, the kernel itself is a work in progress. Features may be incomplete or unstable, and are subject to change.
 
-The `run.py` script supports several commands and options:
+### How is this possible?
+
+Starting with `GatOS v1.7.5`, the entire build toolchain (GCC, Binutils, QEMU, GRUB, mtools, xorriso) is statically cross-compiled and bundled.
+
+This means no dependency hell, and full portability:
+
+* You **do not need** to install `qemu`, `gcc`, or `make` on your host machine.
+* The build runs identically on **Linux** (including WSL), **Windows**, and **macOS** (Intel & Apple Silicon).
+
+### Advanced Usage
+
+While `python3 run.py` is enough for most cases, the script accepts several arguments for development:
+
+| Command | Description |
+| --- | --- |
+| `clean` | Removes all build artifacts. |
+| `build` | Compiles the kernel without launching QEMU. |
+| `fast` | Builds/Runs an optimized image (O2). |
+| `vfast` | Builds/Runs a highly optimized image (O3/Ofast). |
+| `help` | Displays full list of available options. |
+
+Examples:
+
 ```bash
 # Clean build artifacts
 python run.py clean
@@ -152,9 +145,6 @@ python run.py [build] vfast
 # Display all available commands and options
 python run.py help
 ```
-
-> [!NOTE]
-> These scripts are intended for development purposes. The system is under active development, and features may change as the project evolves.
 
 
 ## Building the Toolchain from Source
