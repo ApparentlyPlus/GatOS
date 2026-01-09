@@ -7,6 +7,7 @@
 #include <arch/x86_64/cpu/interrupts.h>
 #include <kernel/drivers/vga_stdio.h>
 #include <kernel/sys/panic.h>
+#include <kernel/sys/apic.h>
 #include <kernel/debug.h>
 #include <kernel/misc.h>
 #include <libc/string.h>
@@ -217,9 +218,23 @@ cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
             panic_c("A SIMD floating point erroroccured, check SSE", context);
             break;
 
+        case INT_SPURIOUS_INTERRUPT:
+            // Spurious interrupts are ignored
+            break;
+
         default:
-            QEMU_GENERIC_LOG("[EXCEPTION] Unknown exception!\n");
-            panic_c("Unknown interrupt vector", context);
+            // If the vector is >= 32, it could be a hardware interrupt
+            if (context->vector_number >= 32) {
+                LOGF("[INT] Received interrupt vector: %d\n", context->vector_number);
+                
+                // Handle specific hardware vectors here
+                
+                lapic_eoi();
+            } 
+            else {
+                QEMU_GENERIC_LOG("[EXCEPTION] Unknown exception!\n");
+                panic_c("Unknown interrupt vector", context);
+            }
             break;
     }
 

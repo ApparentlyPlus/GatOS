@@ -165,8 +165,7 @@ void kernel_main(void* mb_info) {
 	QEMU_LOG("Reached kernel end", TOTAL_DBG);
 
 	#include <kernel/sys/apic.h>
-	uint64_t lapic_address = get_lapic_address(true);
-	printf("[APIC] Local APIC address: 0x%llx\n", lapic_address);
+	lapic_init();
 
 	#endif
 }

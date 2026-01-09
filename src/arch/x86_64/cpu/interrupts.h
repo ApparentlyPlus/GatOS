@@ -88,6 +88,8 @@ typedef struct
 #define INT_MACHINE_CHECK       18   // #MC - Machine Check
 #define INT_SIMD_ERROR          19   // #XF - SIMD (SSE/AVX) error
 
+#define INT_SPURIOUS_INTERRUPT  255  // Spurious Interrupt Vector
+
 // Useful for loops and bounds checking
 #define INT_FIRST_EXCEPTION      0
 #define INT_LAST_EXCEPTION       31
