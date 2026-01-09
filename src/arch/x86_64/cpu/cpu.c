@@ -17,7 +17,7 @@ static CPUInfo g_cpu;
 /*
  * cpuid - Execute the CPUID instruction with given EAX and ECX inputs
  */
-static inline void cpuid(uint32_t eax, uint32_t ecx, uint32_t* a, uint32_t* b, uint32_t* c, uint32_t* d)
+void cpuid(uint32_t eax, uint32_t ecx, uint32_t* a, uint32_t* b, uint32_t* c, uint32_t* d)
 {
     __asm__ volatile("cpuid"
                      : "=a"(*a), "=b"(*b), "=c"(*c), "=d"(*d)
@@ -27,7 +27,7 @@ static inline void cpuid(uint32_t eax, uint32_t ecx, uint32_t* a, uint32_t* b, u
 /*
  * read_msr - Read a Model-Specific Register (MSR)
  */
-static inline uint64_t read_msr(uint32_t msr)
+uint64_t read_msr(uint32_t msr)
 {
     uint32_t low, high;
     __asm__ volatile("rdmsr" : "=a"(low), "=d"(high) : "c"(msr));
@@ -37,7 +37,7 @@ static inline uint64_t read_msr(uint32_t msr)
 /*
  * write_msr - Write a Model-Specific Register (MSR)
  */
-static inline void write_msr(uint32_t msr, uint64_t value)
+void write_msr(uint32_t msr, uint64_t value)
 {
     uint32_t low = (uint32_t)value;
     uint32_t high = (uint32_t)(value >> 32);
@@ -47,7 +47,7 @@ static inline void write_msr(uint32_t msr, uint64_t value)
 /*
  * read_cr0 - Read from Control Register CR0
  */
-static inline uint64_t read_cr0(void)
+uint64_t read_cr0(void)
 { 
     uint64_t val; 
     __asm__ volatile("mov %%cr0, %0" : "=r"(val)); 
@@ -57,7 +57,7 @@ static inline uint64_t read_cr0(void)
 /*
  * write_cr0 - Write to Control Register CR0
  */
-static inline void write_cr0(uint64_t val) 
+void write_cr0(uint64_t val) 
 { 
     __asm__ volatile("mov %0, %%cr0" :: "r"(val)); 
 }
@@ -65,7 +65,7 @@ static inline void write_cr0(uint64_t val)
 /*
  * read_cr4 - Read from Control Register CR4
  */
-static inline uint64_t read_cr4(void)
+uint64_t read_cr4(void)
 { 
     uint64_t val;
     __asm__ volatile("mov %%cr4, %0" : "=r"(val)); 
@@ -75,7 +75,7 @@ static inline uint64_t read_cr4(void)
 /*
  * write_cr4 - Write to Control Register CR4
  */
-static inline void write_cr4(uint64_t val)
+void write_cr4(uint64_t val)
 { 
     __asm__ volatile("mov %0, %%cr4" :: "r"(val)); 
 }
@@ -83,7 +83,7 @@ static inline void write_cr4(uint64_t val)
 /*
  * read_xcr0 - Read from Extended Control Register XCR0
  */
-static inline uint64_t read_xcr0(void)
+uint64_t read_xcr0(void)
 {
     uint32_t low, high;
     __asm__ volatile("xgetbv" : "=a"(low), "=d"(high) : "c"(0));
@@ -93,7 +93,7 @@ static inline uint64_t read_xcr0(void)
 /*
  * write_xcr0 - Write to Extended Control Register XCR0
  */
-static inline void write_xcr0(uint64_t value)
+void write_xcr0(uint64_t value)
 {
     uint32_t low = (uint32_t)value;
     uint32_t high = (uint32_t)(value >> 32);

@@ -63,13 +63,11 @@ void kernel_main(void* mb_info) {
 	// Set up the IDT
 
 	idt_init();
-	printf("[IDT] The IDT was set-up successfully.\n");
 	QEMU_LOG("Initialized the IDT", TOTAL_DBG);
 
 	// Enable interrupts
 
 	enable_interrupts();
-	printf("[IDT] Enabled interrupts.\n");
 	QEMU_LOG("Enabled interrupts using asm(\"sti\")", TOTAL_DBG);
 
 	// Parse CPU information
@@ -107,7 +105,6 @@ void kernel_main(void* mb_info) {
 	// Build the physmap (mapping of all physical RAM into virtual space)
 
 	build_physmap();
-	printf("[MEM] Built physmap, all physical memory is now accessible\n");
 	QEMU_LOG("Built physmap at PHYSMAP_VIRTUAL_BASE", TOTAL_DBG);
 
 	// Initialize ACPI
@@ -143,7 +140,6 @@ void kernel_main(void* mb_info) {
 		printf("[Slab] Failed to initialize slab allocator, error code: %d\n", slab_status);
 		return;
 	}
-	printf("[SLAB] Slab Allocator initialized\n");
 	QEMU_LOG("Initialized slab allocator", TOTAL_DBG);
 
 	// Initialize virtual memory manager
@@ -153,7 +149,6 @@ void kernel_main(void* mb_info) {
 		printf("[VMM] Failed to initialize virtual memory manager, error code: %d\n", vmm_status);
 		return;
 	}
-	printf("[VMM] Kernel Virtual Memory Manager initialized\n");
 	QEMU_LOG("Initialized kernel virtual memory manager", TOTAL_DBG);
 
 	// Initialize kernel heap
@@ -163,12 +158,15 @@ void kernel_main(void* mb_info) {
 		printf("[HEAP] Failed to initialize kernel heap, error code: %d\n", heap_status);
 		return;
 	}
-	printf("[HEAP] Kernel Heap initialized\n");
 	QEMU_LOG("Initialized kernel heap", TOTAL_DBG);
 
 	// Final sanity check
 	
 	QEMU_LOG("Reached kernel end", TOTAL_DBG);
+
+	#include <kernel/sys/apic.h>
+	uint64_t lapic_address = get_lapic_address(true);
+	printf("[APIC] Local APIC address: 0x%llx\n", lapic_address);
 
 	#endif
 }
