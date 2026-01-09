@@ -1,0 +1,4 @@
+Get grub-2.12-for-windows.zip from https://ftp.gnu.org/gnu/grub/.
+For grub-mkrescue (which is not included in the above prebuilt binaries), I have
+provided a grub-mkrescue.cpp wrapper, which is to be compiled using MSVC into an executable.
+You are then to place it inside grub/, along with the rest of the tools.
