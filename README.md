@@ -103,6 +103,8 @@ python3 setup.py
 python3 run.py
 ```
 
+That's it!
+
 > [!IMPORTANT]
 > While the *build process* is seamless, the kernel itself is a work in progress. Features may be incomplete or unstable, and are subject to change.
 
