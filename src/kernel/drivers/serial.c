@@ -16,8 +16,10 @@ uint8_t inb(uint16_t port) {
     return ret;
 }
 
-// Get port base address for each serial port
-static uint16_t get_port_base(serial_port_t port) {
+/*
+ * get_port_base - Get port base address for each serial port
+ */
+uint16_t get_port_base(serial_port_t port) {
     switch(port) {
         case SERIAL_COM1: return COM1_PORT;
         case SERIAL_COM2: return COM2_PORT;
@@ -95,7 +97,7 @@ void serial_write_len_port(serial_port_t port, const char* str, size_t len) {
 /*
  * serial_write_hex_digit_port - Internal helper for hex digit output to specific port
  */
-static void serial_write_hex_digit_port(serial_port_t port, uint8_t val) {
+void serial_write_hex_digit_port(serial_port_t port, uint8_t val) {
     val &= 0xF;
     if (val < 10)
         serial_write_char_port(port, '0' + val);
