@@ -11,6 +11,7 @@
 #include <arch/x86_64/memory/paging.h>
 #include <arch/x86_64/multiboot2.h>
 #include <arch/x86_64/cpu/cpu.h>
+#include <kernel/sys/apic.h>
 
 #include <kernel/drivers/vga_console.h>
 #include <kernel/drivers/vga_stdio.h>
@@ -24,9 +25,9 @@
 #include <kernel/misc.h>
 #include <libc/string.h>
 
-#define TOTAL_DBG 15
+#define TOTAL_DBG 16
 
-static char* KERNEL_VERSION = "v1.7.5-alpha";
+static char* KERNEL_VERSION = "v1.7.6-alpha";
 
 // If it is a test build, the multiboot buffer will be defined in tests.c
 #ifndef TEST_BUILD
@@ -107,16 +108,6 @@ void kernel_main(void* mb_info) {
 	build_physmap();
 	QEMU_LOG("Built physmap at PHYSMAP_VIRTUAL_BASE", TOTAL_DBG);
 
-	// Initialize ACPI
-
-	acpi_init(&multiboot);
-	printf("[ACPI] Revision %u detected (%s supported), manufacturer: %.6s\n",
-       acpi_get_rsdp()->Revision,
-       acpi_is_xsdt_supported() ? "XSDT" : "RSDT",
-       acpi_get_rsdp()->OEMID);
-
-	QEMU_LOG("Initialized ACPI subsystem", TOTAL_DBG);
-
 	// Initialize physical memory manager
 
 	pmm_status_t pmm_status = pmm_init(get_kend(false) + PAGE_SIZE, PHYSMAP_V2P(get_physmap_end()), PAGE_SIZE);
@@ -160,12 +151,23 @@ void kernel_main(void* mb_info) {
 	}
 	QEMU_LOG("Initialized kernel heap", TOTAL_DBG);
 
-	// Final sanity check
-	
-	QEMU_LOG("Reached kernel end", TOTAL_DBG);
+	// Initialize ACPI
+    
+	acpi_init(&multiboot);
+	printf("[ACPI] Revision %u detected (%s supported), manufacturer: %.6s\n",
+       acpi_get_rsdp()->Revision,
+       acpi_is_xsdt_supported() ? "XSDT" : "RSDT",
+       acpi_get_rsdp()->OEMID);
 
-	#include <kernel/sys/apic.h>
-	lapic_init();
+	QEMU_LOG("Initialized ACPI subsystem", TOTAL_DBG);
+
+	// Initialize APIC subsystem
+
+	apic_init();
+	QEMU_LOG("Initialized APIC subsystem", TOTAL_DBG);
+
+	// All subsystems initialized successfully
+	QEMU_LOG("Reached kernel end", TOTAL_DBG);
 
 	#endif
 }
