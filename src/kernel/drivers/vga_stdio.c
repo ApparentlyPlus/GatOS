@@ -321,14 +321,19 @@ static size_t _etoa(out_fct_type out, char* buffer, size_t idx, size_t maxlen, d
 
 
 // internal ftoa for fixed decimal floating point
+// internal ftoa for fixed decimal floating point
 static size_t _ftoa(out_fct_type out, char* buffer, size_t idx, size_t maxlen, double value, unsigned int prec, unsigned int width, unsigned int flags)
 {
   char buf[PRINTF_FTOA_BUFFER_SIZE];
   size_t len  = 0U;
   double diff = 0.0;
 
-  // powers of 10
-  static const double pow10[] = { 1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000, 1000000000 };
+  // Expanded powers of 10 up to 1e18 to support high precision
+  static const double pow10[] = { 
+      1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000, 1000000000,
+      10000000000, 100000000000, 1000000000000, 10000000000000, 100000000000000,
+      1000000000000000, 10000000000000000, 100000000000000000, 1000000000000000000
+  };
 
   // test for special values
   if (value != value)
@@ -338,8 +343,6 @@ static size_t _ftoa(out_fct_type out, char* buffer, size_t idx, size_t maxlen, d
   if (value > DBL_MAX)
     return _out_rev(out, buffer, idx, maxlen, (flags & FLAGS_PLUS) ? "fni+" : "fni", (flags & FLAGS_PLUS) ? 4U : 3U, width, flags);
 
-  // test for very large values
-  // standard printf behavior is to print EVERY whole number digit -- which could be 100s of characters overflowing your buffers == bad
   if ((value > PRINTF_MAX_FLOAT) || (value < -PRINTF_MAX_FLOAT)) {
 #if defined(PRINTF_SUPPORT_EXPONENTIAL)
     return _etoa(out, buffer, idx, maxlen, value, prec, width, flags);
@@ -348,31 +351,29 @@ static size_t _ftoa(out_fct_type out, char* buffer, size_t idx, size_t maxlen, d
 #endif
   }
 
-  // test for negative
   bool negative = false;
   if (value < 0) {
     negative = true;
     value = 0 - value;
   }
 
-  // set default precision, if not set explicitly
   if (!(flags & FLAGS_PRECISION)) {
     prec = PRINTF_DEFAULT_FLOAT_PRECISION;
   }
-  // limit precision to 9, cause a prec >= 10 can lead to overflow errors
-  while ((len < PRINTF_FTOA_BUFFER_SIZE) && (prec > 9U)) {
-    buf[len++] = '0';
-    prec--;
-  }
+
+  // Instead, safety check to ensure we don't overflow our pow10 array
+  if (prec > 18) prec = 18;
 
   int whole = (int)value;
   double tmp = (value - whole) * pow10[prec];
-  unsigned long frac = (unsigned long)tmp;
+  
+  // Use unsigned long long to prevent overflow for >9 digits
+  unsigned long long frac = (unsigned long long)tmp;
+  
   diff = tmp - frac;
 
   if (diff > 0.5) {
     ++frac;
-    // handle rollover, e.g. case 0.99 with prec 1 is 1.0
     if (frac >= pow10[prec]) {
       frac = 0;
       ++whole;
@@ -381,39 +382,33 @@ static size_t _ftoa(out_fct_type out, char* buffer, size_t idx, size_t maxlen, d
   else if (diff < 0.5) {
   }
   else if ((frac == 0U) || (frac & 1U)) {
-    // if halfway, round up if odd OR if last digit is 0
     ++frac;
   }
 
   if (prec == 0U) {
     diff = value - (double)whole;
     if ((!(diff < 0.5) || (diff > 0.5)) && (whole & 1)) {
-      // exactly 0.5 and ODD, then round up
-      // 1.5 -> 2, but 2.5 -> 2
       ++whole;
     }
   }
   else {
     unsigned int count = prec;
-    // now do fractional part, as an unsigned number
     while (len < PRINTF_FTOA_BUFFER_SIZE) {
       --count;
+      // frac is now long long, so this math works for 16 digits
       buf[len++] = (char)(48U + (frac % 10U));
       if (!(frac /= 10U)) {
         break;
       }
     }
-    // add extra 0s
     while ((len < PRINTF_FTOA_BUFFER_SIZE) && (count-- > 0U)) {
       buf[len++] = '0';
     }
     if (len < PRINTF_FTOA_BUFFER_SIZE) {
-      // add decimal
       buf[len++] = '.';
     }
   }
 
-  // do whole part, number is reversed
   while (len < PRINTF_FTOA_BUFFER_SIZE) {
     buf[len++] = (char)(48 + (whole % 10));
     if (!(whole /= 10)) {
@@ -421,7 +416,6 @@ static size_t _ftoa(out_fct_type out, char* buffer, size_t idx, size_t maxlen, d
     }
   }
 
-  // pad leading zeros
   if (!(flags & FLAGS_LEFT) && (flags & FLAGS_ZEROPAD)) {
     if (width && (negative || (flags & (FLAGS_PLUS | FLAGS_SPACE)))) {
       width--;
@@ -436,7 +430,7 @@ static size_t _ftoa(out_fct_type out, char* buffer, size_t idx, size_t maxlen, d
       buf[len++] = '-';
     }
     else if (flags & FLAGS_PLUS) {
-      buf[len++] = '+';  // ignore the space if the '+' exists
+      buf[len++] = '+';
     }
     else if (flags & FLAGS_SPACE) {
       buf[len++] = ' ';
