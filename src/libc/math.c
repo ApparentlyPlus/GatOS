@@ -7,9 +7,9 @@
 
 typedef union { double f; uint64_t u; } dbl_cast;
 
-/* ========================================================================
+/* 
  * Common Constants
- * ======================================================================== */
+ */
 
 static const double one = 1.0;
 static const double zero = 0.0;
@@ -41,10 +41,6 @@ static const double P2 = -2.77777777770155933842e-03;
 static const double P3 = 6.61375632143793436117e-05;
 static const double P4 = -1.65339022054652515390e-06;
 static const double P5 = 4.13813679705723846039e-08;
-
-/* sqrt constants */
-static const double sqrt_one = 1.0;
-static const double sqrt_tiny = 1.0e-300;
 
 /* pi constants */
 static const double pi = 3.14159265358979311600e+00;
@@ -177,16 +173,9 @@ static double __kernel_sin(double x, double y, int iy);
 static double __kernel_tan(double x, double y, int iy);
 static int __ieee754_rem_pio2(double x, double *y);
 
-/* ========================================================================
+/* 
  * Utility Functions
- * ======================================================================== */
-
-static int isnan(double x)
-{
-    dbl_cast dc = {.f = x};
-    return ((dc.u & 0x7FF0000000000000ULL) == 0x7FF0000000000000ULL) &&
-           ((dc.u & 0x000FFFFFFFFFFFFFULL) != 0);
-}
+ */
 
 double fabs(double x)
 {
@@ -280,23 +269,33 @@ double floor(double x)
     return dc.f;
 }
 
-/* ========================================================================
+/* 
  * Logarithm and Exponential Functions
- * ======================================================================== */
+ */
 
 double log(double x)
 {
-    if (x == 0.0) return -1.0 / 0.0; // Return -inf
-    if (x < 0.0) {
-        return 0.0 / 0.0; 
-    }
     dbl_cast dc = {.f = x};
     uint64_t bits = dc.u;
     
+    // Handle special cases
+    if ((bits & 0x7FFFFFFFFFFFFFFFULL) == 0) return -1.0 / 0.0; // -inf for ±0
+    if (bits >> 63) return 0.0 / 0.0; // NaN for negative
+    if ((bits & 0x7FF0000000000000ULL) == 0x7FF0000000000000ULL) return x; // inf/NaN
+    
     int32_t hx = (int32_t)(bits >> 32);
     int32_t k = (hx >> 20) - 1023;
-    hx &= 0x000fffff;
     
+    // Handle denormals by normalizing
+    if ((hx & 0x7ff00000) == 0) {
+        x *= 0x1p54;  // Scale by 2^54
+        dc.f = x;
+        bits = dc.u;
+        hx = (int32_t)(bits >> 32);
+        k = ((hx >> 20) - 1023) - 54;
+    }
+    
+    hx &= 0x000fffff;
     int32_t i = (hx + 0x95f64) & 0x100000;
     dc.u = (bits & 0x000fffffffffffffULL) | ((uint64_t)(i ^ 0x3ff00000) << 32);
     k += (i >> 20);
@@ -389,10 +388,128 @@ double exp(double x)
     }
 }
 
+double expm1(double x)
+{
+    double y, hi, lo, c, t, e, hfx, hxs, r1;
+    int k, xsb;
+    dbl_cast dc;
+    
+    static const double
+        one = 1.0,
+        huge = 1.0e+300,
+        tiny = 1.0e-300,
+        o_threshold = 7.09782712893383973096e+02,
+        ln2_hi = 6.93147180369123816490e-01,
+        ln2_lo = 1.90821492927058770002e-10,
+        invln2 = 1.44269504088896338700e+00,
+        Q1 = -3.33333333333331316428e-02,
+        Q2 = 1.58730158725481460165e-03,
+        Q3 = -7.93650757867487942473e-05,
+        Q4 = 4.00821782732936239552e-06,
+        Q5 = -2.01099218183624371326e-07;
+    
+    dc.f = x;
+    uint32_t hx = (uint32_t)(dc.u >> 32);
+    xsb = hx & 0x80000000;
+    y = (xsb == 0) ? x : -x;
+    hx &= 0x7fffffff;
+    
+    // Filter out huge and non-finite argument
+    if (hx >= 0x4043687A) {
+        if (hx >= 0x40862E42) {
+            if (hx >= 0x7ff00000) {
+                uint32_t lx = (uint32_t)dc.u;
+                if (((hx & 0xfffff) | lx) != 0)
+                    return x + x; // NaN
+                else
+                    return (xsb == 0) ? x : -1.0;
+            }
+            if (x > o_threshold)
+                return huge * huge;
+        }
+        if (xsb != 0) {
+            if (x + tiny < 0.0)
+                return tiny - one;
+        }
+    }
+    
+    // Argument reduction
+    if (hx > 0x3fd62e42) {
+        if (hx < 0x3FF0A2B2) {
+            if (xsb == 0) {
+                hi = x - ln2_hi;
+                lo = ln2_lo;
+                k = 1;
+            } else {
+                hi = x + ln2_hi;
+                lo = -ln2_lo;
+                k = -1;
+            }
+        } else {
+            k = invln2 * x + ((xsb == 0) ? 0.5 : -0.5);
+            t = k;
+            hi = x - t * ln2_hi;
+            lo = t * ln2_lo;
+        }
+        x = hi - lo;
+        c = (hi - x) - lo;
+    } else if (hx < 0x3c900000) {
+        t = huge + x;
+        return x - (t - (huge + x));
+    } else {
+        k = 0;
+        c = 0;
+    }
+    
+    // x is now in primary range
+    hfx = 0.5 * x;
+    hxs = x * hfx;
+    r1 = one + hxs * (Q1 + hxs * (Q2 + hxs * (Q3 + hxs * (Q4 + hxs * Q5))));
+    t = 3.0 - r1 * hfx;
+    e = hxs * ((r1 - t) / (6.0 - x * t));
+    
+    if (k == 0)
+        return x - (x * e - hxs);
+    
+    e = (x * (e - c) - c);
+    e -= hxs;
+    
+    if (k == -1)
+        return 0.5 * (x - e) - 0.5;
+    if (k == 1) {
+        if (x < -0.25)
+            return -2.0 * (e - (x + 0.5));
+        else
+            return one + 2.0 * (x - e);
+    }
+    if (k <= -2 || k > 56) {
+        y = one - (e - x);
+        dc.f = y;
+        dc.u += ((uint64_t)k << 52);
+        return dc.f - one;
+    }
+    
+    dc.f = one;
+    if (k < 20) {
+        dc.u = (0x3ff00000ULL - (0x200000ULL >> k)) << 32;
+        y = dc.f - (e - x);
+        dc.f = y;
+        dc.u += ((uint64_t)k << 52);
+    } else {
+        dc.u = ((0x3ffULL - k) << 52);
+        t = dc.f;
+        y = x - (e + t);
+        y += one;
+        dc.f = y;
+        dc.u += ((uint64_t)k << 52);
+    }
+    return dc.f;
+}
+
 double log1p(double x)
 {
     double hfsq, f, c, s, z, R, u;
-    int k, hx, hu, ax;
+    int k, hu, ax;
     dbl_cast dc;
     dc.f = x;
     int32_t hx_ = (int32_t)(dc.u >> 32);
@@ -470,122 +587,46 @@ double log1p(double x)
     else return k * ln2_hi - ((hfsq - (s * (hfsq + R) + (k * ln2_lo + c))) - f);
 }
 
-/* ========================================================================
+/* 
  * Square Root
- * ======================================================================== */
+ */
 
-static double __ieee754_sqrt(double x)
+
+double sqrt(double number) 
 {
-    double z;
-    int32_t sign = (int32_t)0x80000000;
-    uint32_t r, t1, s1, ix1, q1;
-    int32_t ix0, s0, q, m, t, i;
-
-    dbl_cast dc;
-    dc.f = x;
-    ix0 = (int32_t)(dc.u >> 32);
-    ix1 = (uint32_t)dc.u;
-
-    if ((ix0 & 0x7ff00000) == 0x7ff00000) {
-        return x * x + x;
+    if (number < 0) return (number - number) / (number - number);
+    if (number == 0) return 0.0;
+    
+    dbl_cast dc = {.f = number};
+    uint64_t i = dc.u;
+    
+    // Handle denormals by scaling
+    if ((i & 0x7FF0000000000000ULL) == 0) {  // exponent is zero
+        number *= 0x1p54;  // scale up by 2^54
+        dc.f = number;
+        i = dc.u;
+        i = 0x5fe6eb50c7b537a9 - (i >> 1);
+        double y = *(double*)&i;
+        y = y * (1.5 - (number * 0.5 * y * y));
+        y = y * (1.5 - (number * 0.5 * y * y));
+        y = y * (1.5 - (number * 0.5 * y * y));
+        y = y * (1.5 - (number * 0.5 * y * y));
+        return (number * y) * 0x1p-27;  // scale result back down
     }
-    if (ix0 <= 0) {
-        if (((ix0 & (~sign)) | ix1) == 0) return x;
-        else if (ix0 < 0)
-            return (x - x) / (x - x);
-    }
-    m = (ix0 >> 20);
-    if (m == 0) {
-        while (ix0 == 0) {
-            m -= 21;
-            ix0 |= (ix1 >> 11);
-            ix1 <<= 21;
-        }
-        for (i = 0; (ix0 & 0x00100000) == 0; i++) ix0 <<= 1;
-        m -= i - 1;
-        ix0 |= (ix1 >> (32 - i));
-        ix1 <<= i;
-    }
-    m -= 1023;
-    ix0 = (ix0 & 0x000fffff) | 0x00100000;
-    if (m & 1) {
-        ix0 += ix0 + ((ix1 & sign) >> 31);
-        ix1 += ix1;
-    }
-    m >>= 1;
-
-    ix0 += ix0 + ((ix1 & sign) >> 31);
-    ix1 += ix1;
-    q = q1 = s0 = s1 = 0;
-    r = 0x00200000;
-
-    while (r != 0) {
-        t = s0 + r;
-        if (t <= ix0) {
-            s0 = t + r;
-            ix0 -= t;
-            q += r;
-        }
-        ix0 += ix0 + ((ix1 & sign) >> 31);
-        ix1 += ix1;
-        r >>= 1;
-    }
-
-    r = sign;
-    while (r != 0) {
-        t1 = s1 + r;
-        t = s0;
-        if ((t < ix0) || ((t == ix0) && (t1 <= ix1))) {
-            s1 = t1 + r;
-            if (((t1 & sign) == (uint32_t)sign) && (s1 & sign) == 0) s0 += 1;
-            ix0 -= t;
-            if (ix1 < t1) ix0 -= 1;
-            ix1 -= t1;
-            q1 += r;
-        }
-        ix0 += ix0 + ((ix1 & sign) >> 31);
-        ix1 += ix1;
-        r >>= 1;
-    }
-
-    if ((ix0 | ix1) != 0) {
-        z = sqrt_one - sqrt_tiny;
-        if (z >= sqrt_one) {
-            z = sqrt_one + sqrt_tiny;
-            if (q1 == (uint32_t)0xffffffff) {
-                q1 = 0;
-                q += 1;
-            } else if (z > sqrt_one) {
-                if (q1 == (uint32_t)0xfffffffe) q += 1;
-                q1 += 2;
-            } else
-                q1 += (q1 & 1);
-        }
-    }
-    ix0 = (q >> 1) + 0x3fe00000;
-    ix1 = q1 >> 1;
-    if ((q & 1) == 1) ix1 |= sign;
-    ix0 += (m << 20);
-
-    dc.u = ((uint64_t)ix0 << 32) | ix1;
-    z = dc.f;
-    return z;
+    
+    // Normal path
+    i = 0x5fe6eb50c7b537a9 - (i >> 1);
+    double y = *(double*)&i;
+    y = y * (1.5 - (number * 0.5 * y * y));
+    y = y * (1.5 - (number * 0.5 * y * y));
+    y = y * (1.5 - (number * 0.5 * y * y));
+    y = y * (1.5 - (number * 0.5 * y * y));
+    return number * y;
 }
 
-double sqrt(double x)
-{
-    double z;
-    z = __ieee754_sqrt(x);
-    if (isnan(x)) return z;
-    if (x < 0.0) {
-        return (0.0 / 0.0);
-    } else
-        return z;
-}
-
-/* ========================================================================
+/* 
  * Kernel Functions for Trigonometry
- * ======================================================================== */
+ */
 
 static int __kernel_rem_pio2(double *x, double *y, int e0, int nx, int prec, const int *ipio2)
 {
@@ -981,9 +1022,9 @@ static double __kernel_tan(double x, double y, int iy)
     }
 }
 
-/* ========================================================================
+/* 
  * Trigonometric Functions
- * ======================================================================== */
+ */
 
 double sin(double x)
 {
@@ -1057,9 +1098,9 @@ double tan(double x)
     }
 }
 
-/* ========================================================================
+/* 
  * Inverse Trigonometric Functions
- * ======================================================================== */
+ */
 
 double asin(double x)
 {
@@ -1233,7 +1274,7 @@ double atan2(double y, double x)
     if (((ix | ((lx | -lx) >> 31)) > 0x7ff00000) ||
         ((iy | ((ly | -ly) >> 31)) > 0x7ff00000))
         return x + y;
-    if ((hx - 0x3ff00000 | lx) == 0)
+    if (((hx - 0x3ff00000) | lx) == 0)
         return atan(y);
     m = ((hy >> 31) & 1) | ((hx >> 30) & 2);
 
@@ -1302,9 +1343,9 @@ double atan2(double y, double x)
     }
 }
 
-/* ========================================================================
+/* 
  * Hyperbolic Functions
- * ======================================================================== */
+ */
 
 double asinh(double x)
 {
@@ -1403,25 +1444,29 @@ double sinh(double x)
     h = 0.5;
     if (jx < 0)
         h = -h;
-    if (ix < 0x40862E42) {
-        t = fabs(x);
+
+    /* |x| in [0,22] */
+    if (ix < 0x40360000) {
         if (ix < 0x3e300000)
             if (huge + x > one)
                 return x;
-        if (ix < 0x3ff00000) {
-            if (ix < 0x3FD62E43) {
-                return h * (2.0 * t - 2.0 * t * t / (t + sqrt(one + t * t)));
-            } else {
-                return h * (2.0 * t - 2.0 * (sqrt(one + t * t) - one) / t);
-            }
-        }
-        w = exp(t);
-        return h * (w - one / w);
+        t = expm1(fabs(x));
+        if (ix < 0x3ff00000)
+            return h * (2.0 * t - t * t / (t + one));
+        return h * (t + t / (t + one));
     }
+
+    /* |x| in [22, log(maxdouble)] */
     if (ix < 0x40862E42)
         return h * exp(fabs(x));
-    if (ix <= 0x408633CE)
-        return h * 2.0 * exp(fabs(x) - ln2_hi);
+
+    /* |x| in [log(maxdouble), overflowthreshold] */
+    if (ix <= 0x408633CE) {
+        w = exp(0.5 * fabs(x));
+        t = h * w;
+        return t * w;
+    }
+
     return x * huge * huge;
 }
 
@@ -1435,24 +1480,29 @@ double cosh(double x)
     if (ix >= 0x7ff00000)
         return x * x;
 
+    /* |x| in [0, 0.5*ln2] */
     if (ix < 0x3fd62e43) {
-        t = fabs(x);
+        t = expm1(fabs(x));
+        w = one + t;
         if (ix < 0x3c800000)
-            return one;
-        return one + t * t / (2.0 * one);
+            return w;
+        return one + (t * t) / (w + w);
     }
 
-    if (ix < 0x40862E42) {
+    /* |x| in [0.5*ln2, 22] */
+    if (ix < 0x40360000) {
         t = exp(fabs(x));
         return 0.5 * t + 0.5 / t;
     }
 
+    /* |x| in [22, log(maxdouble)] */
     if (ix < 0x40862E42)
         return 0.5 * exp(fabs(x));
 
+    /* |x| in [log(maxdouble), overflowthreshold] */
     if (ix <= 0x408633CE) {
-        w = exp(fabs(x) - ln2_hi);
-        return w + w;
+        w = exp(0.5 * fabs(x));
+        return w * w * 0.5;
     }
 
     return huge * huge;
@@ -1473,17 +1523,16 @@ double tanh(double x)
             return one / x - one;
     }
 
+    /* |x| < 22 */
     if (ix < 0x40360000) {
         if (ix < 0x3c800000)
             return x;
         if (ix >= 0x3ff00000) {
-            t = exp(2.0 * fabs(x));
+            t = expm1(2.0 * fabs(x));
             z = one - 2.0 / (t + 2.0);
         } else {
-            t = -fabs(x);
-            z = -t;
-            t = exp(t + t);
-            z = z + 2.0 / (2.0 - t);
+            t = expm1(-2.0 * fabs(x));
+            z = -t / (t + 2.0);
         }
     } else {
         z = one - tiny;
@@ -1491,9 +1540,9 @@ double tanh(double x)
     return (jx >= 0) ? z : -z;
 }
 
-/* ========================================================================
+/* 
  * Power and Related Functions
- * ======================================================================== */
+ */
 
 double pow(double x, double y)
 {
@@ -1503,28 +1552,29 @@ double pow(double x, double y)
     int hx, hy, ix, iy;
     unsigned lx, ly;
 
-    /* Constants needed throughout the function */
-    static const double bp[] = {1.0, 1.5};
-    static const double dp_h[] = {0.0, 5.84962487220764160156e-01};
-    static const double dp_l[] = {0.0, 1.35003920212974897128e-08};
-    static const double L1 = 5.99999999999994648725e-01;
-    static const double L2 = 4.28571428578550184252e-01;
-    static const double L3 = 3.33333329818377432918e-01;
-    static const double L4 = 2.72728123808534006489e-01;
-    static const double L5 = 2.30660745775561754067e-01;
-    static const double L6 = 2.06975017800338417784e-01;
-    static const double pow_P1 = 1.66666666666666019037e-01;
-    static const double pow_P2 = -2.77777777770155933842e-03;
-    static const double pow_P3 = 6.61375632143793436117e-05;
-    static const double pow_P4 = -1.65339022054652515390e-06;
-    static const double pow_P5 = 4.13813679705723846039e-08;
-    static const double lg2 = 6.93147180559945286227e-01;
-    static const double lg2_h = 6.93147182464599609375e-01;
-    static const double lg2_l = -1.90465429995776804525e-09;
-    static const double ovt = 8.0085662595372944372e-17;
-    static const double cp = 9.61796693925975554329e-01;
-    static const double cp_h = 9.61796700954437255859e-01;
-    static const double cp_l = -7.02846165095275826516e-09;
+    const double bp[] = {1.0, 1.5};
+    const double dp_h[] = {0.0, 5.84962487220764160156e-01};
+    const double dp_l[] = {0.0, 1.35003920212974897128e-08};
+    const double L1 = 5.99999999999994648725e-01;
+    const double L2 = 4.28571428578550184252e-01;
+    const double L3 = 3.33333329818377432918e-01;
+    const double L4 = 2.72728123808534006489e-01;
+    const double L5 = 2.30660745775561754067e-01;
+    const double L6 = 2.06975017800338417784e-01;
+    const double pow_P1 = 1.66666666666666019037e-01;
+    const double pow_P2 = -2.77777777770155933842e-03;
+    const double pow_P3 = 6.61375632143793436117e-05;
+    const double pow_P4 = -1.65339022054652515390e-06;
+    const double pow_P5 = 4.13813679705723846039e-08;
+    const double lg2 = 6.93147180559945286227e-01;
+    const double lg2_h = 6.93147182464599609375e-01;
+    const double lg2_l = -1.90465429995776804525e-09;
+    const double ovt = 8.0085662595372944372e-17;
+    const double cp = 9.61796693925975554329e-01;
+    const double cp_h = 9.61796700954437255859e-01;
+    const double cp_l = -7.02846165095275826516e-09;
+    const double ivln2_h = 1.44269502162933349609e+00;
+    const double ivln2_l = 1.92596299112661746887e-08;
 
     dbl_cast dcx, dcy;
     dcx.f = x;
@@ -1617,8 +1667,8 @@ double pow(double x, double y)
             return (hy > 0) ? huge * huge : tiny * tiny;
         t = ax - one;
         w = (t * t) * (0.5 - t * (0.3333333333333333333333 - t * 0.25));
-        u = ln2_hi * t;
-        v = t * ln2_lo - w * invln2;
+        u = ivln2_h * t;
+        v = t * ivln2_l - w * invln2;
         t1 = u + v;
         dcx.f = t1;
         dcx.u &= 0xFFFFFFFF00000000ULL;
@@ -1645,35 +1695,35 @@ double pow(double x, double y)
             n += 1;
             ix -= 0x00100000;
         }
-        dcx.u = ((unsigned long long)ix << 32) | lx;
+        dcx.u = ((uint64_t)ix << 32) | lx;
         ax = dcx.f;
 
-        u = (ax - bp[k]) / (ax + bp[k]);
-        v = u * u;
-        s = v * v;
-        r = v * (L1 + s * (L2 + s * (L3 + s * (L4 + s * (L5 + s * L6)))));
-        s = u + u * r;
+        u = ax - bp[k];
+        v = one / (ax + bp[k]);
+        s = u * v;
         s_h = s;
         dcx.f = s_h;
         dcx.u &= 0xFFFFFFFF00000000ULL;
         s_h = dcx.f;
-        t_h = 0.0;
+        
+        t_h = zero;
         dcx.f = t_h;
-        dcx.u = ((unsigned long long)((ix >> 1) | 0x20000000) << 32);
+        dcx.u = ((uint64_t)((ix >> 1) | 0x20000000) << 32) | 0x0008000000000000ULL | ((uint64_t)k << 50);
         t_h = dcx.f;
+        
         t_l = ax - (t_h - bp[k]);
-        s_l = v * ((u - s_h * t_h) - s_h * t_l) / (ax + bp[k]);
-        s2 = s_h + s_l;
-        dcx.f = s2;
-        dcx.u &= 0xFFFFFFFF00000000ULL;
-        s2 = dcx.f;
-        t_h = 3.0 + s2 + t_h;
+        s_l = v * ((u - s_h * t_h) - s_h * t_l);
+        s2 = s * s;
+        r = s2 * s2 * (L1 + s2 * (L2 + s2 * (L3 + s2 * (L4 + s2 * (L5 + s2 * L6)))));
+        r += s_l * (s_h + s);
+        s2 = s_h * s_h;
+        t_h = 3.0 + s2 + r;
         dcx.f = t_h;
         dcx.u &= 0xFFFFFFFF00000000ULL;
         t_h = dcx.f;
-        t_l = t_l + (s_l + (s2 - s_h));
-        u = t_h * lg2_h;
-        v = t_l * lg2 + t_h * lg2_l;
+        t_l = r - ((t_h - 3.0) - s2);
+        u = s_h * t_h;
+        v = s_l * t_h + t_l * s;
         p_h = u + v;
         dcx.f = p_h;
         dcx.u &= 0xFFFFFFFF00000000ULL;
@@ -1690,7 +1740,7 @@ double pow(double x, double y)
     }
 
     s = one;
-    if ((((unsigned)hy >> 31) - 1 | (yisint - 1)) == 0)
+    if (((((unsigned)hy >> 31) - 1) | (yisint - 1)) == 0)
         s = -one;
 
     y1 = y;
@@ -1725,9 +1775,9 @@ double pow(double x, double y)
     if (i > 0x3fe00000) {
         n = j + (0x00100000 >> (k + 1));
         k = ((n & 0x7fffffff) >> 20) - 0x3ff;
-        t = 0.0;
+        t = zero;
         dcx.f = t;
-        dcx.u = ((unsigned long long)(n & ~(0x000fffff >> k)) << 32);
+        dcx.u = ((uint64_t)(n & ~(0x000fffff >> k)) << 32);
         t = dcx.f;
         n = ((n & 0x000fffff) | 0x00100000) >> (20 - k);
         if (j < 0)
@@ -1752,7 +1802,7 @@ double pow(double x, double y)
     if ((j >> 20) <= 0)
         z = scalbn(z, n);
     else {
-        dcx.u = ((unsigned long long)j << 32) | (dcx.u & 0xFFFFFFFF);
+        dcx.u = ((uint64_t)j << 32) | (dcx.u & 0xFFFFFFFF);
         z = dcx.f;
     }
     return s * z;
@@ -1887,9 +1937,9 @@ double fmod(double x, double y)
     return dcx.f;
 }
 
-/* ========================================================================
+/* 
  * Rounding and Remainder Functions
- * ======================================================================== */
+ */
 
 double ceil(double x)
 {
@@ -1980,7 +2030,6 @@ double round(double x)
     int i0 = dc.u >> 32;
     unsigned i1 = dc.u;
     int j0 = ((i0 >> 20) & 0x7ff) - 0x3ff;
-    int sx = (unsigned)i0 >> 31;
 
     if (j0 < 20) {
         if (j0 < 0) {
