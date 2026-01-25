@@ -66,9 +66,6 @@ void kernel_test(void* mb_info, char* KERNEL_VERSION) {
 	unmap_identity();
 	build_physmap();
 
-	// Initialize ACPI
-	acpi_init(&multiboot);
-
     console_set_color(CONSOLE_COLOR_GREEN, CONSOLE_COLOR_BLACK);
     printf("[+] Kernel initialization succeded!\n\n");
     QEMU_LOG("Kernel initialization succeeded!", TOTAL_DBG);
@@ -115,6 +112,8 @@ void kernel_test(void* mb_info, char* KERNEL_VERSION) {
 		printf("[HEAP] Failed to initialize kernel heap, error code: %d\n", heap_status);
 		return;
 	}
+	
+	acpi_init(&multiboot);
 
     printf("Running Kernel Heap tests...\n");
     test_heap();

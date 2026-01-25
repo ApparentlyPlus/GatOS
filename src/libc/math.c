@@ -214,7 +214,7 @@ double scalbn(double x, int n)
     k = k + n;
     if (k > 0x7fe) return huge * copysign(huge, x);
     if (k > 0) {
-        dc.u = (dc.u & 0x800fffff00000000ULL) | ((uint64_t)k << 52);
+        dc.u = (dc.u & 0x800fffffffffffffULL) | ((uint64_t)k << 52);
         return dc.f;
     }
     if (k <= -54) {
@@ -222,7 +222,7 @@ double scalbn(double x, int n)
         else return tiny * copysign(tiny, x);
     }
     k += 54;
-    dc.u = (dc.u & 0x800fffff00000000ULL) | ((uint64_t)k << 52);
+    dc.u = (dc.u & 0x800fffffffffffffULL) | ((uint64_t)k << 52);
     return dc.f * 5.55111512312578270212e-17;
 }
 
@@ -849,7 +849,7 @@ static int __ieee754_rem_pio2(double x, double *y)
             j = ix >> 20;
             y[0] = r - w;
             dc.f = y[0];
-            i = j - (((int32_t)(dc.u >> 32)) & 0x7ff);
+            i = j - (((int32_t)(dc.u >> 32) >> 20) & 0x7ff);
             if (i > 16) {
                 t = r;
                 w = fn * pio2_2;
@@ -857,7 +857,7 @@ static int __ieee754_rem_pio2(double x, double *y)
                 w = fn * pio2_2t - ((t - r) - w);
                 y[0] = r - w;
                 dc.f = y[0];
-                i = j - (((int32_t)(dc.u >> 32)) & 0x7ff);
+                i = j - (((int32_t)(dc.u >> 32) >> 20) & 0x7ff);
                 if (i > 49) {
                     t = r;
                     w = fn * pio2_3;
