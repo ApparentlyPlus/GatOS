@@ -20,16 +20,16 @@ header_start:
 	# checksum (magic + architecture + length must sum to 0)
 	.long -(0xe85250d6 + 0 + (header_end - header_start))
 
-    # request a 1080p framebuffer
+    # framebuffer tag
     .align 8
     .short 5
     .short 0
     .long 20
-    .long 1920
-    .long 1080
-    .long 32
-    .align 8
-
+    .long 0
+    .long 0
+    .long 0
+	.align 8
+	
 	# end tag indicating the end of the Multiboot header
 	.short 0
 	.short 0
