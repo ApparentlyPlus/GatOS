@@ -8,8 +8,8 @@
  */
 
 #include <arch/x86_64/memory/paging.h>
-#include <kernel/drivers/vga_stdio.h>
 #include <arch/x86_64/multiboot2.h>
+#include <kernel/debug.h>
 #include <libc/string.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -227,7 +227,7 @@ void multiboot_init(multiboot_parser_t* parser, void* mb_info, uint8_t* buffer, 
     size_t required_size = calculate_required_size(mb_info);
 
     if (required_size > buffer_size) {
-        printf("[MB2] Error: Buffer too small (need %d, have %d)\n", 
+        LOGF("[MB2] Error: Buffer too small (need %d, have %d)\n", 
                (int)required_size, (int)buffer_size);
         return;
     }
@@ -241,7 +241,7 @@ void multiboot_init(multiboot_parser_t* parser, void* mb_info, uint8_t* buffer, 
     parser->initialized = 1;
     
     #ifndef TEST_BUILD
-    printf("[MB2] Initialization complete (used %d of %d bytes)\n",
+    LOGF("[MB2] Initialization complete (used %d of %d bytes)\n",
            (int)parser->buffer_used, (int)buffer_size);
     #endif
 }
@@ -421,95 +421,4 @@ int multiboot_is_page_used(multiboot_parser_t* parser, uintptr_t start, size_t p
     }
     
     return 0;
-}
-
-/*
- * multiboot_dump_info - Prints multiboot information for debugging
- */
-void multiboot_dump_info(multiboot_parser_t* parser) {
-    if (!parser->initialized) {
-        printf("[MB2] Parser not initialized\n");
-        return;
-    }
-    
-    printf("[MB2] < Multiboot2 Information: >\n");
-    
-    if (parser->bootloader_name) {
-        printf("[MB2] Bootloader: %s\n", parser->bootloader_name);
-    }
-    
-    if (parser->command_line) {
-        printf("[MB2] Command line: %s\n", parser->command_line);
-    }
-    
-    uintptr_t kernel_start, kernel_end;
-    multiboot_get_kernel_range(&kernel_start, &kernel_end);
-    printf("[MB2] Kernel range: 0x%p - 0x%p (%d KiB)\n", 
-           kernel_start, kernel_end, (int)((kernel_end - kernel_start) / 1024));
-    
-    uint64_t total_mem = multiboot_get_total_RAM(parser, MEASUREMENT_UNIT_MB);
-    printf("[MB2] Total memory: %d MiB\n", (int)total_mem);
-    
-    printf("[MB2] Available memory ranges: %d\n", (int)parser->available_memory_count);
-    
-    memory_range_t* range = parser->available_memory_head;
-    int i = 0;
-    while (range) {
-        printf("  [%d] 0x%p - 0x%p (%d MiB)\n", 
-               i++, range->start, range->end, 
-               (int)((range->end - range->start) / (1024 * 1024)));
-        range = range->next;
-    }
-    
-    int modules = multiboot_get_module_count(parser);
-    printf("[MB2] Modules: %d\n", modules);
-    
-    multiboot_framebuffer_t* fb = multiboot_get_framebuffer(parser);
-    if (fb) {
-        printf("[MB2] Framebuffer: %dx%d @ %dbpp\n", 
-               fb->width, fb->height, fb->bpp);
-    }
-}
-
-/*
- * multiboot_dump_memory_map - Prints memory map for debugging
- */
-void multiboot_dump_memory_map(multiboot_parser_t* parser) {
-    if (!parser->memory_map) {
-        printf("[MB2] No memory map found\n");
-        return;
-    }
-    
-    printf("[MB2] < Memory Map: >\n");
-    
-    for (size_t i = 0; i < parser->memory_map_length; i++) {
-        uintptr_t start, end;
-        uint32_t type;
-        
-        if (multiboot_get_memory_region(parser, i, &start, &end, &type) == 0) {
-            printf("  [%d] 0x%p - 0x%p (%d KiB) - ", 
-                   (int)i, start, end, (int)((end - start) / 1024));
-            
-            switch (type) {
-                case MULTIBOOT_MEMORY_AVAILABLE:
-                    printf("Available\n");
-                    break;
-                case MULTIBOOT_MEMORY_RESERVED:
-                    printf("Reserved\n");
-                    break;
-                case MULTIBOOT_MEMORY_ACPI_RECLAIMABLE:
-                    printf("ACPI Reclaimable\n");
-                    break;
-                case MULTIBOOT_MEMORY_NVS:
-                    printf("ACPI NVS\n");
-                    break;
-                case MULTIBOOT_MEMORY_BADRAM:
-                    printf("Bad RAM\n");
-                    break;
-                default:
-                    printf("Unknown (%d)\n", type);
-                    break;
-            }
-        }
-    }
 }

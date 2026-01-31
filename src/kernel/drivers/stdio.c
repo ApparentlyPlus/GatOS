@@ -13,8 +13,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#include <kernel/drivers/vga_console.h>
-#include <kernel/drivers/vga_stdio.h>
+#include <kernel/drivers/console.h>
+#include <kernel/drivers/stdio.h>
 
 
 // define this globally (e.g. gcc -DPRINTF_INCLUDE_CONFIG_H ...) to include the

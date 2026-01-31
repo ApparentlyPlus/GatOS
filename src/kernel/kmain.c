@@ -13,9 +13,10 @@
 #include <arch/x86_64/cpu/cpu.h>
 #include <kernel/sys/apic.h>
 
-#include <kernel/drivers/vga_console.h>
-#include <kernel/drivers/vga_stdio.h>
+
+#include <kernel/drivers/console.h>
 #include <kernel/drivers/serial.h>
+#include <kernel/drivers/stdio.h>
 #include <kernel/memory/heap.h>
 #include <kernel/memory/slab.h>
 #include <kernel/memory/pmm.h>

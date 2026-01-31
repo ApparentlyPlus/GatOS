@@ -35,3 +35,5 @@ void console_init(multiboot_parser_t* parser);
 void console_print_char(char character);
 void console_set_color(uint8_t foreground, uint8_t background);
 void console_clear(void);
+size_t console_get_width();
+size_t console_get_height();

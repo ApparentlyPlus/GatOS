@@ -7,7 +7,7 @@
  * Author: u/ApparentlyPlus
  */
 
-#include <kernel/drivers/vga_console.h>
+#include <kernel/drivers/console.h>
 #include <kernel/drivers/font.h>
 #include <arch/x86_64/memory/paging.h>
 #include <kernel/memory/vmm.h>
@@ -97,7 +97,7 @@ static uint8_t* get_glyph(uint32_t codepoint) {
     if (index == 0 && codepoint != 0) {
         // Fallback to a block or question mark. 
         // In CP437, 0xDB is a full block (█), 0x3F is '?'
-        index = 0xDB; 
+        index = 0x3F; 
     }
     
     return (uint8_t*)font->glyph_buffer + (index * font->header->charsize);
@@ -142,7 +142,6 @@ static void scroll_screen(void) {
 
     // Clear the new area at the bottom
     // Calculate pointer to the start of the cleared area
-    // Note: g_fb_addr is now uint8_t*, so pointer arithmetic is in bytes. Correct.
     
     // memset safe if 0
     if (g_bg_color == 0) {
@@ -279,7 +278,24 @@ void console_print_char(char character) {
     }
 }
 
+/*
+ * console_set_color - Sets the foreground and background colors
+ */
 void console_set_color(uint8_t foreground, uint8_t background) {
     if (foreground < 16) g_fg_color = VGA_PALETTE[foreground];
     if (background < 16) g_bg_color = VGA_PALETTE[background];
+}
+
+/*
+ * console_get_width - Retrieves console width in characters
+ */
+size_t console_get_width() {
+    return g_max_cols;
+}
+
+/*
+ * console_get_height - Retrieves console height in characters
+ */
+size_t console_get_height() {
+    return g_max_rows;
 }

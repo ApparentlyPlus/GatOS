@@ -7,7 +7,7 @@
  */
 
 #include <arch/x86_64/memory/paging.h>
-#include <kernel/drivers/vga_stdio.h>
+#include <kernel/drivers/stdio.h>
 #include <kernel/drivers/serial.h>
 #include <kernel/misc.h>
 #include <libc/string.h>

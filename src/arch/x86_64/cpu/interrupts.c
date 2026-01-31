@@ -8,8 +8,8 @@
  */
 
 #include <arch/x86_64/cpu/interrupts.h>
+#include <kernel/drivers/stdio.h>
 #include <arch/x86_64/cpu/cpu.h>
-#include <kernel/drivers/vga_stdio.h>
 #include <kernel/sys/panic.h>
 #include <kernel/sys/apic.h>
 #include <kernel/debug.h>

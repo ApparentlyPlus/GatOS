@@ -5,8 +5,8 @@
  */
 
 #include <arch/x86_64/cpu/interrupts.h>
-#include <kernel/drivers/vga_console.h>
-#include <kernel/drivers/vga_stdio.h>
+#include <kernel/drivers/console.h>
+#include <kernel/drivers/stdio.h>
 #include <kernel/sys/panic.h>
 #include <stdarg.h>
 
@@ -57,18 +57,44 @@ void print_exception_name(uint64_t vector)
     }
 }
 
-/*
- * panic_c - Handles a kernel panic with an optional CPU context.
- */
 void panic_c(const char* message, cpu_context_t* context)
 {
     disable_interrupts();
     
+    // Setup the screen
     console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_RED);
     console_clear();
     
-    printf("\n    Oh no! Your GatOS ventured into undefined behavior and never returned :(    \n");
-    printf("\n                                      ---                                       \n");
+    uint16_t screen_width = console_get_width();
+    int i; // Loop counter (C89 safe)
+
+    // Define the header messages
+    const char* header_msg = "Oh no! Your GatOS ventured into undefined behavior and never returned :(";
+    const char* sep_msg = "---";
+    const char* footer_msg = "SYSTEM HALTED";
+    
+    // lengths
+    int header_len = 72;
+    int sep_len = 3;
+    int footer_len = 13;
+
+    // Print Header
+    int pad_header = (screen_width - header_len) / 2;
+    if (pad_header < 0) pad_header = 0;
+
+    printf("\n");
+    for (i = 0; i < pad_header; i++) printf(" ");
+    printf("%s\n", header_msg);
+
+    // Print Separator
+    int pad_sep = (screen_width - sep_len) / 2;
+    if (pad_sep < 0) pad_sep = 0;
+
+    printf("\n");
+    for (i = 0; i < pad_sep; i++) printf(" ");
+    printf("%s\n", sep_msg);
+    
+    // Print Body
     printf("\n");
     printf("[+] Reason: %s\n", message);
     
@@ -121,7 +147,12 @@ void panic_c(const char* message, cpu_context_t* context)
         printf("\n[-] No CPU context available\n");
     }
     
-    printf("\n                                 SYSTEM HALTED                                  ");
+    int pad_footer = (screen_width - footer_len) / 2;
+    if (pad_footer < 0) pad_footer = 0;
+
+    printf("\n");
+    for (i = 0; i < pad_footer; i++) printf(" ");
+    printf("%s", footer_msg);
     
     halt_system();
 }
