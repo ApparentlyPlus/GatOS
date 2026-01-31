@@ -15,7 +15,7 @@
 #include <libc/string.h>
 
 // Framebuffer State
-static uint32_t* g_fb_addr = NULL; // Virtual address of framebuffer
+static uint8_t* g_fb_addr = NULL; // Virtual address of framebuffer
 static uint64_t g_fb_phys = 0;
 static uint32_t g_fb_width = 0;
 static uint32_t g_fb_height = 0;
@@ -53,12 +53,18 @@ static const uint32_t VGA_PALETTE[16] = {
  * put_pixel - Draws a single pixel to the framebuffer
  */
 static inline void put_pixel(uint32_t x, uint32_t y, uint32_t color) {
-    if (x >= g_fb_width || y >= g_fb_height) return;
+    if (x >= g_fb_width || y >= g_fb_height) return; 
     
-    // Pitch is in bytes. For 32bpp, we can cast to uint32_t*.
-    // Optimization: Pre-calculate pitch/4 once?
-    size_t offset = (y * g_fb_pitch / 4) + x;
-    g_fb_addr[offset] = color;
+    size_t offset = (y * g_fb_pitch) + (x * (g_fb_bpp / 8));
+    uint8_t* dst = g_fb_addr + offset;
+
+    if (g_fb_bpp == 32) {
+        *(uint32_t*)dst = color;
+    } else if (g_fb_bpp == 24) {
+        dst[0] = color & 0xFF;
+        dst[1] = (color >> 8) & 0xFF;
+        dst[2] = (color >> 16) & 0xFF;
+    }
 }
 
 /*
@@ -69,6 +75,7 @@ static void draw_glyph(uint8_t* glyph, size_t px, size_t py, uint32_t fg, uint32
         uint8_t row = glyph[y];
         for (size_t x = 0; x < g_font_width; x++) {
             // PSF fonts are usually MSB left. 
+            // NOTE: This assumes standard 8-pixel wide PSF1. 
             // If we upgrade to wider fonts, we need to handle stride.
             bool active = (row >> (7 - x)) & 1;
             put_pixel(px + x, py + y, active ? fg : bg);
@@ -102,16 +109,17 @@ static uint8_t* get_glyph(uint32_t codepoint) {
 void console_clear(void) {
     if (!g_fb_addr) return;
     
+    // If background is black (0), we can optimize with memset
+    if (g_bg_color == 0) {
+        memset(g_fb_addr, 0, g_fb_height * g_fb_pitch);
+        g_cursor_x = 0;
+        g_cursor_y = 0;
+        return;
+    }
+
     for (uint32_t y = 0; y < g_fb_height; y++) {
-        uint32_t* row = (uint32_t*)((uintptr_t)g_fb_addr + (y * g_fb_pitch));
-        // Use memset for black? No, explicit loop for correct color support.
-        // Optimization: memset works if bg is 0.
-        if (g_bg_color == 0) {
-            memset(row, 0, g_fb_width * 4);
-        } else {
-             for (uint32_t x = 0; x < g_fb_width; x++) {
-                row[x] = g_bg_color;
-            }
+        for (uint32_t x = 0; x < g_fb_width; x++) {
+            put_pixel(x, y, g_bg_color);
         }
     }
     
@@ -130,18 +138,24 @@ static void scroll_screen(void) {
     size_t screen_size_bytes = g_fb_height * g_fb_pitch;
     size_t copy_size = screen_size_bytes - line_height_bytes;
 
-    memmove(g_fb_addr, (void*)((uintptr_t)g_fb_addr + line_height_bytes), copy_size);
+    memmove(g_fb_addr, g_fb_addr + line_height_bytes, copy_size);
 
     // Clear the new area at the bottom
-    void* last_line = (void*)((uintptr_t)g_fb_addr + copy_size);
-    // memset safe if 0, else manual
+    // Calculate pointer to the start of the cleared area
+    // Note: g_fb_addr is now uint8_t*, so pointer arithmetic is in bytes. Correct.
+    
+    // memset safe if 0
     if (g_bg_color == 0) {
-        memset(last_line, 0, line_height_bytes);
+        memset(g_fb_addr + copy_size, 0, line_height_bytes);
     } else {
-        // Iterate rows
-        for (size_t i = 0; i < line_height; i++) {
-             uint32_t* row = (uint32_t*)((uintptr_t)last_line + (i * g_fb_pitch));
-             for (uint32_t x = 0; x < g_fb_width; x++) row[x] = g_bg_color;
+        // Manual clear for colored background
+        // We can't easily iterate x/y here without calculating row pointers manually
+        // or just calling put_pixel for the bottom area.
+        size_t start_y = g_fb_height - line_height;
+        for (size_t y = start_y; y < g_fb_height; y++) {
+             for (size_t x = 0; x < g_fb_width; x++) {
+                 put_pixel(x, y, g_bg_color);
+             }
         }
     }
 }
@@ -174,7 +188,7 @@ void console_init(multiboot_parser_t* parser) {
     
     if (status != VMM_OK) panic("Failed to map framebuffer!");
     
-    g_fb_addr = (uint32_t*)virt_addr;
+    g_fb_addr = (uint8_t*)virt_addr;
 
     // Font setup
     psf1_font_t* font = font_get_current();
