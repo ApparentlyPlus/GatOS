@@ -46,11 +46,6 @@ void kernel_main(void* mb_info) {
 		return;
 	#else
 
-	// Clear the console and print the banner
-
-	console_clear();
-	print_banner(KERNEL_VERSION);
-
 	// Initialize serial (COM1) for QEMU output
 
 	serial_init_port(COM1_PORT);
@@ -82,7 +77,8 @@ void kernel_main(void* mb_info) {
     multiboot_init(&multiboot, mb_info, multiboot_buffer, sizeof(multiboot_buffer));
 
 	if (!multiboot.initialized) {
-       	printf("[KERNEL] Failed to initialize multiboot2 parser!\n");
+       	// printf won't work here yet, use serial
+        QEMU_LOG("[KERNEL] Failed to initialize multiboot2 parser!", TOTAL_DBG);
     	return;
     }
 
@@ -112,15 +108,11 @@ void kernel_main(void* mb_info) {
 
 	pmm_status_t pmm_status = pmm_init(get_kend(false) + PAGE_SIZE, PHYSMAP_V2P(get_physmap_end()), PAGE_SIZE);
 	if(pmm_status == PMM_OK){
-		printf("[PMM] Physical memory manager range: 0x%llx - 0x%llx (%d MiB)\n", 
-			get_kend(false) + PAGE_SIZE, 
-			PHYSMAP_V2P(get_physmap_end()), 
-			pmm_managed_size() / (1024 * 1024));
-
+        // Only serial log is available here
 	 	QEMU_LOG("Initialized physical memory manager", TOTAL_DBG);
 	}
 	else{
-		printf("[PMM] Failed to initialize physical memory manager, error code: %d\n", pmm_status);
+		QEMU_LOG("[PMM] Failed to initialize physical memory manager", TOTAL_DBG);
 		return;
 	}
 
@@ -128,7 +120,7 @@ void kernel_main(void* mb_info) {
 
 	slab_status_t slab_status = slab_init();
 	if(slab_status != SLAB_OK){
-		printf("[Slab] Failed to initialize slab allocator, error code: %d\n", slab_status);
+		QEMU_LOG("[Slab] Failed to initialize slab allocator", TOTAL_DBG);
 		return;
 	}
 	QEMU_LOG("Initialized slab allocator", TOTAL_DBG);
@@ -137,11 +129,17 @@ void kernel_main(void* mb_info) {
 
 	vmm_status_t vmm_status = vmm_kernel_init(get_kend(true) + PAGE_SIZE, 0xFFFFFFFFFFFFF000);
 	if(vmm_status != VMM_OK){
-		printf("[VMM] Failed to initialize virtual memory manager, error code: %d\n", vmm_status);
+		QEMU_LOG("[VMM] Failed to initialize virtual memory manager", TOTAL_DBG);
 		return;
 	}
 	QEMU_LOG("Initialized kernel virtual memory manager", TOTAL_DBG);
 
+    // Initialize Framebuffer Console
+    console_init(&multiboot);
+    console_clear();
+    print_banner(KERNEL_VERSION);
+    printf("[KERNEL] Console initialized at %dx%d\n", multiboot_get_framebuffer(&multiboot)->width, multiboot_get_framebuffer(&multiboot)->height);
+    
 	// Initialize kernel heap
 
 	heap_status_t heap_status = heap_kernel_init();

@@ -29,6 +29,9 @@
 #define CONSOLE_COLOR_YELLOW 14
 #define CONSOLE_COLOR_WHITE 15
 
+#include <arch/x86_64/multiboot2.h>
+
+void console_init(multiboot_parser_t* parser);
 void console_print_char(char character);
 void console_set_color(uint8_t foreground, uint8_t background);
 void console_clear(void);
