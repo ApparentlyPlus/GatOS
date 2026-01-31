@@ -31,6 +31,9 @@ static size_t g_font_height = 16;
 static size_t g_max_cols = 0;
 static size_t g_max_rows = 0;
 
+// Spacing
+#define PADDING_Y 2
+
 static uint32_t g_fg_color = 0xFFFFFFFF; // Default White
 static uint32_t g_bg_color = 0xFF000000; // Default Black
 
@@ -66,7 +69,6 @@ static void draw_glyph(uint8_t* glyph, size_t px, size_t py, uint32_t fg, uint32
         uint8_t row = glyph[y];
         for (size_t x = 0; x < g_font_width; x++) {
             // PSF fonts are usually MSB left. 
-            // NOTE: This assumes standard 8-pixel wide PSF1. 
             // If we upgrade to wider fonts, we need to handle stride.
             bool active = (row >> (7 - x)) & 1;
             put_pixel(px + x, py + y, active ? fg : bg);
@@ -123,7 +125,8 @@ void console_clear(void) {
 static void scroll_screen(void) {
     if (!g_fb_addr) return;
 
-    size_t line_height_bytes = g_font_height * g_fb_pitch;
+    size_t line_height = g_font_height + PADDING_Y;
+    size_t line_height_bytes = line_height * g_fb_pitch;
     size_t screen_size_bytes = g_fb_height * g_fb_pitch;
     size_t copy_size = screen_size_bytes - line_height_bytes;
 
@@ -136,7 +139,7 @@ static void scroll_screen(void) {
         memset(last_line, 0, line_height_bytes);
     } else {
         // Iterate rows
-        for (size_t i = 0; i < g_font_height; i++) {
+        for (size_t i = 0; i < line_height; i++) {
              uint32_t* row = (uint32_t*)((uintptr_t)last_line + (i * g_fb_pitch));
              for (uint32_t x = 0; x < g_fb_width; x++) row[x] = g_bg_color;
         }
@@ -179,7 +182,7 @@ void console_init(multiboot_parser_t* parser) {
     g_font_height = font->header->charsize;
 
     g_max_cols = g_fb_width / g_font_width;
-    g_max_rows = g_fb_height / g_font_height;
+    g_max_rows = g_fb_height / (g_font_height + PADDING_Y);
 
     console_clear();
 }
@@ -188,9 +191,11 @@ void console_init(multiboot_parser_t* parser) {
  * handle_codepoint - Draws a fully decoded unicode character
  */
 static void handle_codepoint(uint32_t cp) {
+    size_t line_height = g_font_height + PADDING_Y;
+
     if (cp == '\n') {
         g_cursor_x = 0;
-        g_cursor_y += g_font_height;
+        g_cursor_y += line_height;
     } else if (cp == '\r') {
         g_cursor_x = 0;
     } else if (cp == '\b') {
@@ -208,13 +213,13 @@ static void handle_codepoint(uint32_t cp) {
     // Wrap
     if (g_cursor_x >= g_fb_width) {
         g_cursor_x = 0;
-        g_cursor_y += g_font_height;
+        g_cursor_y += line_height;
     }
     
     // Scroll
-    if (g_cursor_y + g_font_height > g_fb_height) {
+    if (g_cursor_y + line_height > g_fb_height) {
         scroll_screen();
-        g_cursor_y -= g_font_height;
+        g_cursor_y -= line_height;
     }
 }
 
