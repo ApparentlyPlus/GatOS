@@ -17,6 +17,7 @@
 #include <kernel/drivers/console.h>
 #include <kernel/drivers/serial.h>
 #include <kernel/drivers/stdio.h>
+#include <kernel/drivers/keyboard.h>
 #include <kernel/memory/heap.h>
 #include <kernel/memory/slab.h>
 #include <kernel/memory/pmm.h>
@@ -34,6 +35,14 @@ static char* KERNEL_VERSION = "v1.8.1-alpha";
 #ifndef TEST_BUILD
 static uint8_t multiboot_buffer[8 * 1024];
 #endif
+
+/*
+ * keyboard_irq_wrapper - Shim to call keyboard driver from interrupt dispatcher
+ */
+static void keyboard_irq_wrapper(cpu_context_t* ctx) {
+    (void)ctx;
+    keyboard_handler();
+}
 
 /*
  * kernel_main - Main entry point for the GatOS kernel
@@ -61,11 +70,6 @@ void kernel_main(void* mb_info) {
 
 	idt_init();
 	QEMU_LOG("Initialized the IDT", TOTAL_DBG);
-
-	// Enable interrupts
-
-	enable_interrupts();
-	QEMU_LOG("Enabled interrupts using asm(\"sti\")", TOTAL_DBG);
 
 	// Parse CPU information
 	cpu_init();
@@ -167,9 +171,26 @@ void kernel_main(void* mb_info) {
 	QEMU_LOG("Initialized APIC subsystem", TOTAL_DBG);
 	printf("[APIC] Local APIC and I/O APIC initialized successfully\n");
 
+    // Initialize Keyboard
+    keyboard_init();
+    register_interrupt_handler(INT_FIRST_INTERRUPT + 1, keyboard_irq_wrapper);
+    ioapic_redirect(1, INT_FIRST_INTERRUPT + 1, lapic_get_id(), 0);
+    ioapic_unmask(1);
+    printf("[KBD] Keyboard IRQ 1 routed and unmasked.\n");
+
+	// Enable interrupts
+
+	enable_interrupts();
+	QEMU_LOG("Enabled interrupts using asm(\"sti\")", TOTAL_DBG);
+
 	// All subsystems initialized successfully
 	QEMU_LOG("Reached kernel end", TOTAL_DBG);
-	printf("[KERNEL] Kernel initialization complete, entering main loop...");
+	printf("[KERNEL] Kernel initialization complete, entering main loop...\n");
+
+    // Main Loop
+    while (1) {
+        __asm__ volatile("hlt");
+    }
 
 	#endif
 }

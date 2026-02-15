@@ -1,22 +1,6 @@
 #include <kernel/drivers/serial.h>
 
 /*
- * outb - Write a byte to an I/O port
- */
-void outb(uint16_t port, uint8_t val) {
-    __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
-}
-
-/*
- * inb - Read a byte from an I/O port
- */
-uint8_t inb(uint16_t port) {
-    uint8_t ret;
-    __asm__ volatile ("inb %1, %0" : "=a"(ret) : "Nd"(port));
-    return ret;
-}
-
-/*
  * get_port_base - Get port base address for each serial port
  */
 uint16_t get_port_base(serial_port_t port) {
@@ -50,7 +34,6 @@ void serial_init_port(serial_port_t port) {
 void serial_init_all(void) {
     serial_init_port(SERIAL_COM1);
     serial_init_port(SERIAL_COM2);
-    // You can initialize COM3 and COM4 if needed
 }
 
 /*

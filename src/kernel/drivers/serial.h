@@ -1,6 +1,7 @@
 #ifndef SERIAL_H
 #define SERIAL_H
 
+#include <arch/x86_64/cpu/io.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -43,9 +44,5 @@ void serial_write_hex8(uint8_t value);
 void serial_write_hex16(uint16_t value);
 void serial_write_hex32(uint32_t value);
 void serial_write_hex64(uint64_t value);
-
-// Misc
-void outb(uint16_t port, uint8_t val);
-uint8_t inb(uint16_t port);
 
 #endif

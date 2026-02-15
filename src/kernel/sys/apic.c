@@ -10,6 +10,7 @@
 
 #include <arch/x86_64/memory/paging.h>
 #include <kernel/drivers/serial.h>
+#include <arch/x86_64/cpu/io.h>
 #include <arch/x86_64/cpu/cpu.h>
 #include <kernel/memory/vmm.h>
 #include <kernel/sys/panic.h>
@@ -24,13 +25,6 @@ static uint64_t g_lapic_base = 0;
 static uint64_t g_ioapic_base = 0;
 static MADT_IOAPIC* g_ioapic_rec = NULL; 
 static uint64_t g_lapic_ticks_per_ms = 0;
-
-/*
- * io_wait - I/O wait by writing to an unused port
- */
-static inline void io_wait(void) {
-    outb(0x80, 0);
-}
 
 /*
  * disable_pic - Disable the legacy 8259 PICs

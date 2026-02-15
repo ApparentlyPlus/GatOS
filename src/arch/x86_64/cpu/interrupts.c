@@ -18,8 +18,8 @@
 
 #pragma region Types and Globals
 
-// Function pointer type for interrupt handlers
-typedef void (*irq_handler_t)(cpu_context_t*);
+// Global Interrupt Descriptor Table
+interrupt_descriptor idt[IDT_SIZE] = {0};
 
 // Static array of registered interrupt handlers
 static irq_handler_t g_irq_handlers[IDT_SIZE] = {0};

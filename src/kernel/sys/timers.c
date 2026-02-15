@@ -10,6 +10,7 @@
 
 #include <arch/x86_64/cpu/interrupts.h>
 #include <arch/x86_64/memory/paging.h>
+#include <arch/x86_64/cpu/io.h>
 #include <kernel/drivers/serial.h>
 #include <arch/x86_64/cpu/cpu.h>
 #include <kernel/memory/vmm.h>
@@ -120,10 +121,16 @@ static void hpet_init(void) {
          g_hpet_period, (uint32_t)(FEMTOSECONDS_PER_SECOND / g_hpet_period / 1000000));
 }
 
+/*
+ * hpet_is_available - Checks if the HPET has been successfully initialized
+ */
 bool hpet_is_available(void) {
     return g_hpet != NULL;
 }
 
+/*
+ * hpet_read_counter - Reads the current value of the HPET main counter
+ */
 uint64_t hpet_read_counter(void) {
     if (!g_hpet) return 0;
     return g_hpet->main_counter;
@@ -198,6 +205,9 @@ static void timer_calibrate_all(void) {
 
 #pragma region Public Control API
 
+/*
+ * timer_init - Initializes the timer subsystem and determines TSC/LAPIC frequency
+ */
 void timer_init(void) {
     g_boot_tsc = tsc_read();
     
@@ -212,6 +222,9 @@ void timer_init(void) {
     }
 }
 
+/*
+ * sleep_ms - Blocks execution for at least the specified number of milliseconds
+ */
 void sleep_ms(uint64_t ms) {
     if (g_tsc_ticks_per_ms > 0) {
         uint64_t target = tsc_read() + (ms * g_tsc_ticks_per_ms);
@@ -227,6 +240,9 @@ void sleep_ms(uint64_t ms) {
     }
 }
 
+/*
+ * sleep_us - Blocks execution for at least the specified number of microseconds
+ */
 void sleep_us(uint64_t us) {
     if (g_tsc_ticks_per_ms > 0) {
         uint64_t target = tsc_read() + (us * g_tsc_ticks_per_ms / 1000);
@@ -242,11 +258,17 @@ void sleep_us(uint64_t us) {
     }
 }
 
+/*
+ * get_uptime_ms - Returns the number of milliseconds since the kernel booted
+ */
 uint64_t get_uptime_ms(void) {
     if (g_tsc_ticks_per_ms == 0) return 0;
     return (tsc_read() - g_boot_tsc) / g_tsc_ticks_per_ms;
 }
 
+/*
+ * get_uptime_ns - Returns the number of nanoseconds since the kernel booted
+ */
 uint64_t get_uptime_ns(void) {
     if (g_tsc_ticks_per_ms == 0) return 0;
     return ((tsc_read() - g_boot_tsc) * 1000000) / g_tsc_ticks_per_ms;
