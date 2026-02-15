@@ -28,9 +28,9 @@
 #include <kernel/misc.h>
 #include <libc/string.h>
 
-#define TOTAL_DBG 13
+#define TOTAL_DBG 16
 
-static char* KERNEL_VERSION = "v1.8.2-alpha";
+static char* KERNEL_VERSION = "v1.8.3-alpha";
 
 // If it is a test build, the multiboot buffer will be defined in tests.c
 #ifndef TEST_BUILD
@@ -148,6 +148,28 @@ void kernel_main(void* mb_info) {
     printf("[KERNEL] Framebuffer resolution %dx%d\n", multiboot_get_framebuffer(&multiboot)->width, multiboot_get_framebuffer(&multiboot)->height);
     
 	// Initialize kernel heap
+	heap_status_t heap_status = heap_kernel_init();
+	if(heap_status != HEAP_OK){
+		printf("[HEAP] Failed to initialize kernel heap, error code: %d\n", heap_status);
+		return;
+	}
+	QEMU_LOG("Initialized kernel heap", TOTAL_DBG);
+	printf("[KERNEL] All memory subsystems initialized successfully\n");
+
+	// Initialize ACPI
+	acpi_init(&multiboot);
+	printf("[ACPI] Revision %u detected (%s supported), manufacturer: %.6s\n",
+       acpi_get_rsdp()->Revision,
+       acpi_is_xsdt_supported() ? "XSDT" : "RSDT",
+       acpi_get_rsdp()->OEMID);
+
+	QEMU_LOG("Initialized ACPI subsystem", TOTAL_DBG);
+
+	// Initialize APIC subsystem
+
+	apic_init();
+	QEMU_LOG("Initialized APIC subsystem", TOTAL_DBG);
+	printf("[APIC] Local APIC and I/O APIC initialized successfully\n");
 
     // Initialize Keyboard
     keyboard_init();
