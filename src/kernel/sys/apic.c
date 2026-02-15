@@ -23,6 +23,7 @@
 static uint64_t g_lapic_base = 0;
 static uint64_t g_ioapic_base = 0;
 static MADT_IOAPIC* g_ioapic_rec = NULL; 
+static uint64_t g_lapic_ticks_per_ms = 0;
 
 /*
  * io_wait - I/O wait by writing to an unused port
@@ -184,6 +185,45 @@ void lapic_send_ipi(uint32_t dest_id, uint8_t vector) {
 
     lapic_write(LAPIC_ICR_HIGH, dest_id << 24);
     lapic_write(LAPIC_ICR_LOW, vector);
+}
+
+/*
+ * lapic_timer_set_calibration - Sets the calibrated tick rate
+ */
+void lapic_timer_set_calibration(uint64_t ticks_per_ms) {
+    g_lapic_ticks_per_ms = ticks_per_ms;
+}
+
+/*
+ * lapic_timer_oneshot - Arms the LAPIC timer in one-shot mode
+ */
+void lapic_timer_oneshot(uint32_t us, uint8_t vector) {
+    if (g_lapic_ticks_per_ms == 0) return;
+    uint32_t ticks = (uint32_t)(((uint64_t)us * g_lapic_ticks_per_ms) / 1000);
+    
+    lapic_write(LAPIC_TDCR, 0x03); // Divisor 16
+    lapic_write(LAPIC_LVT_TIMER, vector); // One-shot mode (bits 18:17 = 00)
+    lapic_write(LAPIC_TICR, ticks);
+}
+
+/*
+ * lapic_timer_periodic - Arms the LAPIC timer in periodic mode
+ */
+void lapic_timer_periodic(uint32_t us, uint8_t vector) {
+    if (g_lapic_ticks_per_ms == 0) return;
+    uint32_t ticks = (uint32_t)(((uint64_t)us * g_lapic_ticks_per_ms) / 1000);
+    
+    lapic_write(LAPIC_TDCR, 0x03); // Divisor 16
+    lapic_write(LAPIC_LVT_TIMER, vector | LVT_TIMER_PERIODIC);
+    lapic_write(LAPIC_TICR, ticks);
+}
+
+/*
+ * lapic_timer_stop - Stops the Local APIC timer
+ */
+void lapic_timer_stop(void) {
+    lapic_write(LAPIC_LVT_TIMER, LVT_MASK);
+    lapic_write(LAPIC_TICR, 0);
 }
 
 #pragma endregion

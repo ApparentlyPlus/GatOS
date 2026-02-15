@@ -305,3 +305,19 @@ bool cpu_is_feature_enabled(cpu_feature_t feature)
     }
 }
 
+/*
+ * tsc_read - Reads the Time Stamp Counter
+ */
+uint64_t tsc_read(void) {
+    uint32_t lo, hi;
+    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((uint64_t)hi << 32) | lo;
+}
+
+/*
+ * tsc_deadline_arm - Arms the TSC deadline timer
+ */
+void tsc_deadline_arm(uint64_t target_tsc) {
+    write_msr(0x6E0, target_tsc);
+}
+

@@ -21,13 +21,15 @@
 #include <kernel/memory/slab.h>
 #include <kernel/memory/pmm.h>
 #include <kernel/memory/vmm.h>
+#include <kernel/sys/timers.h>
 #include <kernel/sys/acpi.h>
+#include <kernel/sys/apic.h>
 #include <kernel/debug.h>
 #include <kernel/misc.h>
 #include <tests/tests.h>
 #include <libc/string.h>
 
-#define TOTAL_DBG 6
+#define TOTAL_DBG 9
 
 static uint8_t multiboot_buffer[8 * 1024];
 
@@ -117,10 +119,17 @@ void kernel_test(void* mb_info, char* KERNEL_VERSION) {
 	}
 	
 	acpi_init(&multiboot);
+    apic_init();
+    timer_init();
 
     printf("Running Kernel Heap tests...\n");
     test_heap();
     QEMU_LOG("Heap Test Suite Completed", TOTAL_DBG);
+
+    printf("Running Kernel Timer tests...\n");
+    test_timers();
+    QEMU_LOG("Timer Test Suite Completed", TOTAL_DBG);
+
 
     // Finish up
     printf("\nAll kernel tests completed. Halting system.");
