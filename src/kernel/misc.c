@@ -81,7 +81,7 @@ void print_banner(char* KERNEL_VERSION) {
     // Print underscores across the full width of the screen
     for (j = 0; j < screen_width; j++) printf("_");
     
-    printf("\n");
+    printf("\n\n");
 }
 
 /*
@@ -91,11 +91,16 @@ void print_test_banner(char* KERNEL_VERSION){
     console_set_color(CONSOLE_COLOR_CYAN, CONSOLE_COLOR_BLACK);
     
     printf(
-        " @@@@@@@   @@@@@@  @@@@@@@  @@@@@@   @@@@@@\n"
-        "!@@       @@!  @@@   @@!   @@!  @@@ !@@    \n"
-        "!@! @!@!@ @!@!@!@!   @!!   @!@  !@!  !@@!! \n"
-        ":!!   !!: !!:  !!!   !!:   !!:  !!!     !:!\n"
-        " :: :: :   :   : :    :     : :. :  ::.: : \n\n"
+        " @@@@@@@@   @@@@@@   @@@@@@@   @@@@@@    @@@@@@   \n"
+        "@@@@@@@@@  @@@@@@@@  @@@@@@@  @@@@@@@@  @@@@@@@   \n"
+        "!@@        @@!  @@@    @@!    @@!  @@@  !@@       \n"
+        "!@!        !@!  @!@    !@!    !@!  @!@  !@!       \n"
+        "!@! @!@!@  @!@!@!@!    @!!    @!@  !@!  !!@@!!    \n"
+        "!!! !!@!!  !!!@!!!!    !!!    !@!  !!!   !!@!!!   \n"
+        ":!!   !!:  !!:  !!!    !!:    !!:  !!!       !:!  \n"
+        ":!:   !::  :!:  !:!    :!:    :!:  !:!      !:!   \n"
+        " ::: ::::  ::   :::     ::    ::::: ::  :::: ::   \n"
+        " :: :: :    :   : :     :      : :  :   :: : :    \n\n"
     );
     
     console_set_color(CONSOLE_COLOR_MAGENTA, CONSOLE_COLOR_BLACK);

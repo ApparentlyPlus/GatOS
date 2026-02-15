@@ -149,6 +149,7 @@ void kernel_main(void* mb_info) {
 		return;
 	}
 	QEMU_LOG("Initialized kernel heap", TOTAL_DBG);
+	printf("[KERNEL] All memory subsystems initialized successfully\n");
 
 	// Initialize ACPI
     
@@ -164,9 +165,11 @@ void kernel_main(void* mb_info) {
 
 	apic_init();
 	QEMU_LOG("Initialized APIC subsystem", TOTAL_DBG);
+	printf("[APIC] Local APIC and I/O APIC initialized successfully\n");
 
 	// All subsystems initialized successfully
 	QEMU_LOG("Reached kernel end", TOTAL_DBG);
+	printf("[KERNEL] Kernel initialization complete, entering main loop...");
 
 	#endif
 }

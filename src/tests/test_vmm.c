@@ -174,7 +174,7 @@ static bool test_alloc_at(void) {
     tracker_reset();
     vmm_t* vmm = vmm_kernel_get();
     
-    uintptr_t target = vmm_get_alloc_base(vmm) + (TEST_PAGE_SIZE * 50);
+    uintptr_t target = vmm_get_alloc_base(vmm) + (TEST_PAGE_SIZE * 4096);
     void* ptr;
     
     TEST_ASSERT_STATUS(vmm_alloc_at(vmm, (void*)target, TEST_PAGE_SIZE, VM_FLAG_WRITE, NULL, &ptr), VMM_OK);

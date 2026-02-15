@@ -83,7 +83,7 @@ void kernel_test(void* mb_info, char* KERNEL_VERSION) {
         LOGF("[VMM] Failed to initialize virtual memory manager, error code: %d\n", vmm_status);
 		return;
 	}
-    QEMU_LOG("VMM Initialized", TOTAL_DBG);
+    QEMU_LOG("VMM Initialized (Tests deferred)", TOTAL_DBG);
 
     // --- CONSOLE INIT ---
     // Now that VMM is ready, we can map the framebuffer
