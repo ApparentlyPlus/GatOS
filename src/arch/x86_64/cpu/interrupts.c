@@ -131,6 +131,34 @@ void idt_init(void)
 #pragma region Dispatcher
 
 /*
+ * interrupts_save - Disables interrupts and returns whether they were enabled
+ */
+bool interrupts_save(void)
+{
+    uint64_t rflags;
+    __asm__ volatile("pushfq; popq %0" : "=r"(rflags));
+    
+    // Check bit 9 (Interrupt Flag)
+    bool enabled = (rflags >> 9) & 1;
+    
+    if (enabled) {
+        disable_interrupts();
+    }
+    
+    return enabled;
+}
+
+/*
+ * interrupts_restore - Restores interrupt state based on previous value
+ */
+void interrupts_restore(bool enabled)
+{
+    if (enabled) {
+        enable_interrupts();
+    }
+}
+
+/*
  * interrupt_dispatcher - Central C handler called by assembly stubs.
  */
 cpu_context_t* interrupt_dispatcher(cpu_context_t* context)

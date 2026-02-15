@@ -24,12 +24,13 @@
 #include <kernel/sys/timers.h>
 #include <kernel/sys/acpi.h>
 #include <kernel/sys/apic.h>
+#include <kernel/sys/spinlock.h>
 #include <kernel/debug.h>
 #include <kernel/misc.h>
 #include <tests/tests.h>
 #include <libc/string.h>
 
-#define TOTAL_DBG 9
+#define TOTAL_DBG 10
 
 static uint8_t multiboot_buffer[8 * 1024];
 
@@ -130,6 +131,9 @@ void kernel_test(void* mb_info, char* KERNEL_VERSION) {
     test_timers();
     QEMU_LOG("Timer Test Suite Completed", TOTAL_DBG);
 
+    printf("Running Spinlock Primitive tests...\n");
+    test_spinlock();
+    QEMU_LOG("Spinlock Test Suite Completed", TOTAL_DBG);
 
     // Finish up
     printf("\nAll kernel tests completed. Halting system.");

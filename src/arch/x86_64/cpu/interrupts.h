@@ -104,3 +104,7 @@ extern uint32_t gdt64_code_segment;
 void idt_init(void);
 void enable_interrupts(void);
 void disable_interrupts(void);
+
+
+bool interrupts_save(void);
+void interrupts_restore(bool enabled);

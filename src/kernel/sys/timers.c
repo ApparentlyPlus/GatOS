@@ -31,7 +31,7 @@ static uint64_t g_boot_tsc = 0;
 
 #pragma region PIT Implementation
 
-/**
+/*
  * pit_set_oneshot - Sets PIT channel 0 to one-shot mode (Mode 0)
  */
 void pit_set_oneshot(uint16_t ticks) {
@@ -41,20 +41,20 @@ void pit_set_oneshot(uint16_t ticks) {
     outb(0x40, (uint8_t)((ticks >> 8) & 0xFF));
 }
 
-/**
+/*
  * pit_prepare_sleep - Helper for short delays during early boot
  */
 void pit_prepare_sleep(uint32_t ms) {
     uint32_t total_ticks = (PIT_FREQUENCY / 1000) * ms;
     
-    // The PIT counter is 16-bit, max ~54ms per wrap.
+    // The PIT counter is 16-bit, max 54ms per wrap.
     // For longer sleeps, we'd need a loop.
     if (total_ticks > 0xFFFF) total_ticks = 0xFFFF;
 
     pit_set_oneshot((uint16_t)total_ticks);
 }
 
-/**
+/*
  * pit_wait - Spins until PIT Channel 0 reaches 0
  */
 static void pit_wait(void) {
@@ -76,7 +76,7 @@ static void pit_wait(void) {
 
 #pragma region HPET Implementation
 
-/**
+/*
  * hpet_init - Discovers and initializes the HPET from ACPI
  */
 static void hpet_init(void) {
@@ -133,7 +133,7 @@ uint64_t hpet_read_counter(void) {
 
 #pragma region Calibration Logic
 
-/**
+/*
  * timer_calibrate_all - Calibrates LAPIC and TSC against HPET or PIT
  */
 static void timer_calibrate_all(void) {
