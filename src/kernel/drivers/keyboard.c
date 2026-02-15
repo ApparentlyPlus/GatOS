@@ -1,12 +1,13 @@
+
 /*
- * keyboard.c - Production-grade Keyboard Driver Implementation
+ * keyboard.c - Keyboard Driver Implementation
  *
  * Features:
- * - Scancode Set 1 State Machine (Handles 0xE0 prefixes)
- * - Thread-safe circular event buffer
- * - Modifier tracking (Shift, Ctrl, Alt, Gui)
- * - Toggle state management (Caps, Num, Scroll lock)
- * - LED synchronization with i8042
+ * Scancode Set 1 State Machine (Handles 0xE0 prefixes)
+ * Thread-safe circular event buffer
+ * Modifier tracking (Shift, Ctrl, Alt, Gui)
+ * Toggle state management (Caps, Num, Scroll lock)
+ * LED synchronization with i8042
  *
  * Author: u/ApparentlyPlus
  */
@@ -56,9 +57,6 @@ static const keycode_t scancode_set1[] = {
 
 #pragma region Internal Helpers
 
-/*
- * update_leds - Sends command to PS/2 device to update physical LEDs
- */
 static void update_leds(void) {
     i8042_write_data(0xED);
     i8042_wait_read();
@@ -67,9 +65,6 @@ static void update_leds(void) {
     }
 }
 
-/*
- * push_event - Adds a key event to the circular buffer (Thread-safe)
- */
 static void push_event(keycode_t key, bool pressed) {
     bool flags = spinlock_acquire(&g_key_events.lock);
 
@@ -89,9 +84,6 @@ static void push_event(keycode_t key, bool pressed) {
 
 #pragma region Public API
 
-/*
- * keyboard_init - Initializes the event buffer and controller
- */
 void keyboard_init(void) {
     memset(&g_key_events, 0, sizeof(g_key_events));
     spinlock_init(&g_key_events.lock, "keyboard_events");
@@ -102,9 +94,6 @@ void keyboard_init(void) {
     }
 }
 
-/*
- * keyboard_get_event - Pops an event from the buffer if available
- */
 bool keyboard_get_event(key_event_t* out_event) {
     bool flags = spinlock_acquire(&g_key_events.lock);
 
@@ -120,9 +109,6 @@ bool keyboard_get_event(key_event_t* out_event) {
     return true;
 }
 
-/*
- * keyboard_handler - Main IRQ handler logic (State machine)
- */
 void keyboard_handler(void) {
     uint8_t scancode = i8042_read_data();
 
@@ -183,9 +169,6 @@ static const char layout_us_qwerty_shift[] = {
     '*', 0, ' ', 0
 };
 
-/*
- * keyboard_keycode_to_ascii - Translates a keycode to an ASCII character (US QWERTY)
- */
 char keyboard_keycode_to_ascii(key_event_t event) {
     if (event.keycode > KEY_CAPSLOCK) return 0;
     
