@@ -1,4 +1,3 @@
-
 /*
  * keyboard.c - Keyboard Driver Implementation
  *
@@ -14,6 +13,7 @@
 
 #include <kernel/drivers/keyboard.h>
 #include <kernel/drivers/i8042.h>
+#include <kernel/drivers/tty.h>
 #include <kernel/sys/spinlock.h>
 #include <kernel/sys/apic.h>
 #include <kernel/debug.h>
@@ -57,6 +57,9 @@ static const keycode_t scancode_set1[] = {
 
 #pragma region Internal Helpers
 
+/*
+ * update_leds - Sends command to PS/2 device to update physical LEDs
+ */
 static void update_leds(void) {
     i8042_write_data(0xED);
     i8042_wait_read();
@@ -65,6 +68,9 @@ static void update_leds(void) {
     }
 }
 
+/*
+ * push_event - Adds a key event to the circular buffer (Thread-safe)
+ */
 static void push_event(keycode_t key, bool pressed) {
     bool flags = spinlock_acquire(&g_key_events.lock);
 
@@ -84,6 +90,9 @@ static void push_event(keycode_t key, bool pressed) {
 
 #pragma region Public API
 
+/*
+ * keyboard_init - Initializes the event buffer and controller
+ */
 void keyboard_init(void) {
     memset(&g_key_events, 0, sizeof(g_key_events));
     spinlock_init(&g_key_events.lock, "keyboard_events");
@@ -94,6 +103,9 @@ void keyboard_init(void) {
     }
 }
 
+/*
+ * keyboard_get_event - Pops an event from the buffer if available
+ */
 bool keyboard_get_event(key_event_t* out_event) {
     bool flags = spinlock_acquire(&g_key_events.lock);
 
@@ -109,7 +121,11 @@ bool keyboard_get_event(key_event_t* out_event) {
     return true;
 }
 
-void keyboard_handler(void) {
+/*
+ * keyboard_handler - Main IRQ handler logic (State machine)
+ */
+void keyboard_handler(cpu_context_t* ctx) {
+    (void)ctx;
     uint8_t scancode = i8042_read_data();
 
     if (scancode == 0xE0) {
@@ -146,6 +162,22 @@ void keyboard_handler(void) {
         default: break;
     }
 
+    // Handle TTY integration
+    if (pressed && g_active_tty) {
+        key_event_t event = {
+            .keycode = key,
+            .pressed = true,
+            .modifiers = g_current_modifiers,
+            .locks = g_current_locks
+        };
+        char c = keyboard_keycode_to_ascii(event);
+        if (c) {
+            tty_push_char(g_active_tty, c);
+        } else if (key == KEY_BACKSPACE) {
+            tty_push_char(g_active_tty, '\b');
+        }
+    }
+
     push_event(key, pressed);
 }
 
@@ -169,6 +201,9 @@ static const char layout_us_qwerty_shift[] = {
     '*', 0, ' ', 0
 };
 
+/*
+ * keyboard_keycode_to_ascii - Translates a keycode to an ASCII character (US QWERTY)
+ */
 char keyboard_keycode_to_ascii(key_event_t event) {
     if (event.keycode > KEY_CAPSLOCK) return 0;
     

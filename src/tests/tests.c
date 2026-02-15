@@ -24,13 +24,13 @@
 #include <kernel/sys/timers.h>
 #include <kernel/sys/acpi.h>
 #include <kernel/sys/apic.h>
-#include <kernel/sys/spinlock.h>
+#include <kernel/drivers/tty.h>
 #include <kernel/debug.h>
 #include <kernel/misc.h>
 #include <tests/tests.h>
 #include <libc/string.h>
 
-#define TOTAL_DBG 10
+#define TOTAL_DBG 11
 
 static uint8_t multiboot_buffer[8 * 1024];
 
@@ -88,10 +88,15 @@ void kernel_test(void* mb_info, char* KERNEL_VERSION) {
 	}
     QEMU_LOG("VMM Initialized (Tests deferred)", TOTAL_DBG);
 
-    // --- CONSOLE INIT ---
     // Now that VMM is ready, we can map the framebuffer
     console_init(&multiboot);
     console_clear();
+
+    // Initialize TTY (Must happen before first printf)
+    static tty_t test_tty_instance;
+    tty_init(&test_tty_instance, console_print_char);
+    g_active_tty = &test_tty_instance;
+
     print_test_banner(KERNEL_VERSION);
     
     console_set_color(CONSOLE_COLOR_GREEN, CONSOLE_COLOR_BLACK);
@@ -134,6 +139,10 @@ void kernel_test(void* mb_info, char* KERNEL_VERSION) {
     printf("Running Spinlock Primitive tests...\n");
     test_spinlock();
     QEMU_LOG("Spinlock Test Suite Completed", TOTAL_DBG);
+
+    printf("Running TTY Abstraction tests...\n");
+    test_tty();
+    QEMU_LOG("TTY Test Suite Completed", TOTAL_DBG);
 
     // Finish up
     printf("\nAll kernel tests completed. Halting system.");

@@ -18,6 +18,7 @@
 #include <kernel/drivers/serial.h>
 #include <kernel/drivers/stdio.h>
 #include <kernel/drivers/keyboard.h>
+#include <kernel/drivers/tty.h>
 #include <kernel/memory/heap.h>
 #include <kernel/memory/slab.h>
 #include <kernel/memory/pmm.h>
@@ -27,7 +28,7 @@
 #include <kernel/misc.h>
 #include <libc/string.h>
 
-#define TOTAL_DBG 16
+#define TOTAL_DBG 13
 
 static char* KERNEL_VERSION = "v1.8.2-alpha";
 
@@ -36,13 +37,8 @@ static char* KERNEL_VERSION = "v1.8.2-alpha";
 static uint8_t multiboot_buffer[8 * 1024];
 #endif
 
-/*
- * keyboard_irq_wrapper - Shim to call keyboard driver from interrupt dispatcher
- */
-static void keyboard_irq_wrapper(cpu_context_t* ctx) {
-    (void)ctx;
-    keyboard_handler();
-}
+// Kernel TTY instance
+static tty_t g_kernel_tty;
 
 /*
  * kernel_main - Main entry point for the GatOS kernel
@@ -142,38 +138,20 @@ void kernel_main(void* mb_info) {
     // Initialize Framebuffer Console
     console_init(&multiboot);
     console_clear();
+
+    // Initialize TTY (Must happen before first printf)
+    tty_init(&g_kernel_tty, console_print_char);
+    g_active_tty = &g_kernel_tty;
+
     print_banner(KERNEL_VERSION);
-    printf("[KERNEL] Console initialized at %dx%d\n", multiboot_get_framebuffer(&multiboot)->width, multiboot_get_framebuffer(&multiboot)->height);
+    printf("[KERNEL] Console and TTY initialized.\n");
+    printf("[KERNEL] Framebuffer resolution %dx%d\n", multiboot_get_framebuffer(&multiboot)->width, multiboot_get_framebuffer(&multiboot)->height);
     
 	// Initialize kernel heap
 
-	heap_status_t heap_status = heap_kernel_init();
-	if(heap_status != HEAP_OK){
-		printf("[HEAP] Failed to initialize kernel heap, error code: %d\n", heap_status);
-		return;
-	}
-	QEMU_LOG("Initialized kernel heap", TOTAL_DBG);
-	printf("[KERNEL] All memory subsystems initialized successfully\n");
-
-	// Initialize ACPI
-    
-	acpi_init(&multiboot);
-	printf("[ACPI] Revision %u detected (%s supported), manufacturer: %.6s\n",
-       acpi_get_rsdp()->Revision,
-       acpi_is_xsdt_supported() ? "XSDT" : "RSDT",
-       acpi_get_rsdp()->OEMID);
-
-	QEMU_LOG("Initialized ACPI subsystem", TOTAL_DBG);
-
-	// Initialize APIC subsystem
-
-	apic_init();
-	QEMU_LOG("Initialized APIC subsystem", TOTAL_DBG);
-	printf("[APIC] Local APIC and I/O APIC initialized successfully\n");
-
     // Initialize Keyboard
     keyboard_init();
-    register_interrupt_handler(INT_FIRST_INTERRUPT + 1, keyboard_irq_wrapper);
+    register_interrupt_handler(INT_FIRST_INTERRUPT + 1, keyboard_handler);
     ioapic_redirect(1, INT_FIRST_INTERRUPT + 1, lapic_get_id(), 0);
     ioapic_unmask(1);
     printf("[KBD] Keyboard IRQ 1 routed and unmasked.\n");
@@ -186,11 +164,6 @@ void kernel_main(void* mb_info) {
 	// All subsystems initialized successfully
 	QEMU_LOG("Reached kernel end", TOTAL_DBG);
 	printf("[KERNEL] Kernel initialization complete, entering main loop...\n");
-
-    // Main Loop
-    while (1) {
-        __asm__ volatile("hlt");
-    }
 
 	#endif
 }

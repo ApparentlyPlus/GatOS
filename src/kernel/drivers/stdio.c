@@ -15,6 +15,8 @@
 
 #include <kernel/drivers/console.h>
 #include <kernel/drivers/stdio.h>
+#include <kernel/drivers/tty.h>
+#include <kernel/sys/panic.h>
 
 
 // define this globally (e.g. gcc -DPRINTF_INCLUDE_CONFIG_H ...) to include the
@@ -111,7 +113,10 @@ typedef struct {
 
 
 void _putchar(char character){
-    console_print_char(character);
+    if (!g_active_tty) {
+        panic("Attempted to use printf before TTY was initialized!");
+    }
+    tty_write(g_active_tty, &character, 1);
 }
 
 // internal buffer output

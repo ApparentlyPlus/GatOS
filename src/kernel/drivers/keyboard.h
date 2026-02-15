@@ -11,6 +11,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <arch/x86_64/cpu/interrupts.h>
 
 // GatOS Keycodes
 typedef enum {
@@ -75,7 +76,7 @@ typedef struct {
 // Public API
 void keyboard_init(void);
 bool keyboard_get_event(key_event_t* out_event);
-void keyboard_handler(void); // To be called from ISR
+void keyboard_handler(cpu_context_t* ctx); // To be called from ISR
 
 // Layout translation (US QWERTY default)
 char keyboard_keycode_to_ascii(key_event_t event);
