@@ -81,3 +81,29 @@ int vprintf_(const char* format, va_list va);
  * \return The number of characters that are sent to the output function, not counting the terminating null character
  */
 int fctprintf(void (*out)(char character, void* arg), void* arg, const char* format, ...);
+
+
+/**
+ * Get a character from the active TTY
+ * \return The character read
+ */
+int _getchar(void);
+
+
+/**
+ * Tiny scanf implementation
+ * \param format A string that specifies the format of the input
+ * \return The number of successfully matched and assigned input items
+ */
+#define scanf scanf_
+int scanf_(const char* format, ...);
+
+
+/**
+ * Tiny vscanf implementation
+ * \param format A string that specifies the format of the input
+ * \param va A value identifying a variable arguments list
+ * \return The number of successfully matched and assigned input items
+ */
+#define vscanf vscanf_
+int vscanf_(const char* format, va_list va);

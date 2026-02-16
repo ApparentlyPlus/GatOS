@@ -1,15 +1,11 @@
 /*
  * string.h - Standard C string and memory operations
- *
- * Declares common string manipulation and memory handling functions
- * compliant with standard C library specifications.
- *
- * Author: u/ApparentlyPlus
  */
  
 #pragma once
 
 #include <stddef.h>
+#include <stdbool.h>
 
 void *memset(void *dest, int c, size_t n);
 void *memcpy(void *dest, const void *src, size_t n);
@@ -25,3 +21,9 @@ char *strchr(const char *s, int c);
 char *strrchr(const char *s, int c);
 char *strcat(char *dest, const char *src);
 char *strncat(char *dest, const char *src, size_t n);
+
+// Helpers for scanf
+bool isspace(int c);
+bool isdigit(int c);
+long strtol(const char *nptr, char **endptr, int base);
+unsigned long strtoul(const char *nptr, char **endptr, int base);

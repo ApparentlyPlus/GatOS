@@ -206,7 +206,18 @@ void kernel_main(void* mb_info) {
 
 	// All subsystems initialized successfully
 	QEMU_LOG("Reached kernel end", TOTAL_DBG);
-	printf("[KERNEL] Kernel initialization complete, entering main loop...\n");
+	printf("[KERNEL] Kernel initialization complete, entering interactive test loop...\n");
+	
+	while (1) {
+	    char tt[128] = {0};
 
-#endif
-}
+	    printf("\nType anything you want: ");
+
+	    // Use scanset to read until newline
+	    if (scanf(" %[^\n]", tt) > 0) {
+	        printf("You typed: %s\n", tt);
+	    }
+	}
+	
+	#endif
+	}

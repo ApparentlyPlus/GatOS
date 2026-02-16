@@ -17,6 +17,7 @@
 #include <kernel/drivers/stdio.h>
 #include <kernel/drivers/tty.h>
 #include <kernel/sys/panic.h>
+#include <libc/string.h>
 
 
 // define this globally (e.g. gcc -DPRINTF_INCLUDE_CONFIG_H ...) to include the
@@ -895,4 +896,202 @@ int fctprintf(void (*out)(char character, void* arg), void* arg, const char* for
   const int ret = _vsnprintf(_out_fct, (char*)(uintptr_t)&out_fct_wrap, (size_t)-1, format, va);
   va_end(va);
   return ret;
+}
+
+
+///////////////////////////////////////////////////////////////////////////////
+// Input Implementation
+
+static int g_next_char = -1;
+
+int _getchar(void) {
+    if (g_next_char != -1) {
+        int ch = g_next_char;
+        g_next_char = -1;
+        return ch;
+    }
+    if (!g_active_tty) return 0;
+    return (int)tty_read_char(g_active_tty);
+}
+
+static void _ungetchar(int ch) {
+    g_next_char = ch;
+}
+
+int vscanf_(const char* format, va_list va) {
+    int count = 0;
+    int ch;
+
+    while (*format) {
+        if (isspace((unsigned char)*format)) {
+            while (isspace((unsigned char)*format)) format++;
+            ch = _getchar();
+            while (isspace(ch)) ch = _getchar();
+            _ungetchar(ch);
+            continue;
+        }
+
+        if (*format != '%') {
+            ch = _getchar();
+            if (ch != *format) {
+                _ungetchar(ch);
+                return count;
+            }
+            format++;
+            continue;
+        }
+
+        format++; // skip '%'
+
+        bool suppress = false;
+        if (*format == '*') {
+            suppress = true;
+            format++;
+        }
+
+        // Handle scansets %[...]
+        if (*format == '[') {
+            format++;
+            bool invert = false;
+            if (*format == '^') {
+                invert = true;
+                format++;
+            }
+
+            char set[256] = {0};
+            if (*format == ']') { // Literal ']' if it's the first char
+                set[(unsigned char)']'] = 1;
+                format++;
+            }
+            while (*format && *format != ']') {
+                set[(unsigned char)*format++] = 1;
+            }
+            if (*format) format++;
+
+            char* p = suppress ? NULL : va_arg(va, char*);
+            int matched = 0;
+            
+            while ((ch = _getchar()) != 0) {
+                bool in_set = set[(unsigned char)ch];
+                if (invert) in_set = !in_set;
+                
+                if (!in_set || ch == '\n') {
+                    _ungetchar(ch);
+                    break;
+                }
+                if (!suppress) *p++ = (char)ch;
+                matched++;
+            }
+            
+            if (matched > 0) {
+                if (!suppress) {
+                    *p = '\0';
+                    count++;
+                }
+            } else return count;
+            continue;
+        }
+
+        // Handle %%
+        if (*format == '%') {
+            ch = _getchar();
+            if (ch != '%') {
+                _ungetchar(ch);
+                return count;
+            }
+            format++;
+            continue;
+        }
+        
+        switch (*format) {
+            case 'c': {
+                char* p = suppress ? NULL : va_arg(va, char*);
+                ch = _getchar();
+                if (!suppress) {
+                    *p = (char)ch;
+                    count++;
+                }
+                break;
+            }
+            case 's': {
+                char* p = suppress ? NULL : va_arg(va, char*);
+                ch = _getchar();
+                while (isspace(ch)) ch = _getchar();
+                
+                int matched = 0;
+                while (ch != 0 && !isspace(ch)) {
+                    if (!suppress) *p++ = (char)ch;
+                    matched++;
+                    ch = _getchar();
+                }
+                _ungetchar(ch);
+                if (matched > 0) {
+                    if (!suppress) {
+                        *p = '\0';
+                        count++;
+                    }
+                } else return count;
+                break;
+            }
+            case 'd':
+            case 'i':
+            case 'o':
+            case 'u':
+            case 'x': {
+                char buf[64];
+                int i = 0;
+                ch = _getchar();
+                while (isspace(ch)) ch = _getchar();
+                
+                bool is_hex = (*format == 'x');
+                bool is_oct = (*format == 'o');
+                bool is_any = (*format == 'i');
+
+                while (i < 63) {
+                    bool valid = false;
+                    if (isdigit(ch)) valid = true;
+                    else if ((is_hex || is_any) && ((ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F'))) valid = true;
+                    else if ((is_hex || is_any) && (ch == 'x' || ch == 'X')) valid = true;
+                    else if (ch == '-' || ch == '+') valid = true;
+                    
+                    if (!valid) break;
+                    buf[i++] = (char)ch;
+                    ch = _getchar();
+                }
+                buf[i] = '\0';
+                _ungetchar(ch);
+
+                if (i == 0) return count;
+
+                if (!suppress) {
+                    if (*format == 'd' || *format == 'i') {
+                        int* p = va_arg(va, int*);
+                        *p = (int)strtol(buf, NULL, (*format == 'i') ? 0 : 10);
+                    } else if (*format == 'o') {
+                        unsigned int* p = va_arg(va, unsigned int*);
+                        *p = (unsigned int)strtoul(buf, NULL, 8);
+                    } else if (*format == 'u') {
+                        unsigned int* p = va_arg(va, unsigned int*);
+                        *p = (unsigned int)strtoul(buf, NULL, 10);
+                    } else if (*format == 'x') {
+                        unsigned int* p = va_arg(va, unsigned int*);
+                        *p = (unsigned int)strtoul(buf, NULL, 16);
+                    }
+                    count++;
+                }
+                break;
+            }
+            default: break;
+        }
+        format++;
+    }
+    return count;
+}
+
+int scanf_(const char* format, ...) {
+    va_list va;
+    va_start(va, format);
+    int ret = vscanf_(format, va);
+    va_end(va);
+    return ret;
 }
