@@ -2,22 +2,23 @@
  * keyboard.c - Keyboard Driver Implementation
  *
  * Features:
- * Scancode Set 1 State Machine (Handles 0xE0 prefixes)
- * Thread-safe circular event buffer
- * Modifier tracking (Shift, Ctrl, Alt, Gui)
- * Toggle state management (Caps, Num, Scroll lock)
- * LED synchronization with i8042
+ * - Scancode Set 1 State Machine (Handles 0xE0 prefixes)
+ * - Thread-safe circular event buffer
+ * - Modifier tracking (Shift, Ctrl, Alt, Gui)
+ * - Toggle state management (Caps, Num, Scroll lock)
+ * - LED synchronization with i8042
  *
  * Author: u/ApparentlyPlus
  */
 
 #include <kernel/drivers/keyboard.h>
 #include <kernel/drivers/i8042.h>
-#include <kernel/drivers/tty.h>
+#include <kernel/drivers/input.h>
 #include <kernel/sys/spinlock.h>
 #include <kernel/sys/apic.h>
 #include <kernel/debug.h>
 #include <libc/string.h>
+#include <arch/x86_64/cpu/io.h>
 
 #define EVENT_BUFFER_SIZE 256
 
@@ -99,6 +100,12 @@ void keyboard_init(void) {
     
     if (i8042_init()) {
         update_leds();
+        
+        // Drain any pending bytes from initialization
+        while (inb(0x64) & 0x01) {
+            inb(0x60);
+        }
+        
         LOGF("[KBD] Keyboard driver initialized.\n");
     }
 }
@@ -126,7 +133,11 @@ bool keyboard_get_event(key_event_t* out_event) {
  */
 void keyboard_handler(cpu_context_t* ctx) {
     (void)ctx;
-    uint8_t scancode = i8042_read_data();
+    
+    // Check status port directly for speed
+    if (!(inb(0x64) & 0x01)) return;
+
+    uint8_t scancode = inb(0x60);
 
     if (scancode == 0xE0) {
         g_extended = true;
@@ -145,7 +156,9 @@ void keyboard_handler(cpu_context_t* ctx) {
         key = scancode_set1[code];
     }
 
-    if (key == KEY_UNKNOWN) return;
+    if (key == KEY_UNKNOWN) {
+        return;
+    }
 
     switch (key) {
         case KEY_LEFT_SHIFT:  pressed ? (g_current_modifiers |= MOD_LSHIFT) : (g_current_modifiers &= ~MOD_LSHIFT); break;
@@ -162,22 +175,16 @@ void keyboard_handler(cpu_context_t* ctx) {
         default: break;
     }
 
-    // Handle TTY integration
-    if (pressed && g_active_tty) {
-        key_event_t event = {
-            .keycode = key,
-            .pressed = true,
-            .modifiers = g_current_modifiers,
-            .locks = g_current_locks
-        };
-        char c = keyboard_keycode_to_ascii(event);
-        if (c) {
-            tty_push_char(g_active_tty, c);
-        } else if (key == KEY_BACKSPACE) {
-            tty_push_char(g_active_tty, '\b');
-        }
-    }
+    // Dispatch to Input Hub (Handles hotkeys and TTY routing)
+    key_event_t event = {
+        .keycode = key,
+        .pressed = pressed,
+        .modifiers = g_current_modifiers,
+        .locks = g_current_locks
+    };
+    input_handle_key(event);
 
+    // Add to internal driver buffer
     push_event(key, pressed);
 }
 

@@ -1,21 +1,18 @@
 /*
  * vga_console.c - Framebuffer console implementation
- *
- * Provides a text console over a high-resolution framebuffer.
- * Implements a Unicode-aware (UTF-8) character renderer using a PSF1 font.
- * 
- * Author: u/ApparentlyPlus
  */
 
 #include <kernel/drivers/console.h>
 #include <kernel/drivers/font.h>
+#include <kernel/drivers/tty.h>
 #include <arch/x86_64/memory/paging.h>
 #include <kernel/memory/vmm.h>
+#include <kernel/memory/heap.h>
 #include <kernel/sys/panic.h>
 #include <libc/string.h>
 
-// Framebuffer State
-static uint8_t* g_fb_addr = NULL; // Virtual address of framebuffer
+// Framebuffer Hardware State
+static uint8_t* g_fb_addr = NULL; 
 static uint64_t g_fb_phys = 0;
 static uint32_t g_fb_width = 0;
 static uint32_t g_fb_height = 0;
@@ -23,25 +20,13 @@ static uint32_t g_fb_pitch = 0;
 static uint32_t g_fb_bpp = 0;
 static size_t g_fb_size = 0;
 
-// Console State
-static size_t g_cursor_x = 0; // In pixels (for variable width support later)
-static size_t g_cursor_y = 0; // In pixels
 static size_t g_font_width = 8;
 static size_t g_font_height = 16;
 static size_t g_max_cols = 0;
 static size_t g_max_rows = 0;
 
-// Spacing
 #define PADDING_Y 2
 
-static uint32_t g_fg_color = 0xFFFFFFFF; // Default White
-static uint32_t g_bg_color = 0xFF000000; // Default Black
-
-// UTF-8 State Machine
-static uint32_t g_utf8_codepoint = 0;
-static int g_utf8_bytes_needed = 0;
-
-// Standard VGA Color Palette (ARGB)
 static const uint32_t VGA_PALETTE[16] = {
     0xFF000000, 0xFF0000AA, 0xFF00AA00, 0xFF00AAAA, 
     0xFFAA0000, 0xFFAA00AA, 0xFFAA5500, 0xFFAAAAAA, 
@@ -49,126 +34,201 @@ static const uint32_t VGA_PALETTE[16] = {
     0xFFFF5555, 0xFFFF55FF, 0xFFFFFF55, 0xFFFFFFFF
 };
 
-/*
- * put_pixel - Draws a single pixel to the framebuffer
- */
+/* --- Hardware Drawing --- */
+
 static inline void put_pixel(uint32_t x, uint32_t y, uint32_t color) {
     if (x >= g_fb_width || y >= g_fb_height) return; 
-    
     size_t offset = (y * g_fb_pitch) + (x * (g_fb_bpp / 8));
     uint8_t* dst = g_fb_addr + offset;
-
     if (g_fb_bpp == 32) {
         *(uint32_t*)dst = color;
     } else if (g_fb_bpp == 24) {
-        dst[0] = color & 0xFF;
-        dst[1] = (color >> 8) & 0xFF;
-        dst[2] = (color >> 16) & 0xFF;
+        dst[0] = color & 0xFF; dst[1] = (color >> 8) & 0xFF; dst[2] = (color >> 16) & 0xFF;
     }
 }
 
-/*
- * draw_glyph - Draws a PSF glyph at specific pixel coordinates
- */
 static void draw_glyph(uint8_t* glyph, size_t px, size_t py, uint32_t fg, uint32_t bg) {
     for (size_t y = 0; y < g_font_height; y++) {
         uint8_t row = glyph[y];
         for (size_t x = 0; x < g_font_width; x++) {
-            // PSF fonts are usually MSB left. 
-            // NOTE: This assumes standard 8-pixel wide PSF1. 
-            // If we upgrade to wider fonts, we need to handle stride.
             bool active = (row >> (7 - x)) & 1;
             put_pixel(px + x, py + y, active ? fg : bg);
         }
     }
 }
 
-/*
- * get_glyph - Retrieves the glyph pointer for a given codepoint
- */
-static uint8_t* get_glyph(uint32_t codepoint) {
+static uint8_t* get_glyph_ptr(uint32_t codepoint) {
     psf1_font_t* font = font_get_current();
     if (!font) return NULL;
-    
     uint8_t index = unicode_to_cp437(codepoint);
-    
-    // If index is 0 (NUL), check if the original codepoint was NUL.
-    // If it was not NUL, it means mapping failed.
-    if (index == 0 && codepoint != 0) {
-        // Fallback to a block or question mark. 
-        // In CP437, 0xDB is a full block (█), 0x3F is '?'
-        index = 0x3F; 
-    }
-    
+    if (index == 0 && codepoint != 0) index = 0x3F; 
     return (uint8_t*)font->glyph_buffer + (index * font->header->charsize);
 }
 
-/*
- * console_clear - Clears the screen to background color
- */
-void console_clear(void) {
+/* --- Internal Logic (Assumes Lock Held) --- */
+
+static void console_refresh_locked(console_t* con) {
     if (!g_fb_addr) return;
     
-    // If background is black (0), we can optimize with memset
-    if (g_bg_color == 0) {
-        memset(g_fb_addr, 0, g_fb_height * g_fb_pitch);
-        g_cursor_x = 0;
-        g_cursor_y = 0;
+    extern tty_t* g_active_tty;
+    if (!g_active_tty || g_active_tty->console != con) return;
+
+    for (size_t y = 0; y < con->height; y++) {
+        for (size_t x = 0; x < con->width; x++) {
+            console_char_t c = con->buffer[y * con->width + x];
+            draw_glyph(get_glyph_ptr(c.codepoint), x * g_font_width, y * (g_font_height + PADDING_Y), 
+                       VGA_PALETTE[c.fg], VGA_PALETTE[c.bg]);
+        }
+    }
+}
+
+static void scroll_inst(console_t* con) {
+    size_t size = (con->height - 1) * con->width;
+    memmove(con->buffer, con->buffer + con->width, size * sizeof(console_char_t));
+    
+    for (size_t x = 0; x < con->width; x++) {
+        size_t idx = (con->height - 1) * con->width + x;
+        con->buffer[idx].codepoint = ' ';
+        con->buffer[idx].fg = con->fg_color;
+        con->buffer[idx].bg = con->bg_color;
+    }
+    con->cursor_y--;
+
+    console_refresh_locked(con);
+}
+
+static void handle_cp_inst(console_t* con, uint32_t cp) {
+    extern tty_t* g_active_tty;
+    bool is_active = (g_active_tty && g_active_tty->console == con);
+
+    if (cp == '\n') {
+        con->cursor_x = 0;
+        con->cursor_y++;
+    } else if (cp == '\r') {
+        con->cursor_x = 0;
+    } else if (cp == '\b') {
+        if (con->cursor_x > 0) con->cursor_x--;
+        size_t idx = con->cursor_y * con->width + con->cursor_x;
+        con->buffer[idx].codepoint = ' ';
+        if (is_active) {
+            draw_glyph(get_glyph_ptr(' '), con->cursor_x * g_font_width, con->cursor_y * (g_font_height + PADDING_Y), 
+                       VGA_PALETTE[con->fg_color], VGA_PALETTE[con->bg_color]);
+        }
         return;
-    }
-
-    for (uint32_t y = 0; y < g_fb_height; y++) {
-        for (uint32_t x = 0; x < g_fb_width; x++) {
-            put_pixel(x, y, g_bg_color);
-        }
-    }
-    
-    g_cursor_x = 0;
-    g_cursor_y = 0;
-}
-
-/*
- * scroll_screen - Scrolls the screen up by one line height
- */
-static void scroll_screen(void) {
-    if (!g_fb_addr) return;
-
-    size_t line_height = g_font_height + PADDING_Y;
-    size_t line_height_bytes = line_height * g_fb_pitch;
-    size_t screen_size_bytes = g_fb_height * g_fb_pitch;
-    size_t copy_size = screen_size_bytes - line_height_bytes;
-
-    memmove(g_fb_addr, g_fb_addr + line_height_bytes, copy_size);
-
-    // Clear the new area at the bottom
-    // Calculate pointer to the start of the cleared area
-    
-    // memset safe if 0
-    if (g_bg_color == 0) {
-        memset(g_fb_addr + copy_size, 0, line_height_bytes);
+    } else if (cp == '\t') {
+        con->cursor_x = (con->cursor_x + 4) & ~3;
     } else {
-        // Manual clear for colored background
-        // We can't easily iterate x/y here without calculating row pointers manually
-        // or just calling put_pixel for the bottom area.
-        size_t start_y = g_fb_height - line_height;
-        for (size_t y = start_y; y < g_fb_height; y++) {
-             for (size_t x = 0; x < g_fb_width; x++) {
-                 put_pixel(x, y, g_bg_color);
-             }
+        if (con->cursor_x >= con->width) {
+            con->cursor_x = 0;
+            con->cursor_y++;
         }
+        if (con->cursor_y >= con->height) {
+            scroll_inst(con);
+        }
+
+        size_t idx = con->cursor_y * con->width + con->cursor_x;
+        con->buffer[idx].codepoint = cp;
+        con->buffer[idx].fg = con->fg_color;
+        con->buffer[idx].bg = con->bg_color;
+
+        if (is_active) {
+            draw_glyph(get_glyph_ptr(cp), con->cursor_x * g_font_width, con->cursor_y * (g_font_height + PADDING_Y), 
+                       VGA_PALETTE[con->fg_color], VGA_PALETTE[con->bg_color]);
+        }
+        con->cursor_x++;
+    }
+
+    if (con->cursor_y >= con->height) {
+        scroll_inst(con);
     }
 }
 
-/*
- * console_init - Initialize the framebuffer console
- */
+/* --- Instance Logic --- */
+
+void con_init(console_t* con) {
+    con->width = g_max_cols;
+    con->height = g_max_rows;
+    con->cursor_x = 0;
+    con->cursor_y = 0;
+    con->fg_color = CONSOLE_COLOR_WHITE;
+    con->bg_color = CONSOLE_COLOR_BLACK;
+    con->utf8_bytes_needed = 0;
+    con->utf8_codepoint = 0;
+    con->reentrancy_count = 0;
+    
+    spinlock_init(&con->lock, "console_lock");
+
+    con->buffer = (console_char_t*)kmalloc(con->width * con->height * sizeof(console_char_t));
+    if (!con->buffer) panic("Failed to allocate console backbuffer!");
+
+    con_clear(con);
+}
+
+void con_clear(console_t* con) {
+    bool flags = spinlock_acquire(&con->lock);
+    
+    for (size_t i = 0; i < con->width * con->height; i++) {
+        con->buffer[i].codepoint = ' ';
+        con->buffer[i].fg = con->fg_color;
+        con->buffer[i].bg = con->bg_color;
+    }
+    con->cursor_x = 0;
+    con->cursor_y = 0;
+
+    extern tty_t* g_active_tty;
+    if (g_active_tty && g_active_tty->console == con) {
+        memset(g_fb_addr, 0, g_fb_size); 
+    }
+    
+    spinlock_release(&con->lock, flags);
+}
+
+void con_putc(console_t* con, char character) {
+    bool flags;
+    bool locked = false;
+
+    if (spinlock_try_acquire(&con->lock, &flags)) {
+        locked = true;
+    } else {
+        return; 
+    }
+    
+    uint8_t byte = (uint8_t)character;
+    if (con->utf8_bytes_needed == 0) {
+        if ((byte & 0x80) == 0) handle_cp_inst(con, byte);
+        else if ((byte & 0xE0) == 0xC0) { con->utf8_bytes_needed = 1; con->utf8_codepoint = byte & 0x1F; }
+        else if ((byte & 0xF0) == 0xE0) { con->utf8_bytes_needed = 2; con->utf8_codepoint = byte & 0x0F; }
+        else if ((byte & 0xF8) == 0xF0) { con->utf8_bytes_needed = 3; con->utf8_codepoint = byte & 0x07; }
+    } else {
+        if ((byte & 0xC0) == 0x80) {
+            con->utf8_codepoint = (con->utf8_codepoint << 6) | (byte & 0x3F);
+            if (--con->utf8_bytes_needed == 0) handle_cp_inst(con, con->utf8_codepoint);
+        } else { con->utf8_bytes_needed = 0; handle_cp_inst(con, 0xFFFD); }
+    }
+    
+    if (locked) spinlock_release(&con->lock, flags);
+}
+
+void con_refresh(console_t* con) {
+    if (!g_fb_addr) return;
+    bool flags = spinlock_acquire(&con->lock);
+    console_refresh_locked(con);
+    spinlock_release(&con->lock, flags);
+}
+
+void con_set_color(console_t* con, uint8_t foreground, uint8_t background) {
+    bool flags = spinlock_acquire(&con->lock);
+    con->fg_color = foreground & 0xF;
+    con->bg_color = background & 0xF;
+    spinlock_release(&con->lock, flags);
+}
+
+/* --- Global Compatibility --- */
+
 void console_init(multiboot_parser_t* parser) {
     font_init();
-    
     multiboot_framebuffer_t* fb = multiboot_get_framebuffer(parser);
-    if (!fb) {
-        panic("No framebuffer found!");
-    }
+    if (!fb) panic("No framebuffer!");
 
     g_fb_phys = fb->addr;
     g_fb_width = fb->width;
@@ -177,125 +237,37 @@ void console_init(multiboot_parser_t* parser) {
     g_fb_bpp = fb->bpp;
     g_fb_size = g_fb_height * g_fb_pitch;
 
-    size_t map_size = align_up(g_fb_size, PAGE_SIZE);
-    
-    vmm_t* kernel_vmm = vmm_kernel_get();
-    if (!kernel_vmm) panic("Console init before VMM!");
-
     void* virt_addr = NULL;
-    vmm_status_t status = vmm_alloc(kernel_vmm, map_size, VM_FLAG_MMIO | VM_FLAG_WRITE, (void*)g_fb_phys, &virt_addr);
-    
-    if (status != VMM_OK) panic("Failed to map framebuffer!");
-    
+    vmm_alloc(vmm_kernel_get(), align_up(g_fb_size, PAGE_SIZE), VM_FLAG_MMIO | VM_FLAG_WRITE, (void*)g_fb_phys, &virt_addr);
     g_fb_addr = (uint8_t*)virt_addr;
 
-    // Font setup
-    psf1_font_t* font = font_get_current();
-    g_font_width = 8; // Fixed for PSF1
-    g_font_height = font->header->charsize;
-
+    g_font_height = font_get_current()->header->charsize;
     g_max_cols = g_fb_width / g_font_width;
     g_max_rows = g_fb_height / (g_font_height + PADDING_Y);
 
-    console_clear();
+    memset(g_fb_addr, 0, g_fb_size);
 }
 
-/*
- * handle_codepoint - Draws a fully decoded unicode character
- */
-static void handle_codepoint(uint32_t cp) {
-    size_t line_height = g_font_height + PADDING_Y;
-
-    if (cp == '\n') {
-        g_cursor_x = 0;
-        g_cursor_y += line_height;
-    } else if (cp == '\r') {
-        g_cursor_x = 0;
-    } else if (cp == '\b') {
-        if (g_cursor_x >= g_font_width) g_cursor_x -= g_font_width;
-    } else if (cp == '\t') {
-        g_cursor_x += g_font_width * 4; // Tab = 4 spaces
-    } else {
-        uint8_t* glyph = get_glyph(cp);
-        if (glyph) {
-            draw_glyph(glyph, g_cursor_x, g_cursor_y, g_fg_color, g_bg_color);
-        }
-        g_cursor_x += g_font_width;
-    }
-    
-    // Wrap
-    if (g_cursor_x >= g_fb_width) {
-        g_cursor_x = 0;
-        g_cursor_y += line_height;
-    }
-    
-    // Scroll
-    if (g_cursor_y + line_height > g_fb_height) {
-        scroll_screen();
-        g_cursor_y -= line_height;
-    }
-}
-
-/*
- * console_print_char - Processes a byte of the stream (UTF-8 decoder)
- */
 void console_print_char(char character) {
-    uint8_t byte = (uint8_t)character;
-
-    if (g_utf8_bytes_needed == 0) {
-        if ((byte & 0x80) == 0) {
-            // 1 byte (ASCII)
-            handle_codepoint(byte);
-        } else if ((byte & 0xE0) == 0xC0) {
-            // 2 bytes
-            g_utf8_bytes_needed = 1;
-            g_utf8_codepoint = byte & 0x1F;
-        } else if ((byte & 0xF0) == 0xE0) {
-            // 3 bytes
-            g_utf8_bytes_needed = 2;
-            g_utf8_codepoint = byte & 0x0F;
-        } else if ((byte & 0xF8) == 0xF0) {
-            // 4 bytes
-            g_utf8_bytes_needed = 3;
-            g_utf8_codepoint = byte & 0x07;
-        } else {
-            // Invalid start byte, ignore or print replacement
-            handle_codepoint(0xFFFD);
-        }
-    } else {
-        // Continuation byte (10xxxxxx)
-        if ((byte & 0xC0) == 0x80) {
-            g_utf8_codepoint = (g_utf8_codepoint << 6) | (byte & 0x3F);
-            g_utf8_bytes_needed--;
-            if (g_utf8_bytes_needed == 0) {
-                handle_codepoint(g_utf8_codepoint);
-            }
-        } else {
-            // Invalid continuation, reset
-            g_utf8_bytes_needed = 0;
-            handle_codepoint(0xFFFD);
-        }
+    extern tty_t* g_active_tty;
+    if (g_active_tty && g_active_tty->console) {
+        con_putc(g_active_tty->console, character);
     }
 }
 
-/*
- * console_set_color - Sets the foreground and background colors
- */
 void console_set_color(uint8_t foreground, uint8_t background) {
-    if (foreground < 16) g_fg_color = VGA_PALETTE[foreground];
-    if (background < 16) g_bg_color = VGA_PALETTE[background];
+    extern tty_t* g_active_tty;
+    if (g_active_tty && g_active_tty->console) {
+        con_set_color(g_active_tty->console, foreground, background);
+    }
 }
 
-/*
- * console_get_width - Retrieves console width in characters
- */
-size_t console_get_width() {
-    return g_max_cols;
+void console_clear(void) {
+    extern tty_t* g_active_tty;
+    if (g_active_tty && g_active_tty->console) {
+        con_clear(g_active_tty->console);
+    }
 }
 
-/*
- * console_get_height - Retrieves console height in characters
- */
-size_t console_get_height() {
-    return g_max_rows;
-}
+size_t console_get_width() { return g_max_cols; }
+size_t console_get_height() { return g_max_rows; }

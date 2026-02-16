@@ -19,11 +19,13 @@
 #include <kernel/drivers/stdio.h>
 #include <kernel/drivers/keyboard.h>
 #include <kernel/drivers/tty.h>
+#include <kernel/drivers/input.h>
 #include <kernel/memory/heap.h>
 #include <kernel/memory/slab.h>
 #include <kernel/memory/pmm.h>
 #include <kernel/memory/vmm.h>
 #include <kernel/sys/acpi.h>
+#include <kernel/sys/timers.h>
 #include <kernel/debug.h>
 #include <kernel/misc.h>
 #include <libc/string.h>
@@ -37,8 +39,9 @@ static char* KERNEL_VERSION = "v1.8.3-alpha";
 static uint8_t multiboot_buffer[8 * 1024];
 #endif
 
-// Kernel TTY instance
-static tty_t g_kernel_tty;
+// TTY and Console instances
+tty_t g_ttys[4];
+static console_t g_consoles[4];
 
 /*
  * kernel_main - Main entry point for the GatOS kernel
@@ -46,11 +49,11 @@ static tty_t g_kernel_tty;
 void kernel_main(void* mb_info) {
 
 	// If this is a test build, run the test suite instead
-	#ifdef TEST_BUILD
-		#include <tests/tests.h>
-		kernel_test(mb_info, KERNEL_VERSION);
-		return;
-	#else
+#ifdef TEST_BUILD
+#include <tests/tests.h>
+	kernel_test(mb_info, KERNEL_VERSION);
+	return;
+#else
 
 	// Initialize serial (COM1) for QEMU output
 
@@ -59,7 +62,6 @@ void kernel_main(void* mb_info) {
 	// Initialize serial (COM2) for internal logging
 
 	serial_init_port(COM2_PORT);
-
 	QEMU_LOG("Kernel main reached, normal assembly boot succeeded", TOTAL_DBG);
 
 	// Set up the IDT
@@ -68,20 +70,20 @@ void kernel_main(void* mb_info) {
 	QEMU_LOG("Initialized the IDT", TOTAL_DBG);
 
 	// Parse CPU information
+
 	cpu_init();
 	QEMU_LOG("Parsed CPU information", TOTAL_DBG);
-	
+
 	// Initialize multiboot parser (copies everything to higher half)
 
 	multiboot_parser_t multiboot = {0};
-
-    multiboot_init(&multiboot, mb_info, multiboot_buffer, sizeof(multiboot_buffer));
+	multiboot_init(&multiboot, mb_info, multiboot_buffer, sizeof(multiboot_buffer));
 
 	if (!multiboot.initialized) {
-       	// printf won't work here yet, use serial
-        QEMU_LOG("[KERNEL] Failed to initialize multiboot2 parser!", TOTAL_DBG);
-    	return;
-    }
+		// printf won't work here yet, use serial
+		QEMU_LOG("[KERNEL] Failed to initialize multiboot2 parser!", TOTAL_DBG);
+		return;
+	}
 
 	QEMU_LOG("Multiboot structure parsed and copied to higher half", TOTAL_DBG);
 
@@ -94,7 +96,7 @@ void kernel_main(void* mb_info) {
 
 	cleanup_kernel_page_tables(0x0, get_kend(false));
 	QEMU_LOG("Unmapped all memory besides the kernel range", TOTAL_DBG);
-	
+
 	// Unmap [0, KPHYS_END], we only have [HH_BASE, HH_BASE + KPHYS_END] mapped
 
 	unmap_identity();
@@ -108,11 +110,10 @@ void kernel_main(void* mb_info) {
 	// Initialize physical memory manager
 
 	pmm_status_t pmm_status = pmm_init(get_kend(false) + PAGE_SIZE, PHYSMAP_V2P(get_physmap_end()), PAGE_SIZE);
-	if(pmm_status == PMM_OK){
-        // Only serial log is available here
-	 	QEMU_LOG("Initialized physical memory manager", TOTAL_DBG);
+	if(pmm_status == PMM_OK) {
+		QEMU_LOG("Initialized physical memory manager", TOTAL_DBG);
 	}
-	else{
+	else {
 		QEMU_LOG("[PMM] Failed to initialize physical memory manager", TOTAL_DBG);
 		return;
 	}
@@ -120,7 +121,7 @@ void kernel_main(void* mb_info) {
 	// Initialize slab allocator
 
 	slab_status_t slab_status = slab_init();
-	if(slab_status != SLAB_OK){
+	if(slab_status != SLAB_OK) {
 		QEMU_LOG("[Slab] Failed to initialize slab allocator", TOTAL_DBG);
 		return;
 	}
@@ -129,39 +130,64 @@ void kernel_main(void* mb_info) {
 	// Initialize virtual memory manager
 
 	vmm_status_t vmm_status = vmm_kernel_init(get_kend(true) + PAGE_SIZE, 0xFFFFFFFFFFFFF000);
-	if(vmm_status != VMM_OK){
+	if(vmm_status != VMM_OK) {
 		QEMU_LOG("[VMM] Failed to initialize virtual memory manager", TOTAL_DBG);
 		return;
 	}
 	QEMU_LOG("Initialized kernel virtual memory manager", TOTAL_DBG);
 
-    // Initialize Framebuffer Console
-    console_init(&multiboot);
-    console_clear();
-
-    // Initialize TTY (Must happen before first printf)
-    tty_init(&g_kernel_tty, console_print_char);
-    g_active_tty = &g_kernel_tty;
-
-    print_banner(KERNEL_VERSION);
-    printf("[KERNEL] Console and TTY initialized.\n");
-    printf("[KERNEL] Framebuffer resolution %dx%d\n", multiboot_get_framebuffer(&multiboot)->width, multiboot_get_framebuffer(&multiboot)->height);
-    
 	// Initialize kernel heap
+
 	heap_status_t heap_status = heap_kernel_init();
-	if(heap_status != HEAP_OK){
-		printf("[HEAP] Failed to initialize kernel heap, error code: %d\n", heap_status);
+
+	if(heap_status != HEAP_OK) {
+		// Serial log as console isn't up
+		QEMU_LOG("[HEAP] Failed to initialize kernel heap", TOTAL_DBG);
 		return;
 	}
 	QEMU_LOG("Initialized kernel heap", TOTAL_DBG);
+
+	// Initialize timers
+
+	timer_init();
+	QEMU_LOG("Initialized system timers", TOTAL_DBG);
+
+	// Initialize Framebuffer Console hardware
+
+	console_init(&multiboot);
+
+	// Initialize Virtual Consoles and TTYs
+
+	for (int i = 0; i < 4; i++) {
+		con_init(&g_consoles[i]);
+		tty_init(&g_ttys[i], &g_consoles[i]);
+
+		// Print a unique message to each terminal to verify switching
+		char msg[] = "This is Virtual Console # \n";
+		msg[25] = '0' + i+1;
+		tty_write(&g_ttys[i], msg, sizeof(msg));
+	}
+
+	// Default to TTY 0
+	g_active_tty = &g_ttys[0];
+
+	// Initialize input handling subsystem
+
+	input_init();
+
+	print_banner(KERNEL_VERSION);
+	printf("[KERNEL] Console and TTY system initialized (4 Virtual Consoles available).\n");
+	printf("[KERNEL] Use Shift+Tab to cycle between consoles.\n");
+	printf("[KERNEL] Framebuffer resolution %dx%d\n", multiboot_get_framebuffer(&multiboot)->width, multiboot_get_framebuffer(&multiboot)->height);
 	printf("[KERNEL] All memory subsystems initialized successfully\n");
 
 	// Initialize ACPI
+
 	acpi_init(&multiboot);
 	printf("[ACPI] Revision %u detected (%s supported), manufacturer: %.6s\n",
-       acpi_get_rsdp()->Revision,
-       acpi_is_xsdt_supported() ? "XSDT" : "RSDT",
-       acpi_get_rsdp()->OEMID);
+	       acpi_get_rsdp()->Revision,
+	       acpi_is_xsdt_supported() ? "XSDT" : "RSDT",
+	       acpi_get_rsdp()->OEMID);
 
 	QEMU_LOG("Initialized ACPI subsystem", TOTAL_DBG);
 
@@ -171,12 +197,13 @@ void kernel_main(void* mb_info) {
 	QEMU_LOG("Initialized APIC subsystem", TOTAL_DBG);
 	printf("[APIC] Local APIC and I/O APIC initialized successfully\n");
 
-    // Initialize Keyboard
-    keyboard_init();
-    register_interrupt_handler(INT_FIRST_INTERRUPT + 1, keyboard_handler);
-    ioapic_redirect(1, INT_FIRST_INTERRUPT + 1, lapic_get_id(), 0);
-    ioapic_unmask(1);
-    printf("[KBD] Keyboard IRQ 1 routed and unmasked.\n");
+	// Initialize Keyboard
+
+	keyboard_init();
+	register_interrupt_handler(INT_FIRST_INTERRUPT + 1, keyboard_handler);
+	ioapic_redirect(1, INT_FIRST_INTERRUPT + 1, lapic_get_id(), 0);
+	ioapic_unmask(1);
+	printf("[KBD] Keyboard IRQ 1 routed and unmasked.\n");
 
 	// Enable interrupts
 
@@ -187,5 +214,5 @@ void kernel_main(void* mb_info) {
 	QEMU_LOG("Reached kernel end", TOTAL_DBG);
 	printf("[KERNEL] Kernel initialization complete, entering main loop...\n");
 
-	#endif
+#endif
 }

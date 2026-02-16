@@ -365,20 +365,13 @@ void ioapic_init(void) {
                 LOGF("[APIC] ISO: IRQ %u -> GSI %u (Flags: 0x%X)\n", 
                      iso->irq_source, iso->global_system_interrupt, iso->flags);
                 
-                // Unmask and redirect - Standard Vector = 32 + IRQ_Source
-                ioapic_redirect(io_index, 32 + iso->irq_source, bsp_id, iso->flags);
-            }
+                    // Standard Vector = 32 + IRQ_Source
+                    ioapic_redirect(io_index, 32 + iso->irq_source, bsp_id, iso->flags);
+                }
         }
         start += header->length;
     }
 
-    // Note here: 
-
-    // Unmask the standard ISA interrupts (1-15). IRQ 0 is usually PIT/Timer.
-    // For production, we typically unmask them as drivers request them.
-    // For now, let's just unmask the ones we redirected via ISO or identity.
-    // NOTE: IRQ 0 is often overridden to GSI 2.
-    
     LOGF("[APIC] I/O APIC initialized at 0x%lX. %u redirection entries.\n", g_ioapic_base, count);
 }
 

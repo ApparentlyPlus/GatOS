@@ -1,127 +1,112 @@
 /*
  * tty.c - TTY Abstraction Implementation
- *
+ * 
+ * This file implements a basic TTY abstraction layer that manages input buffering,
+ * line discipline, and console output. It serves as the interface between hardware input and the console display.
+ * The line discipline currently operates in canonical mode, buffering input until a newline is received.
+ * 
  * Author: u/ApparentlyPlus
  */
 
 #include <kernel/drivers/tty.h>
+#include <kernel/memory/heap.h>
+#include <kernel/sys/panic.h>
 #include <libc/string.h>
 
 tty_t* g_active_tty = NULL;
 
 /*
- * tty_init - Initializes a TTY instance
+ * tty_init - Initializes a TTY instance with the associated console
  */
-void tty_init(tty_t* tty, void (*write_cb)(char)) {
+void tty_init(tty_t* tty, console_t* console) {
+    if (heap_kernel_get() == NULL) {
+        panic("Attempted to initialize TTY before heap was ready!");
+    }
+
     memset(tty->buffer, 0, TTY_BUFFER_SIZE);
     tty->head = 0;
     tty->tail = 0;
-    tty->canon_pos = 0;
-    tty->echo = true;
-    tty->canon = true;
-    tty->write_callback = write_cb;
+    tty->console = console;
+    
     spinlock_init(&tty->lock, "tty_lock");
+    ldisc_init(&tty->ldisc);
 }
 
 /*
- * tty_wait_for_input - Blocks execution until data is available
+ * tty_switch - Switches the active TTY context
+ */
+void tty_switch(tty_t* tty) {
+    if (!tty || g_active_tty == tty) return;
+
+    g_active_tty = tty;
+    if (tty->console) {
+        con_refresh(tty->console);
+    }
+}
+
+/*
+ * tty_wait_for_input - Waits for input to be available in the TTY buffer
+ * This will be changed in the future 
  */
 static void tty_wait_for_input(tty_t* tty) {
-    // FUTURE PROOFING: 
-    // In a multitasking environment, this function MUST NOT busy-wait.
-    // Instead, it should put the current thread/process into a 'WAITING' state
-    // and call the scheduler. The tty_push_char function (invoked by IRQ)
-    // would then be responsible for waking up any threads waiting on this TTY.
-    
     while (tty->head == tty->tail) {
         __asm__ volatile("hlt");
     }
 }
 
 /*
- * tty_push_char - Handles input from hardware (called by driver/IRQ)
+ * tty_input - Entry point for input characters (goes through line discipline)
  */
-void tty_push_char(tty_t* tty, char c) {
+void tty_input(tty_t* tty, char c) {
+    ldisc_input(tty, c);
+}
+
+/*
+ * tty_push_char_raw - Pushes a character directly to the TTY buffer (bypassing line discipline)
+ */
+void tty_push_char_raw(tty_t* tty, char c) {
     bool flags = spinlock_acquire(&tty->lock);
 
-    // Canonical mode logic
-    if (tty->canon) {
-        if (c == '\b') { // Backspace
-            if (tty->head != tty->canon_pos) {
-                tty->head = (tty->head - 1) % TTY_BUFFER_SIZE;
-                if (tty->echo && tty->write_callback) {
-                    tty->write_callback('\b');
-                    tty->write_callback(' ');
-                    tty->write_callback('\b');
-                }
-            }
-            spinlock_release(&tty->lock, flags);
-            return;
-        }
-
-        if (c == '\n' || c == '\r') {
-            c = '\n'; // Normalize
-            tty->buffer[tty->head] = c;
-            tty->head = (tty->head + 1) % TTY_BUFFER_SIZE;
-            tty->canon_pos = tty->head; // Line is now committed
-            
-            if (tty->echo && tty->write_callback) {
-                tty->write_callback('\n');
-            }
-            spinlock_release(&tty->lock, flags);
-            return;
-        }
-    }
-
-    // Default push
-    uint32_t next = (tty->head + 1) % TTY_BUFFER_SIZE;
-    if (next != tty->tail) {
+    uint32_t next_idx = (tty->head + 1) % TTY_BUFFER_SIZE;
+    if (next_idx != tty->tail) {
         tty->buffer[tty->head] = c;
-        tty->head = next;
-        
-        if (tty->echo && tty->write_callback) {
-            tty->write_callback(c);
-        }
+        tty->head = next_idx;
     }
 
     spinlock_release(&tty->lock, flags);
 }
 
 /*
- * tty_read_char - Reads one character from the TTY (Blocks)
+ * tty_read_char - Reads a single character from the TTY buffer
  */
 char tty_read_char(tty_t* tty) {
     tty_wait_for_input(tty);
-
     bool flags = spinlock_acquire(&tty->lock);
     char c = tty->buffer[tty->tail];
     tty->tail = (tty->tail + 1) % TTY_BUFFER_SIZE;
     spinlock_release(&tty->lock, flags);
-
     return c;
 }
 
 /*
- * tty_read - Reads a block of characters (Blocks until data available)
+ * tty_read - Reads a buffer of characters from the TTY buffer
  */
 size_t tty_read(tty_t* tty, char* buf, size_t count) {
     size_t i = 0;
     while (i < count) {
         buf[i++] = tty_read_char(tty);
-        if (tty->canon && buf[i-1] == '\n') break;
+        // Canonical stopping condition (now always active)
+        if (buf[i-1] == '\n') break;
     }
     return i;
 }
 
 /*
- * tty_write - Writes a block of characters to the TTY hardware
+ * tty_write - Writes a buffer of characters to the TTY's associated console
  */
 void tty_write(tty_t* tty, const char* buf, size_t count) {
-    if (!tty || !tty->write_callback) return;
-    
-    bool flags = spinlock_acquire(&tty->lock);
+    if (!tty || !tty->console) return;
     for (size_t i = 0; i < count; i++) {
-        tty->write_callback(buf[i]);
+        con_putc(tty->console, buf[i]);
     }
-    spinlock_release(&tty->lock, flags);
 }

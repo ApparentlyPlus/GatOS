@@ -1,14 +1,10 @@
 /*
  * i8042.c - Intel 8042 PS/2 Controller Driver Implementation
  *
- * This implementation follows the standard initialization sequence:
- * Disable devices
- * Flush buffer
- * Set config byte
- * Self-test controller
- * Check for dual channel
- * Interface tests
- * Enable devices
+ * This implementation follows the standard initialization sequence: 
+ * 
+ * Disable devices, Flush buffer, Set config byte, Self-test controller,
+ * Check for dual channel, Interface tests, Enable devices
  *
  * Author: u/ApparentlyPlus
  */
@@ -104,65 +100,35 @@ bool i8042_init(void) {
     i8042_write_command(PS2_CMD_READ_CONFIG);
     uint8_t config = i8042_read_data();
     
-    // Disable interrupts and translation for now during test
-    config &= ~(PS2_CFG_PORT1_INT | PS2_CFG_PORT2_INT | PS2_CFG_PORT1_TRANS);
-    bool is_dual_channel = (config & PS2_CFG_PORT2_CLOCK); // If clock is disabled, might be dual
+    // Enable Port 1 Interrupts
+    // Enable Port 1 Translation (Set 2 -> Set 1)
+    config |= PS2_CFG_PORT1_INT | PS2_CFG_PORT1_TRANS; 
+    config &= ~(PS2_CFG_PORT1_CLOCK | PS2_CFG_PORT2_CLOCK);
 
     i8042_write_command(PS2_CMD_WRITE_CONFIG);
     i8042_write_data(config);
 
     // Controller Self-Test
     i8042_write_command(PS2_CMD_TEST_CONTROLLER);
-    if (i8042_read_data() != 0x55) {
-        LOGF("[PS2 ERROR] Controller self-test failed.\n");
+    uint8_t self_test = i8042_read_data();
+    if (self_test != 0x55) {
+        LOGF("[PS2 ERROR] Controller self-test failed (0x%x).\n", self_test);
         return false;
     }
 
-    // Determine if Dual Channel exists
-    if (is_dual_channel) {
-        i8042_write_command(PS2_CMD_ENABLE_PORT2);
-        i8042_write_command(PS2_CMD_READ_CONFIG);
-        config = i8042_read_data();
-        if (!(config & PS2_CFG_PORT2_CLOCK)) {
-            is_dual_channel = true;
-        } else {
-            is_dual_channel = false;
-        }
-        i8042_write_command(PS2_CMD_DISABLE_PORT2);
-    }
-
-    // Interface Tests
-    i8042_write_command(PS2_CMD_TEST_PORT1);
-    if (i8042_read_data() != 0x00) {
-        LOGF("[PS2 ERROR] Port 1 test failed.\n");
-        return false;
-    }
-
-    if (is_dual_channel) {
-        i8042_write_command(PS2_CMD_TEST_PORT2);
-        if (i8042_read_data() != 0x00) {
-            LOGF("[PS2 WARN] Port 2 test failed, disabling dual channel.\n");
-            is_dual_channel = false;
-        }
-    }
-
-    // Enable Devices & Translation
-    i8042_write_command(PS2_CMD_READ_CONFIG);
-    config = i8042_read_data();
-    config |= PS2_CFG_PORT1_INT | PS2_CFG_PORT1_TRANS; // Enable Port 1 IRQs and Set 2 -> Set 1 translation
-    if (is_dual_channel) {
-        config |= PS2_CFG_PORT2_INT;
-    }
-    
-    i8042_write_command(PS2_CMD_WRITE_CONFIG);
-    i8042_write_data(config);
-
+    // Enable Port 1
     i8042_write_command(PS2_CMD_ENABLE_PORT1);
-    if (is_dual_channel) {
-        i8042_write_command(PS2_CMD_ENABLE_PORT2);
-    }
 
-    LOGF("[PS2] Controller initialized. Dual Channel: %s\n", is_dual_channel ? "Yes" : "No");
+    // Keyboard Reset
+    i8042_write_data(0xFF);
+    uint8_t ack = i8042_read_data();
+    uint8_t bat = i8042_read_data();
+    
+    // Enable Scanning
+    i8042_write_data(0xF4);
+    i8042_read_data(); // ACK
+
+    LOGF("[PS2] Controller initialized.\n");
     return true;
 }
 

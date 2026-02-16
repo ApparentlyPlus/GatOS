@@ -25,6 +25,7 @@
 #include <kernel/sys/acpi.h>
 #include <kernel/sys/apic.h>
 #include <kernel/drivers/tty.h>
+#include <kernel/drivers/input.h>
 #include <kernel/debug.h>
 #include <kernel/misc.h>
 #include <tests/tests.h>
@@ -88,14 +89,24 @@ void kernel_test(void* mb_info, char* KERNEL_VERSION) {
 	}
     QEMU_LOG("VMM Initialized (Tests deferred)", TOTAL_DBG);
 
-    // Now that VMM is ready, we can map the framebuffer
+    // Initialize kernel heap so we can use kmalloc for console instances
+	heap_status_t heap_status = heap_kernel_init();
+	if(heap_status != HEAP_OK){
+        LOGF("[HEAP] Failed to initialize kernel heap, error code: %d\n", heap_status);
+		return;
+	}
+
+    // Now that VMM and Heap are ready, we can map the framebuffer and setup console instances
     console_init(&multiboot);
-    console_clear();
+
+    static console_t test_console;
+    con_init(&test_console);
 
     // Initialize TTY (Must happen before first printf)
     static tty_t test_tty_instance;
-    tty_init(&test_tty_instance, console_print_char);
+    tty_init(&test_tty_instance, &test_console);
     g_active_tty = &test_tty_instance;
+    input_init();
 
     print_test_banner(KERNEL_VERSION);
     
@@ -116,13 +127,6 @@ void kernel_test(void* mb_info, char* KERNEL_VERSION) {
     printf("Running Kernel Virtual Memory Manager tests...\n");
     test_vmm();
     QEMU_LOG("VMM Test Suite Completed", TOTAL_DBG);
-
-	heap_status_t heap_status = heap_kernel_init();
-	if(heap_status != HEAP_OK){
-        console_set_color(CONSOLE_COLOR_RED, CONSOLE_COLOR_BLACK);
-		printf("[HEAP] Failed to initialize kernel heap, error code: %d\n", heap_status);
-		return;
-	}
 	
 	acpi_init(&multiboot);
     apic_init();
