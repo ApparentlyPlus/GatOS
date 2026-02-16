@@ -1,7 +1,9 @@
 /*
- * input.h - Input Hub Header
- * 
- * This file declares the system input hub interface that handles keyboard events and routes them to the appropriate TTY.
+ * input.h - System Input Hub Interface
+ *
+ * This module provides a centralized entry point for all hardware input
+ * events. It handles system-wide hotkeys and routes input to the
+ * active terminal.
  *
  * Author: u/ApparentlyPlus
  */

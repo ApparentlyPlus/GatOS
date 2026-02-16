@@ -1,9 +1,9 @@
 /*
- * tty.c - TTY Abstraction Implementation
- * 
- * This file implements a basic TTY abstraction layer that manages input buffering,
- * line discipline, and console output. It serves as the interface between hardware input and the console display.
- * The line discipline currently operates in canonical mode, buffering input until a newline is received.
+ * tty.c - Dynamic TTY Management Implementation
+ *
+ * This module handles the creation, destruction, and switching of 
+ * virtual terminals. It manages a doubly-linked list of TTY instances
+ * and coordinates input flow through the line discipline.
  * 
  * Author: u/ApparentlyPlus
  */
@@ -13,31 +13,118 @@
 #include <kernel/sys/panic.h>
 #include <libc/string.h>
 
+// TTY Manager State
+static tty_t* g_tty_list = NULL;
+static spinlock_t g_tty_list_lock = {0};
+static bool g_tty_list_lock_initialized = false;
+
 tty_t* g_active_tty = NULL;
 
 /*
- * tty_init - Initializes a TTY instance with the associated console
+ * tty_init - Internal helper to initialize a TTY structure.
  */
-void tty_init(tty_t* tty, console_t* console) {
-    if (heap_kernel_get() == NULL) {
-        panic("Attempted to initialize TTY before heap was ready!");
-    }
-
+static void tty_init(tty_t* tty, console_t* console) {
     memset(tty->buffer, 0, TTY_BUFFER_SIZE);
     tty->head = 0;
     tty->tail = 0;
     tty->console = console;
+    tty->next = NULL;
+    tty->prev = NULL;
     
     spinlock_init(&tty->lock, "tty_lock");
     ldisc_init(&tty->ldisc);
 }
 
 /*
- * tty_switch - Switches the active TTY context
+ * ensure_lock_init - Atomically ensures the global list lock is ready.
+ */
+static void ensure_lock_init(void) {
+    if (!g_tty_list_lock_initialized) {
+        spinlock_init(&g_tty_list_lock, "tty_list_lock");
+        g_tty_list_lock_initialized = true;
+    }
+}
+
+/*
+ * tty_create - Allocates and registers a new dynamic TTY.
+ */
+tty_t* tty_create(void) {
+    if (heap_kernel_get() == NULL) {
+        panic("Attempted to create TTY before heap was ready!");
+    }
+
+    ensure_lock_init();
+
+    // Allocate TTY structure
+    tty_t* tty = (tty_t*)kmalloc(sizeof(tty_t));
+    if (!tty) return NULL;
+
+    // Allocate associated Console instance
+    console_t* console = (console_t*)kmalloc(sizeof(console_t));
+    if (!console) {
+        kfree(tty);
+        return NULL;
+    }
+
+    con_init(console);
+    tty_init(tty, console);
+
+    // Add to global linked list
+    bool flags = spinlock_acquire(&g_tty_list_lock);
+    if (g_tty_list == NULL) {
+        g_tty_list = tty;
+        tty->next = tty; // Circular doubly linked list
+        tty->prev = tty;
+    } else {
+        tty_t* tail = g_tty_list->prev;
+        tty->next = g_tty_list;
+        tty->prev = tail;
+        tail->next = tty;
+        g_tty_list->prev = tty;
+    }
+    spinlock_release(&g_tty_list_lock, flags);
+
+    return tty;
+}
+
+/*
+ * tty_destroy - Frees a TTY and its associated console.
+ */
+void tty_destroy(tty_t* tty) {
+    if (!tty) return;
+    ensure_lock_init();
+
+    bool flags = spinlock_acquire(&g_tty_list_lock);
+    
+    // Remove from linked list
+    if (tty->next == tty) {
+        g_tty_list = NULL;
+    } else {
+        tty->prev->next = tty->next;
+        tty->next->prev = tty->prev;
+        if (g_tty_list == tty) g_tty_list = tty->next;
+    }
+
+    if (g_active_tty == tty) {
+        g_active_tty = g_tty_list;
+        if (g_active_tty) con_refresh(g_active_tty->console);
+    }
+
+    spinlock_release(&g_tty_list_lock, flags);
+
+    // Free resources
+    if (tty->console) {
+        if (tty->console->buffer) kfree(tty->console->buffer);
+        kfree(tty->console);
+    }
+    kfree(tty);
+}
+
+/*
+ * tty_switch - Switches focus to a specific TTY.
  */
 void tty_switch(tty_t* tty) {
     if (!tty || g_active_tty == tty) return;
-
     g_active_tty = tty;
     if (tty->console) {
         con_refresh(tty->console);
@@ -45,8 +132,19 @@ void tty_switch(tty_t* tty) {
 }
 
 /*
- * tty_wait_for_input - Waits for input to be available in the TTY buffer
- * This will be changed in the future 
+ * tty_cycle - Cycles focus to the next available TTY.
+ */
+void tty_cycle(void) {
+    ensure_lock_init();
+    bool flags = spinlock_acquire(&g_tty_list_lock);
+    if (g_active_tty && g_active_tty->next) {
+        tty_switch(g_active_tty->next);
+    }
+    spinlock_release(&g_tty_list_lock, flags);
+}
+
+/*
+ * tty_wait_for_input - Busy-waits (hlt) for data in the circular buffer.
  */
 static void tty_wait_for_input(tty_t* tty) {
     while (tty->head == tty->tail) {
@@ -55,16 +153,18 @@ static void tty_wait_for_input(tty_t* tty) {
 }
 
 /*
- * tty_input - Entry point for input characters (goes through line discipline)
+ * tty_input - Entry point for character input.
  */
 void tty_input(tty_t* tty, char c) {
+    if (!tty) return;
     ldisc_input(tty, c);
 }
 
 /*
- * tty_push_char_raw - Pushes a character directly to the TTY buffer (bypassing line discipline)
+ * tty_push_char_raw - Internal logic to commit a char to the read buffer.
  */
 void tty_push_char_raw(tty_t* tty, char c) {
+    if (!tty) return;
     bool flags = spinlock_acquire(&tty->lock);
 
     uint32_t next_idx = (tty->head + 1) % TTY_BUFFER_SIZE;
@@ -77,9 +177,10 @@ void tty_push_char_raw(tty_t* tty, char c) {
 }
 
 /*
- * tty_read_char - Reads a single character from the TTY buffer
+ * tty_read_char - Pops one character from the TTY buffer.
  */
 char tty_read_char(tty_t* tty) {
+    if (!tty) return 0;
     tty_wait_for_input(tty);
     bool flags = spinlock_acquire(&tty->lock);
     char c = tty->buffer[tty->tail];
@@ -89,20 +190,20 @@ char tty_read_char(tty_t* tty) {
 }
 
 /*
- * tty_read - Reads a buffer of characters from the TTY buffer
+ * tty_read - High-level buffered read.
  */
 size_t tty_read(tty_t* tty, char* buf, size_t count) {
+    if (!tty) return 0;
     size_t i = 0;
     while (i < count) {
         buf[i++] = tty_read_char(tty);
-        // Canonical stopping condition (now always active)
         if (buf[i-1] == '\n') break;
     }
     return i;
 }
 
 /*
- * tty_write - Writes a buffer of characters to the TTY's associated console
+ * tty_write - High-level console write.
  */
 void tty_write(tty_t* tty, const char* buf, size_t count) {
     if (!tty || !tty->console) return;

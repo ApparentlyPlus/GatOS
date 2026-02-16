@@ -39,10 +39,6 @@ static char* KERNEL_VERSION = "v1.8.4-alpha";
 static uint8_t multiboot_buffer[8 * 1024];
 #endif
 
-// TTY and Console instances
-tty_t g_ttys[4];
-static console_t g_consoles[4];
-
 /*
  * kernel_main - Main entry point for the GatOS kernel
  */
@@ -156,28 +152,26 @@ void kernel_main(void* mb_info) {
 
 	console_init(&multiboot);
 
-	// Initialize Virtual Consoles and TTYs
+	// Initialize Kernel TTY and a test TTY
+    tty_t* k_tty = tty_create();
+    if (!k_tty) panic("Failed to create kernel TTY!");
+    
+    tty_t* test_tty = tty_create(); // Secondary TTY for cycling demo
+    if (test_tty) {
+        char msg[] = "This is a secondary test TTY. Use ALT+Tab to return to Kernel.\n";
+        tty_write(test_tty, msg, sizeof(msg) - 1);
+    }
 
-	for (int i = 0; i < 4; i++) {
-		con_init(&g_consoles[i]);
-		tty_init(&g_ttys[i], &g_consoles[i]);
-
-		// Print a unique message to each terminal to verify switching
-		char msg[] = "This is Virtual Console # \n";
-		msg[25] = '0' + i+1;
-		tty_write(&g_ttys[i], msg, sizeof(msg));
-	}
-
-	// Default to TTY 0
-	g_active_tty = &g_ttys[0];
+	// Default to Kernel TTY
+	g_active_tty = k_tty;
 
 	// Initialize input handling subsystem
 
 	input_init();
 
 	print_banner(KERNEL_VERSION);
-	printf("[KERNEL] Console and TTY system initialized (4 Virtual Consoles available).\n");
-	printf("[KERNEL] Use Shift+Tab to cycle between consoles.\n");
+	printf("[KERNEL] Dynamic TTY system initialized.\n");
+	printf("[KERNEL] Use ALT+Tab to cycle between available consoles.\n");
 	printf("[KERNEL] Framebuffer resolution %dx%d\n", multiboot_get_framebuffer(&multiboot)->width, multiboot_get_framebuffer(&multiboot)->height);
 	printf("[KERNEL] All memory subsystems initialized successfully\n");
 

@@ -1,5 +1,12 @@
 /*
  * tty.h - Teletypewriter (TTY) Abstraction Layer
+ *
+ * This module provides a high-level abstraction for terminal-like devices.
+ * It handles line discipline (canonical mode) and provides a thread-safe
+ * interface for reading and writing characters. TTYs are managed dynamically
+ * in a global doubly-linked list.
+ *
+ * Author: u/ApparentlyPlus
  */
 
 #pragma once
@@ -26,19 +33,58 @@ typedef struct tty {
     // Hardware Association
     console_t* console;
 
+    // Linked List for dynamic management
+    struct tty* next;
+    struct tty* prev;
+
 } tty_t;
 
 // Public API
-void tty_init(tty_t* tty, console_t* console);
-void tty_input(tty_t* tty, char c);         // Input from keyboard/source (goes through ldisc)
-void tty_push_char_raw(tty_t* tty, char c); // Raw push to buffer (bypasses ldisc)
 
+/*
+ * tty_create - Dynamically allocates and initializes a new TTY and Console.
+ */
+tty_t* tty_create(void);
+
+/*
+ * tty_destroy - Removes a TTY from the system and frees its resources.
+ */
+void tty_destroy(tty_t* tty);
+
+/*
+ * tty_input - Routes hardware input into the TTY's line discipline.
+ */
+void tty_input(tty_t* tty, char c);
+
+/*
+ * tty_push_char_raw - Internal helper to push characters to the read buffer.
+ */
+void tty_push_char_raw(tty_t* tty, char c);
+
+/*
+ * tty_read_char - Blocks until a character is available and returns it.
+ */
 char tty_read_char(tty_t* tty);
+
+/*
+ * tty_read - Reads up to count bytes into buf (Canonical mode).
+ */
 size_t tty_read(tty_t* tty, char* buf, size_t count);
+
+/*
+ * tty_write - Writes a buffer of characters to the TTY's console.
+ */
 void tty_write(tty_t* tty, const char* buf, size_t count);
 
-// Switch the active terminal
+/*
+ * tty_switch - Sets the specified TTY as the active foreground terminal.
+ */
 void tty_switch(tty_t* tty);
+
+/*
+ * tty_cycle - Cycles the active focus to the next TTY in the linked list.
+ */
+void tty_cycle(void);
 
 // Global active TTY
 extern tty_t* g_active_tty;
