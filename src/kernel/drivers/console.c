@@ -65,6 +65,31 @@ static uint8_t* get_glyph_ptr(uint32_t codepoint) {
     return (uint8_t*)font->glyph_buffer + (index * font->header->charsize);
 }
 
+/* --- Cursor Rendering --- */
+
+static void con_render_cursor(console_t* con, bool on) {
+    if (!g_fb_addr) return;
+    
+    extern tty_t* g_active_tty;
+    if (!g_active_tty || g_active_tty->console != con) return;
+
+    size_t px = con->cursor_x * g_font_width;
+    size_t py = con->cursor_y * (g_font_height + PADDING_Y);
+
+    if (on) {
+        uint32_t color = VGA_PALETTE[con->fg_color];
+        for (size_t y = 0; y < g_font_height; y++) {
+            for (size_t x = 0; x < g_font_width; x++) {
+                put_pixel(px + x, py + y, color);
+            }
+        }
+    } else {
+        size_t idx = con->cursor_y * con->width + con->cursor_x;
+        console_char_t c = con->buffer[idx];
+        draw_glyph(get_glyph_ptr(c.codepoint), px, py, VGA_PALETTE[c.fg], VGA_PALETTE[c.bg]);
+    }
+}
+
 /* --- Internal Logic (Assumes Lock Held) --- */
 
 static void console_refresh_locked(console_t* con) {
@@ -80,9 +105,15 @@ static void console_refresh_locked(console_t* con) {
                        VGA_PALETTE[c.fg], VGA_PALETTE[c.bg]);
         }
     }
+    
+    if (con->cursor_enabled) {
+        con_render_cursor(con, true);
+    }
 }
 
 static void scroll_inst(console_t* con) {
+    if (con->cursor_enabled) con_render_cursor(con, false);
+
     size_t size = (con->height - 1) * con->width;
     memmove(con->buffer, con->buffer + con->width, size * sizeof(console_char_t));
     
@@ -101,6 +132,10 @@ static void handle_cp_inst(console_t* con, uint32_t cp) {
     extern tty_t* g_active_tty;
     bool is_active = (g_active_tty && g_active_tty->console == con);
 
+    if (is_active && con->cursor_enabled) {
+        con_render_cursor(con, false);
+    }
+
     if (cp == '\n') {
         con->cursor_x = 0;
         con->cursor_y++;
@@ -114,7 +149,6 @@ static void handle_cp_inst(console_t* con, uint32_t cp) {
             draw_glyph(get_glyph_ptr(' '), con->cursor_x * g_font_width, con->cursor_y * (g_font_height + PADDING_Y), 
                        VGA_PALETTE[con->fg_color], VGA_PALETTE[con->bg_color]);
         }
-        return;
     } else if (cp == '\t') {
         con->cursor_x = (con->cursor_x + 4) & ~3;
     } else {
@@ -141,6 +175,10 @@ static void handle_cp_inst(console_t* con, uint32_t cp) {
     if (con->cursor_y >= con->height) {
         scroll_inst(con);
     }
+
+    if (is_active && con->cursor_enabled) {
+        con_render_cursor(con, true);
+    }
 }
 
 /* --- Instance Logic --- */
@@ -155,6 +193,8 @@ void con_init(console_t* con) {
     con->utf8_bytes_needed = 0;
     con->utf8_codepoint = 0;
     con->reentrancy_count = 0;
+    
+    con->cursor_enabled = true;
     
     spinlock_init(&con->lock, "console_lock");
 
@@ -178,6 +218,9 @@ void con_clear(console_t* con) {
     extern tty_t* g_active_tty;
     if (g_active_tty && g_active_tty->console == con) {
         memset(g_fb_addr, 0, g_fb_size); 
+        if (con->cursor_enabled) {
+            con_render_cursor(con, true);
+        }
     }
     
     spinlock_release(&con->lock, flags);
@@ -220,6 +263,17 @@ void con_set_color(console_t* con, uint8_t foreground, uint8_t background) {
     bool flags = spinlock_acquire(&con->lock);
     con->fg_color = foreground & 0xF;
     con->bg_color = background & 0xF;
+    spinlock_release(&con->lock, flags);
+}
+
+void con_set_cursor_enabled(console_t* con, bool enabled) {
+    bool flags = spinlock_acquire(&con->lock);
+    if (con->cursor_enabled && !enabled) {
+        con_render_cursor(con, false);
+    } else if (!con->cursor_enabled && enabled) {
+        con_render_cursor(con, true);
+    }
+    con->cursor_enabled = enabled;
     spinlock_release(&con->lock, flags);
 }
 

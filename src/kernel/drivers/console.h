@@ -5,6 +5,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stdbool.h>
 #include <stddef.h>
 #include <arch/x86_64/multiboot2.h>
 #include <kernel/sys/spinlock.h>
@@ -33,10 +34,13 @@ typedef struct {
 } console_char_t;
 
 typedef struct {
-    size_t cursor_x; // In characters
-    size_t cursor_y; // In characters
+    size_t cursor_x;
+    size_t cursor_y;
     uint8_t fg_color;
     uint8_t bg_color;
+
+    // Cursor State (Static Block)
+    bool cursor_enabled;     
 
     // UTF-8 State
     uint32_t utf8_codepoint;
@@ -44,8 +48,8 @@ typedef struct {
 
     // Backbuffer
     console_char_t* buffer;
-    size_t width;  // in chars
-    size_t height; // in chars
+    size_t width;  
+    size_t height; 
     
     spinlock_t lock;
     int reentrancy_count;
@@ -54,14 +58,17 @@ typedef struct {
 // Global Hardware Management
 void console_init(multiboot_parser_t* parser);
 
-// Instance Management (Clean API)
+// Instance Management
 void con_init(console_t* con);
 void con_putc(console_t* con, char character);
 void con_set_color(console_t* con, uint8_t foreground, uint8_t background);
 void con_clear(console_t* con);
 void con_refresh(console_t* con);
 
-// Global Accessors (Targeting the active TTY's console)
+// Cursor Control
+void con_set_cursor_enabled(console_t* con, bool enabled);
+
+// Global Accessors
 void console_print_char(char character);
 void console_set_color(uint8_t foreground, uint8_t background);
 void console_clear(void);
