@@ -22,5 +22,6 @@ typedef struct {
 
 void spinlock_init(spinlock_t* lock, const char* name);
 bool spinlock_acquire(spinlock_t* lock);
+bool spinlock_try_acquire(spinlock_t* lock, bool* was_enabled);
 void spinlock_release(spinlock_t* lock, bool interrupts_enabled);
 bool spinlock_is_locked(spinlock_t* lock);

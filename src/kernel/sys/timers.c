@@ -28,6 +28,8 @@ static uint32_t g_hpet_period = 0; // Femtoseconds per tick
 static uint64_t g_tsc_ticks_per_ms = 0;
 static uint64_t g_boot_tsc = 0;
 
+static volatile uint64_t g_ticks = 0;
+
 #pragma endregion
 
 #pragma region PIT Implementation
@@ -141,6 +143,14 @@ uint64_t hpet_read_counter(void) {
 #pragma region Calibration Logic
 
 /*
+ * timer_handler - Currently a sinkhole for PIC Interrupts, soon to be scheduler invoker
+ */
+static void timer_handler(cpu_context_t* ctx) {
+    (void)ctx;
+    g_ticks++;
+}
+
+/*
  * timer_calibrate_all - Calibrates LAPIC and TSC against HPET or PIT
  */
 static void timer_calibrate_all(void) {
@@ -213,6 +223,10 @@ void timer_init(void) {
     
     hpet_init();
     timer_calibrate_all();
+
+    // Register handler and unmask IRQ 0 (System Timer)
+    register_interrupt_handler(INT_FIRST_INTERRUPT, timer_handler);
+    ioapic_unmask(0);
 
     // Check for TSC Deadline support
     uint32_t a, b, c, d;

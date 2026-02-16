@@ -42,6 +42,21 @@ bool spinlock_acquire(spinlock_t* lock) {
 }
 
 /*
+ * spinlock_try_acquire - Attempt to take the lock without spinning
+ */
+bool spinlock_try_acquire(spinlock_t* lock, bool* was_enabled) {
+    *was_enabled = interrupts_save();
+
+    if (__atomic_test_and_set(&lock->locked, __ATOMIC_ACQUIRE)) {
+        interrupts_restore(*was_enabled);
+        return false;
+    }
+
+    lock->cpu_id = lapic_get_id();
+    return true;
+}
+
+/*
  * spinlock_release - Release the lock and restore interrupt state
  */
 void spinlock_release(spinlock_t* lock, bool interrupts_enabled) {
