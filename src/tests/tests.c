@@ -102,10 +102,13 @@ void kernel_test(void* mb_info, char* KERNEL_VERSION) {
     static console_t test_console;
     con_init(&test_console);
 
-    // Initialize TTY (Must happen before first printf)
-    static tty_t test_tty_instance;
-    tty_init(&test_tty_instance, &test_console);
-    g_active_tty = &test_tty_instance;
+    // Initialize Kernel TTY and a test TTY
+    tty_t* k_tty = tty_create();
+    if (!k_tty) panic("Failed to create kernel TTY!");
+
+	// Default to Kernel TTY
+	g_active_tty = k_tty;
+
     input_init();
 
     print_test_banner(KERNEL_VERSION);
