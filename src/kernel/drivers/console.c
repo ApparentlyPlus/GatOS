@@ -36,6 +36,9 @@ static const uint32_t VGA_PALETTE[16] = {
 
 /* --- Hardware Drawing --- */
 
+/*
+ * put_pixel - Draws a single pixel to the framebuffer.
+ */
 static inline void put_pixel(uint32_t x, uint32_t y, uint32_t color) {
     if (x >= g_fb_width || y >= g_fb_height) return; 
     size_t offset = (y * g_fb_pitch) + (x * (g_fb_bpp / 8));
@@ -47,6 +50,9 @@ static inline void put_pixel(uint32_t x, uint32_t y, uint32_t color) {
     }
 }
 
+/*
+ * draw_glyph - Renders a PSF1 glyph at the specified pixel coordinates.
+ */
 static void draw_glyph(uint8_t* glyph, size_t px, size_t py, uint32_t fg, uint32_t bg) {
     for (size_t y = 0; y < g_font_height; y++) {
         uint8_t row = glyph[y];
@@ -57,6 +63,9 @@ static void draw_glyph(uint8_t* glyph, size_t px, size_t py, uint32_t fg, uint32
     }
 }
 
+/*
+ * get_glyph_ptr - Returns a pointer to the glyph data for a given Unicode codepoint.
+ */
 static uint8_t* get_glyph_ptr(uint32_t codepoint) {
     psf1_font_t* font = font_get_current();
     if (!font) return NULL;
@@ -67,6 +76,9 @@ static uint8_t* get_glyph_ptr(uint32_t codepoint) {
 
 /* --- Cursor Rendering --- */
 
+/*
+ * con_render_cursor - Draws or erases the console cursor.
+ */
 static void con_render_cursor(console_t* con, bool on) {
     if (!g_fb_addr) return;
     
@@ -92,6 +104,9 @@ static void con_render_cursor(console_t* con, bool on) {
 
 /* --- Internal Logic (Assumes Lock Held) --- */
 
+/*
+ * console_refresh_locked - Redraws the entire console content to the framebuffer.
+ */
 static void console_refresh_locked(console_t* con) {
     if (!g_fb_addr) return;
     
@@ -111,6 +126,9 @@ static void console_refresh_locked(console_t* con) {
     }
 }
 
+/*
+ * scroll_inst - Scrolls the console content up by one line.
+ */
 static void scroll_inst(console_t* con) {
     if (con->cursor_enabled) con_render_cursor(con, false);
 
@@ -128,6 +146,9 @@ static void scroll_inst(console_t* con) {
     console_refresh_locked(con);
 }
 
+/*
+ * handle_cp_inst - Internal handler for rendering characters and control codes.
+ */
 static void handle_cp_inst(console_t* con, uint32_t cp) {
     extern tty_t* g_active_tty;
     bool is_active = (g_active_tty && g_active_tty->console == con);
@@ -183,6 +204,9 @@ static void handle_cp_inst(console_t* con, uint32_t cp) {
 
 /* --- Instance Logic --- */
 
+/*
+ * con_init - Initializes a console instance.
+ */
 void con_init(console_t* con) {
     con->width = g_max_cols;
     con->height = g_max_rows;
@@ -201,12 +225,16 @@ void con_init(console_t* con) {
     con->buffer = (console_char_t*)kmalloc(con->width * con->height * sizeof(console_char_t));
     if (!con->buffer) panic("Failed to allocate console backbuffer!");
 
-    con_clear(con);
+    con_clear(con, CONSOLE_COLOR_BLACK);
 }
 
-void con_clear(console_t* con) {
+/*
+ * con_clear - Clears the console and fills the framebuffer with the specified background color.
+ */
+void con_clear(console_t* con, uint8_t background) {
     bool flags = spinlock_acquire(&con->lock);
     
+    con->bg_color = background & 0xF;
     for (size_t i = 0; i < con->width * con->height; i++) {
         con->buffer[i].codepoint = ' ';
         con->buffer[i].fg = con->fg_color;
@@ -217,7 +245,22 @@ void con_clear(console_t* con) {
 
     extern tty_t* g_active_tty;
     if (g_active_tty && g_active_tty->console == con) {
-        memset(g_fb_addr, 0, g_fb_size); 
+        uint32_t bg_color = VGA_PALETTE[con->bg_color];
+        if (g_fb_bpp == 32) {
+            uint32_t* fb32 = (uint32_t*)g_fb_addr;
+            size_t num_pixels = g_fb_size / 4;
+            for (size_t i = 0; i < num_pixels; i++) {
+                fb32[i] = bg_color;
+            }
+        } else {
+            // Manual slow clear for other bit depths
+            for (uint32_t y = 0; y < g_fb_height; y++) {
+                for (uint32_t x = 0; x < g_fb_width; x++) {
+                    put_pixel(x, y, bg_color);
+                }
+            }
+        }
+
         if (con->cursor_enabled) {
             con_render_cursor(con, true);
         }
@@ -226,6 +269,9 @@ void con_clear(console_t* con) {
     spinlock_release(&con->lock, flags);
 }
 
+/*
+ * con_putc - High-level character output for a console instance (handles UTF-8).
+ */
 void con_putc(console_t* con, char character) {
     bool flags;
     bool locked = false;
@@ -252,6 +298,9 @@ void con_putc(console_t* con, char character) {
     if (locked) spinlock_release(&con->lock, flags);
 }
 
+/*
+ * con_refresh - Public wrapper to refresh a console's display.
+ */
 void con_refresh(console_t* con) {
     if (!g_fb_addr) return;
     bool flags = spinlock_acquire(&con->lock);
@@ -259,6 +308,9 @@ void con_refresh(console_t* con) {
     spinlock_release(&con->lock, flags);
 }
 
+/*
+ * con_set_color - Updates the current drawing colors for a console instance.
+ */
 void con_set_color(console_t* con, uint8_t foreground, uint8_t background) {
     bool flags = spinlock_acquire(&con->lock);
     con->fg_color = foreground & 0xF;
@@ -266,6 +318,9 @@ void con_set_color(console_t* con, uint8_t foreground, uint8_t background) {
     spinlock_release(&con->lock, flags);
 }
 
+/*
+ * con_set_cursor_enabled - Enables or disables the blinking caret for a console instance.
+ */
 void con_set_cursor_enabled(console_t* con, bool enabled) {
     bool flags = spinlock_acquire(&con->lock);
     if (con->cursor_enabled && !enabled) {
@@ -279,6 +334,9 @@ void con_set_cursor_enabled(console_t* con, bool enabled) {
 
 /* --- Global Compatibility --- */
 
+/*
+ * console_init - Probes Multiboot information and initializes global framebuffer state.
+ */
 void console_init(multiboot_parser_t* parser) {
     font_init();
     multiboot_framebuffer_t* fb = multiboot_get_framebuffer(parser);
@@ -302,6 +360,9 @@ void console_init(multiboot_parser_t* parser) {
     memset(g_fb_addr, 0, g_fb_size);
 }
 
+/*
+ * console_print_char - Global accessor to print a character to the active TTY.
+ */
 void console_print_char(char character) {
     extern tty_t* g_active_tty;
     if (g_active_tty && g_active_tty->console) {
@@ -309,6 +370,9 @@ void console_print_char(char character) {
     }
 }
 
+/*
+ * console_set_color - Global accessor to set colors for the active TTY.
+ */
 void console_set_color(uint8_t foreground, uint8_t background) {
     extern tty_t* g_active_tty;
     if (g_active_tty && g_active_tty->console) {
@@ -316,12 +380,32 @@ void console_set_color(uint8_t foreground, uint8_t background) {
     }
 }
 
-void console_clear(void) {
+/*
+ * console_set_cursor_enabled - Global accessor to toggle the cursor for the active TTY.
+ */
+void console_set_cursor_enabled(bool enabled) {
     extern tty_t* g_active_tty;
     if (g_active_tty && g_active_tty->console) {
-        con_clear(g_active_tty->console);
+        con_set_cursor_enabled(g_active_tty->console, enabled);
     }
 }
 
+/*
+ * console_clear - Global accessor to clear the active TTY's display.
+ */
+void console_clear(uint8_t background) {
+    extern tty_t* g_active_tty;
+    if (g_active_tty && g_active_tty->console) {
+        con_clear(g_active_tty->console, background);
+    }
+}
+
+/*
+ * console_get_width - Returns the console width in columns.
+ */
 size_t console_get_width() { return g_max_cols; }
+
+/*
+ * console_get_height - Returns the console height in rows.
+ */
 size_t console_get_height() { return g_max_rows; }

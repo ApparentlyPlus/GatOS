@@ -62,7 +62,7 @@ void console_init(multiboot_parser_t* parser);
 void con_init(console_t* con);
 void con_putc(console_t* con, char character);
 void con_set_color(console_t* con, uint8_t foreground, uint8_t background);
-void con_clear(console_t* con);
+void con_clear(console_t* con, uint8_t background);
 void con_refresh(console_t* con);
 
 // Cursor Control
@@ -71,6 +71,7 @@ void con_set_cursor_enabled(console_t* con, bool enabled);
 // Global Accessors
 void console_print_char(char character);
 void console_set_color(uint8_t foreground, uint8_t background);
-void console_clear(void);
+void console_clear(uint8_t background);
+void console_set_cursor_enabled(bool enabled);
 size_t console_get_width();
 size_t console_get_height();
