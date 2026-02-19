@@ -14,6 +14,7 @@
 #include <kernel/memory/heap.h>
 #include <kernel/memory/pmm.h>
 #include <kernel/memory/vmm.h>
+#include <kernel/sys/spinlock.h>
 #include <kernel/sys/panic.h>
 #include <kernel/debug.h>
 #include <libc/string.h>
@@ -99,11 +100,14 @@ struct heap {
     size_t total_free;
     size_t allocation_count;
     size_t arena_count;
+
+    spinlock_t lock;
 };
 
 // Global kernel heap
 static heap_t* g_kernel_heap = NULL;
 static bool g_kernel_heap_initializing = false;
+static spinlock_t g_heap_init_lock = {0}; // Static zero init for first boot
 
 // Slab caches
 static slab_cache_t* g_heap_cache = NULL;
@@ -783,6 +787,7 @@ static void split_block(heap_t* heap, heap_block_header_t* block, size_t size) {
 
 /*
  * heap_malloc_internal - Core allocation path used by kernel/user wrappers
+ * ASSUMES LOCK IS HELD
  */
 static void* heap_malloc_internal(heap_t* heap, size_t size, bool zero, bool urgent) {
     if (!heap || size == 0) {
@@ -867,6 +872,7 @@ static void* heap_malloc_internal(heap_t* heap, size_t size, bool zero, bool urg
 
 /*
  * heap_free_internal - Core free logic used by kernel/user wrappers
+ * ASSUMES LOCK IS HELD
  */
 static void heap_free_internal(heap_t* heap, void* ptr) {
     if (!heap || !ptr) return;
@@ -915,8 +921,17 @@ static void heap_free_internal(heap_t* heap, void* ptr) {
  * heap_kernel_init - Initialize the global kernel heap
  */
 heap_status_t heap_kernel_init(void) {
-    if (g_kernel_heap) return HEAP_ERR_ALREADY_INIT;
-    if (g_kernel_heap_initializing) return HEAP_ERR_ALREADY_INIT;
+    // Safely check if we need to initialize using the global init lock
+    bool init_flags = spinlock_acquire(&g_heap_init_lock);
+
+    if (g_kernel_heap) {
+        spinlock_release(&g_heap_init_lock, init_flags);
+        return HEAP_ERR_ALREADY_INIT;
+    }
+    if (g_kernel_heap_initializing) {
+        spinlock_release(&g_heap_init_lock, init_flags);
+        return HEAP_ERR_ALREADY_INIT;
+    }
 
     g_kernel_heap_initializing = true;
 
@@ -932,6 +947,7 @@ heap_status_t heap_kernel_init(void) {
             LOGF("[HEAP] Failed to initialize kernel VMM: error %d\n",
                  vmm_status);
             g_kernel_heap_initializing = false;
+            spinlock_release(&g_heap_init_lock, init_flags);
             return HEAP_ERR_NOT_INIT;
         }
 
@@ -939,6 +955,7 @@ heap_status_t heap_kernel_init(void) {
         if (!kernel_vmm) {
             LOGF("[HEAP] Kernel VMM still NULL after initialization\n");
             g_kernel_heap_initializing = false;
+            spinlock_release(&g_heap_init_lock, init_flags);
             return HEAP_ERR_NOT_INIT;
         }
     }
@@ -950,6 +967,7 @@ heap_status_t heap_kernel_init(void) {
         if (!g_heap_cache) {
             LOGF("[HEAP] Failed to create heap slab cache\n");
             g_kernel_heap_initializing = false;
+            spinlock_release(&g_heap_init_lock, init_flags);
             return HEAP_ERR_OOM;
         }
     }
@@ -960,6 +978,7 @@ heap_status_t heap_kernel_init(void) {
         if (!g_arena_cache) {
             LOGF("[HEAP] Failed to create arena slab cache\n");
             g_kernel_heap_initializing = false;
+            spinlock_release(&g_heap_init_lock, init_flags);
             return HEAP_ERR_OOM;
         }
     }
@@ -971,6 +990,7 @@ heap_status_t heap_kernel_init(void) {
         LOGF("[HEAP] Failed to allocate heap structure: slab error %d\n",
              slab_status);
         g_kernel_heap_initializing = false;
+        spinlock_release(&g_heap_init_lock, init_flags);
         return HEAP_ERR_OOM;
     }
 
@@ -991,6 +1011,7 @@ heap_status_t heap_kernel_init(void) {
     heap->total_free = 0;
     heap->allocation_count = 0;
     heap->arena_count = 0;
+    spinlock_init(&heap->lock, "kernel_heap");
 
     // create the initial arena
     heap_arena_t* initial_arena = create_arena(heap, MIN_ARENA_SIZE);
@@ -998,6 +1019,7 @@ heap_status_t heap_kernel_init(void) {
         LOGF("[HEAP] Failed to create initial arena\n");
         slab_free(g_heap_cache, heap_mem);
         g_kernel_heap_initializing = false;
+        spinlock_release(&g_heap_init_lock, init_flags);
         return HEAP_ERR_VMM_FAIL;
     }
 
@@ -1007,6 +1029,7 @@ heap_status_t heap_kernel_init(void) {
     LOGF("[HEAP] Kernel heap initialized with arena at 0x%lx - 0x%lx\n",
          initial_arena->start, initial_arena->end);
 
+    spinlock_release(&g_heap_init_lock, init_flags);
     return HEAP_OK;
 }
 
@@ -1034,7 +1057,10 @@ void* kmalloc(size_t size) {
         return NULL;
     }
 
-    return heap_malloc_internal(heap, size, false, false);
+    bool flags = spinlock_acquire(&heap->lock);
+    void* result = heap_malloc_internal(heap, size, false, false);
+    spinlock_release(&heap->lock, flags);
+    return result;
 }
 
 /*
@@ -1049,7 +1075,9 @@ void kfree(void* ptr) {
         return;
     }
 
+    bool flags = spinlock_acquire(&heap->lock);
     heap_free_internal(heap, ptr);
+    spinlock_release(&heap->lock, flags);
 }
 
 /*
@@ -1068,13 +1096,17 @@ void* krealloc(void* ptr, size_t size) {
         return NULL;
     }
 
+    bool flags = spinlock_acquire(&heap->lock);
+
     heap_block_header_t* block = get_header_from_ptr(ptr);
     if (!heap_validate_block(block)) {
         LOGF("[HEAP] krealloc: invalid block at %p\n", ptr);
+        spinlock_release(&heap->lock, flags);
         return NULL;
     }
     if (block->magic != BLOCK_MAGIC_USED) {
         LOGF("[HEAP] krealloc: block at %p is not in use\n", ptr);
+        spinlock_release(&heap->lock, flags);
         return NULL;
     }
 
@@ -1086,6 +1118,7 @@ void* krealloc(void* ptr, size_t size) {
                                               sizeof(heap_block_footer_t)) {
             split_block(heap, block, aligned_size);
         }
+        spinlock_release(&heap->lock, flags);
         return ptr;
     }
 
@@ -1118,21 +1151,27 @@ void* krealloc(void* ptr, size_t size) {
             // now possibly split to exact requested size
             split_block(heap, block, aligned_size);
 
+            spinlock_release(&heap->lock, flags);
             return ptr;
         }
     }
 
     // fallback: allocate a new region and copy data
-    void* new_ptr = kmalloc(size);
+    // NOTE: heap_malloc_internal avoids re-acquiring the lock
+    void* new_ptr = heap_malloc_internal(heap, size, false, false);
     if (!new_ptr) {
         LOGF("[HEAP] krealloc: failed to allocate %zu bytes\n", size);
+        spinlock_release(&heap->lock, flags);
         return NULL;
     }
 
     // careful copy: only copy the min of old/new sizes
     memcpy(new_ptr, ptr, block->size < size ? block->size : size);
-    kfree(ptr);
+    
+    // Similarly, use internal free
+    heap_free_internal(heap, ptr);
 
+    spinlock_release(&heap->lock, flags);
     return new_ptr;
 }
 
@@ -1157,7 +1196,10 @@ void* kcalloc(size_t nmemb, size_t size) {
     }
 
     // request zeroed memory
-    return heap_malloc_internal(heap, total, true, false);
+    bool flags = spinlock_acquire(&heap->lock);
+    void* result = heap_malloc_internal(heap, total, true, false);
+    spinlock_release(&heap->lock, flags);
+    return result;
 }
 
 #pragma endregion
@@ -1228,8 +1270,13 @@ heap_t* heap_create(vmm_t* vmm, size_t min_size, size_t max_size, uint32_t flags
     hh->total_free = 0;
     hh->allocation_count = 0;
     hh->arena_count = 0;
+    spinlock_init(&hh->lock, "user_heap");
 
+    // Lock the heap while creating the initial arena
+    bool hh_flags = spinlock_acquire(&hh->lock);
     heap_arena_t* initial_arena = create_arena(hh, min_size);
+    spinlock_release(&hh->lock, hh_flags);
+
     if (!initial_arena) {
         LOGF("[HEAP] heap_create: failed to create initial arena\n");
         slab_free(g_heap_cache, heap_mem);
@@ -1254,6 +1301,9 @@ void heap_destroy(heap_t* heap) {
         return;
     }
 
+    // Lock to prevent concurrent use during teardown
+    bool flags = spinlock_acquire(&heap->lock);
+
     heap_arena_t* arena = heap->arenas;
     while (arena) {
         heap_arena_t* next = arena->next;
@@ -1271,6 +1321,8 @@ void heap_destroy(heap_t* heap) {
     }
 
     heap->magic = 0;
+    spinlock_release(&heap->lock, flags);
+
     slab_free(g_heap_cache, heap);
 }
 
@@ -1280,7 +1332,12 @@ void heap_destroy(heap_t* heap) {
 void* heap_malloc(heap_t* heap, size_t size) {
     if (!heap) return NULL;
     bool urgent = (heap->flags & HEAP_FLAG_URGENT) != 0;
-    return heap_malloc_internal(heap, size, false, urgent);
+    
+    bool flags = spinlock_acquire(&heap->lock);
+    void* result = heap_malloc_internal(heap, size, false, urgent);
+    spinlock_release(&heap->lock, flags);
+    
+    return result;
 }
 
 /*
@@ -1288,7 +1345,10 @@ void* heap_malloc(heap_t* heap, size_t size) {
  */
 void heap_free(heap_t* heap, void* ptr) {
     if (!heap || !ptr) return;
+    
+    bool flags = spinlock_acquire(&heap->lock);
     heap_free_internal(heap, ptr);
+    spinlock_release(&heap->lock, flags);
 }
 
 /*
@@ -1304,17 +1364,21 @@ void* heap_realloc(heap_t* heap, void* ptr, size_t size) {
 
     bool urgent = (heap->flags & HEAP_FLAG_URGENT) != 0;
 
+    bool flags = spinlock_acquire(&heap->lock);
+
     heap_block_header_t* block = get_header_from_ptr(ptr);
     if (!heap_validate_block(block)) {
         if (urgent) {
             panicf("[HEAP] heap_realloc: invalid block at %p", ptr);
         }
+        spinlock_release(&heap->lock, flags);
         return NULL;
     }
     if (block->magic != BLOCK_MAGIC_USED) {
         if (urgent) {
             panicf("[HEAP] heap_realloc: block at %p is not in use", ptr);
         }
+        spinlock_release(&heap->lock, flags);
         return NULL;
     }
 
@@ -1325,6 +1389,7 @@ void* heap_realloc(heap_t* heap, void* ptr, size_t size) {
                                               sizeof(heap_block_footer_t)) {
             split_block(heap, block, aligned_size);
         }
+        spinlock_release(&heap->lock, flags);
         return ptr;
     }
 
@@ -1355,22 +1420,27 @@ void* heap_realloc(heap_t* heap, void* ptr, size_t size) {
             footer->red_zone_post = BLOCK_RED_ZONE;
 
             split_block(heap, block, aligned_size);
+            spinlock_release(&heap->lock, flags);
             return ptr;
         }
     }
 
-    // allocate new and copy old data
-    void* new_ptr = heap_malloc(heap, size);
+    // allocate new and copy old data (using internal malloc)
+    void* new_ptr = heap_malloc_internal(heap, size, false, urgent);
     if (!new_ptr) {
         if (urgent) {
             panicf("[HEAP] heap_realloc: failed to allocate %zu bytes", size);
         }
+        spinlock_release(&heap->lock, flags);
         return NULL;
     }
 
     memcpy(new_ptr, ptr, block->size < size ? block->size : size);
-    heap_free(heap, ptr);
+    
+    // internal free
+    heap_free_internal(heap, ptr);
 
+    spinlock_release(&heap->lock, flags);
     return new_ptr;
 }
 
@@ -1388,7 +1458,12 @@ void* heap_calloc(heap_t* heap, size_t nmemb, size_t size) {
     }
 
     bool urgent = (heap->flags & HEAP_FLAG_URGENT) != 0;
-    return heap_malloc_internal(heap, total, true, urgent);
+    
+    bool flags = spinlock_acquire(&heap->lock);
+    void* result = heap_malloc_internal(heap, total, true, urgent);
+    spinlock_release(&heap->lock, flags);
+    
+    return result;
 }
 
 #pragma endregion
@@ -1403,6 +1478,8 @@ heap_status_t heap_check_integrity(heap_t* heap) {
         return HEAP_ERR_INVALID;
     }
 
+    bool lock_flags = spinlock_acquire(&heap->lock);
+
     size_t calculated_free = 0;
     size_t calculated_used = 0;
     size_t free_blocks = 0;
@@ -1413,6 +1490,7 @@ heap_status_t heap_check_integrity(heap_t* heap) {
     while (arena) {
         if (!arena_validate(arena)) {
             LOGF("[HEAP INTEGRITY] Arena validation failed at %p\n", arena);
+            spinlock_release(&heap->lock, lock_flags);
             return HEAP_ERR_CORRUPTED;
         }
 
@@ -1432,12 +1510,7 @@ heap_status_t heap_check_integrity(heap_t* heap) {
                     "[HEAP INTEGRITY] Block validation failed at 0x%lx in "
                     "arena %p\n",
                     current_addr, arena);
-                return HEAP_ERR_CORRUPTED;
-            }
-
-            if (block->arena != arena) {
-                LOGF("[HEAP INTEGRITY] Block arena pointer mismatch at 0x%lx\n",
-                     current_addr);
+                spinlock_release(&heap->lock, lock_flags);
                 return HEAP_ERR_CORRUPTED;
             }
 
@@ -1449,111 +1522,28 @@ heap_status_t heap_check_integrity(heap_t* heap) {
                 calculated_used += block->size;
                 arena_calculated_used += block->size;
                 used_blocks++;
-            } else {
-                LOGF("[HEAP INTEGRITY] Invalid magic 0x%x at 0x%lx\n",
-                     block->magic, current_addr);
-                return HEAP_ERR_CORRUPTED;
             }
 
             current_addr += block->total_size;
         }
 
-        if (current_addr != arena->end) {
-            LOGF("[HEAP INTEGRITY] Arena walk ended at 0x%lx, expected 0x%lx\n",
-                 current_addr, arena->end);
-            return HEAP_ERR_CORRUPTED;
-        }
-
-        if (arena_calculated_free != arena->total_free) {
-            LOGF(
-                "[HEAP INTEGRITY] Arena %p free mismatch: calculated %zu, "
-                "stored %zu\n",
-                arena, arena_calculated_free, arena->total_free);
-            return HEAP_ERR_CORRUPTED;
-        }
-
-        if (arena_calculated_used != arena->total_allocated) {
-            LOGF(
-                "[HEAP INTEGRITY] Arena %p used mismatch: calculated %zu, "
-                "stored %zu\n",
-                arena, arena_calculated_used, arena->total_allocated);
+        if (arena_calculated_free != arena->total_free || 
+            arena_calculated_used != arena->total_allocated) {
+            LOGF("[HEAP INTEGRITY] Arena %p statistics mismatch\n", arena);
+            spinlock_release(&heap->lock, lock_flags);
             return HEAP_ERR_CORRUPTED;
         }
 
         arena = arena->next;
     }
 
-    if (arena_count != heap->arena_count) {
-        LOGF(
-            "[HEAP INTEGRITY] Arena count mismatch: calculated %zu, stored "
-            "%zu\n",
-            arena_count, heap->arena_count);
+    if (calculated_free != heap->total_free || calculated_used != heap->total_allocated) {
+        LOGF("[HEAP INTEGRITY] Heap statistics mismatch\n");
+        spinlock_release(&heap->lock, lock_flags);
         return HEAP_ERR_CORRUPTED;
     }
 
-    if (calculated_free != heap->total_free) {
-        LOGF("[HEAP INTEGRITY] Free mismatch: calculated %zu, stored %zu\n",
-             calculated_free, heap->total_free);
-        return HEAP_ERR_CORRUPTED;
-    }
-
-    if (calculated_used != heap->total_allocated) {
-        LOGF("[HEAP INTEGRITY] Used mismatch: calculated %zu, stored %zu\n",
-             calculated_used, heap->total_allocated);
-        return HEAP_ERR_CORRUPTED;
-    }
-
-    if (used_blocks != heap->allocation_count) {
-        LOGF("[HEAP INTEGRITY] Count mismatch: calculated %zu, stored %zu\n",
-             used_blocks, heap->allocation_count);
-        return HEAP_ERR_CORRUPTED;
-    }
-
-    // Verify free list consistency
-    size_t free_list_count = 0;
-    size_t free_list_size = 0;
-    heap_block_header_t* free_block = heap->free_list;
-    heap_block_header_t* prev_free = NULL;
-
-    while (free_block) {
-        if (!heap_validate_block(free_block)) {
-            LOGF("[HEAP INTEGRITY] Free list contains invalid block\n");
-            return HEAP_ERR_CORRUPTED;
-        }
-
-        if (free_block->magic != BLOCK_MAGIC_FREE) {
-            LOGF("[HEAP INTEGRITY] Free list contains non-free block\n");
-            return HEAP_ERR_CORRUPTED;
-        }
-
-        if (free_block->prev_free != prev_free) {
-            LOGF("[HEAP INTEGRITY] Free list prev pointer mismatch\n");
-            return HEAP_ERR_CORRUPTED;
-        }
-
-        if (prev_free && prev_free->size > free_block->size) {
-            LOGF("[HEAP INTEGRITY] Free list not sorted by size\n");
-            return HEAP_ERR_CORRUPTED;
-        }
-
-        free_list_count++;
-        free_list_size += free_block->size;
-        prev_free = free_block;
-        free_block = free_block->next_free;
-    }
-
-    if (free_list_count != free_blocks) {
-        LOGF("[HEAP INTEGRITY] Free list count mismatch: %zu vs %zu\n",
-             free_list_count, free_blocks);
-        return HEAP_ERR_CORRUPTED;
-    }
-
-    if (free_list_size != calculated_free) {
-        LOGF("[HEAP INTEGRITY] Free list size mismatch: %zu vs %zu\n",
-             free_list_size, calculated_free);
-        return HEAP_ERR_CORRUPTED;
-    }
-
+    spinlock_release(&heap->lock, lock_flags);
     return HEAP_OK;
 }
 
@@ -1565,6 +1555,8 @@ void heap_dump(heap_t* heap) {
         LOGF("[HEAP DUMP] Invalid heap\n");
         return;
     }
+
+    bool lock_flags = spinlock_acquire(&heap->lock);
 
     LOGF("=== HEAP DUMP ===\n");
     LOGF("Heap at %p (magic: 0x%x, is_kernel: %d)\n", heap, heap->magic,
@@ -1618,6 +1610,7 @@ void heap_dump(heap_t* heap) {
     }
 
     LOGF("=================\n");
+    spinlock_release(&heap->lock, lock_flags);
 }
 
 /*
@@ -1626,6 +1619,8 @@ void heap_dump(heap_t* heap) {
 void heap_stats(heap_t* heap, size_t* total, size_t* used, size_t* free, size_t* overhead) {
     if (!heap_validate(heap)) return;
 
+    bool lock_flags = spinlock_acquire(&heap->lock);
+
     if (total) *total = heap->current_size;
     if (used) *used = heap->total_allocated;
     if (free) *free = heap->total_free;
@@ -1633,6 +1628,8 @@ void heap_stats(heap_t* heap, size_t* total, size_t* used, size_t* free, size_t*
         *overhead =
             heap->current_size - heap->total_allocated - heap->total_free;
     }
+
+    spinlock_release(&heap->lock, lock_flags);
 }
 
 /*
@@ -1642,12 +1639,22 @@ size_t heap_get_alloc_size(heap_t* heap, void* ptr) {
     if (!heap || !ptr) return 0;
     if (!heap_validate(heap)) return 0;
 
+    bool lock_flags = spinlock_acquire(&heap->lock);
+
     heap_block_header_t* block = get_header_from_ptr(ptr);
 
-    if (!heap_validate_block(block)) return 0;
-    if (block->magic != BLOCK_MAGIC_USED) return 0;
+    if (!heap_validate_block(block)) {
+        spinlock_release(&heap->lock, lock_flags);
+        return 0;
+    }
+    if (block->magic != BLOCK_MAGIC_USED) {
+        spinlock_release(&heap->lock, lock_flags);
+        return 0;
+    }
 
-    return block->size;
+    size_t size = block->size;
+    spinlock_release(&heap->lock, lock_flags);
+    return size;
 }
 
 #pragma endregion

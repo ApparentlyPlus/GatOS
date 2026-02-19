@@ -8,7 +8,6 @@
  */
 
 #include <arch/x86_64/memory/paging.h>
-#include <kernel/drivers/vga_stdio.h>
 #include <arch/x86_64/multiboot2.h>
 #include <kernel/drivers/serial.h>
 #include <kernel/sys/panic.h>
@@ -230,7 +229,7 @@ uint64_t reserve_required_tablespace(multiboot_parser_t* multiboot) {
 void build_physmap() {
 
     if(physmapStruct.total_RAM == 0){
-        printf("[ERROR] No physmapStruct has been built. The required tablespace has not been reserved.");
+        LOGF("[ERROR] No physmapStruct has been built. The required tablespace has not been reserved.");
         return;
     }
 

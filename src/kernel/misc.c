@@ -7,34 +7,81 @@
  * Author: u/ApparentlyPlus
  */
 
-#include <kernel/drivers/vga_console.h>
-#include <kernel/drivers/vga_stdio.h>
+#include <kernel/drivers/console.h>
+#include <kernel/drivers/stdio.h>
 #include <stdint.h>
 
 /*
- * print_banner - Prints the GatOS kernel banner and metadata to the screen
+ * print_banner - Prints the GatOS kernel banner and metadata centered
  */
-void print_banner(char* KERNEL_VERSION){
-    console_set_color(CONSOLE_COLOR_CYAN, CONSOLE_COLOR_BLACK);
-    printf(
-            "  ____       _    ___   ____\n"
-            " / ___| __ _| |_ / _ \\ / ___|\n"
-            "| |  _ / _` | __| | | |\\___ \\\n"
-            "| |_| | (_| | | | |_| | ___) |\n"
-            " \\____|\\__,_|\\_\\ \\___/ |____/\n");
-
-    console_set_color(CONSOLE_COLOR_MAGENTA, CONSOLE_COLOR_BLACK);
-    printf("\nG a t O S   K e r n e l  %s\n\n", KERNEL_VERSION);
+void print_banner(char* KERNEL_VERSION) {
+    uint16_t screen_width = console_get_width();
+    int i, j, pad;
+    size_t len;
     
-    console_set_color(CONSOLE_COLOR_YELLOW, CONSOLE_COLOR_BLACK);
-    printf(
-            "This is a 64-bit long mode kernel!\n"
-            "Currently in VGA text mode, for testing.\n"
-            "Created by: u/ApparentlyPlus\n"
-            "Name inspired by: SkylOS, a project by u/BillyZeim\n\n");
+    const int CONTENT_WIDTH = 59; 
 
+    // Print Logo
+    console_set_color(CONSOLE_COLOR_CYAN, CONSOLE_COLOR_BLACK);
+    
+    const char* logo_lines[] = {
+        "   █████████             █████       ███████     █████████ ",
+        "  ███░░░░░███           ░░███      ███░░░░░███  ███░░░░░███",
+        " ███     ░░░   ██████   ███████   ███     ░░███░███    ░░░ ",
+        "░███          ░░░░░███ ░░░███░   ░███      ░███░░█████████ ",
+        "░███    █████  ███████   ░███    ░███      ░███ ░░░░░░░░███",
+        "░░███  ░░███  ███░░███   ░███ ███░░███     ███  ███    ░███",
+        " ░░█████████ ░░████████  ░░█████  ░░░███████░  ░░█████████ ",
+        "  ░░░░░░░░░   ░░░░░░░░    ░░░░░     ░░░░░░░     ░░░░░░░░░  "
+    };
+
+    printf("\n");
+
+    pad = (screen_width - CONTENT_WIDTH) / 2;
+    if (pad < 0) pad = 0;
+
+    for (i = 0; i < 8; i++) {
+        for (j = 0; j < pad; j++) printf(" ");
+        printf("%s\n", logo_lines[i]);
+    }
+
+    // Print Version
+    console_set_color(CONSOLE_COLOR_MAGENTA, CONSOLE_COLOR_BLACK);
+
+    len = 23 + strlen(KERNEL_VERSION); 
+    pad = (screen_width - len) / 2;
+    if (pad < 0) pad = 0;
+
+    printf("\n");
+    for (j = 0; j < pad; j++) printf(" ");
+    printf("G a t O S   K e r n e l  %s\n\n", KERNEL_VERSION);
+    
+    // Print Metadata
+    console_set_color(CONSOLE_COLOR_YELLOW, CONSOLE_COLOR_BLACK);
+    
+    const char* metadata[] = {
+        "Created by: u/ApparentlyPlus",
+        "Name inspired by: SkylOS, a project by u/BillyZeim"
+    };
+
+    for (i = 0; i < 2; i++) {
+        len = strlen(metadata[i]);
+        pad = (screen_width - len) / 2;
+        if (pad < 0) pad = 0;
+        
+        for (j = 0; j < pad; j++) printf(" ");
+        printf("%s\n", metadata[i]);
+    }
+
+    printf("\n");
+
+    // Print Separator
     console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
-    printf("---------------------------------------------------\n\n");
+    
+    // Print underscores across the full width of the screen
+    for (j = 0; j < screen_width; j++) printf("_");
+    
+    printf("\n\n");
 }
 
 /*
@@ -44,11 +91,16 @@ void print_test_banner(char* KERNEL_VERSION){
     console_set_color(CONSOLE_COLOR_CYAN, CONSOLE_COLOR_BLACK);
     
     printf(
-        " @@@@@@@   @@@@@@  @@@@@@@  @@@@@@   @@@@@@\n"
-        "!@@       @@!  @@@   @@!   @@!  @@@ !@@    \n"
-        "!@! @!@!@ @!@!@!@!   @!!   @!@  !@!  !@@!! \n"
-        ":!!   !!: !!:  !!!   !!:   !!:  !!!     !:!\n"
-        " :: :: :   :   : :    :     : :. :  ::.: : \n\n"
+        " @@@@@@@@   @@@@@@   @@@@@@@   @@@@@@    @@@@@@   \n"
+        "@@@@@@@@@  @@@@@@@@  @@@@@@@  @@@@@@@@  @@@@@@@   \n"
+        "!@@        @@!  @@@    @@!    @@!  @@@  !@@       \n"
+        "!@!        !@!  @!@    !@!    !@!  @!@  !@!       \n"
+        "!@! @!@!@  @!@!@!@!    @!!    @!@  !@!  !!@@!!    \n"
+        "!!! !!@!!  !!!@!!!!    !!!    !@!  !!!   !!@!!!   \n"
+        ":!!   !!:  !!:  !!!    !!:    !!:  !!!       !:!  \n"
+        ":!:   !::  :!:  !:!    :!:    :!:  !:!      !:!   \n"
+        " ::: ::::  ::   :::     ::    ::::: ::  :::: ::   \n"
+        " :: :: :    :   : :     :      : :  :   :: : :    \n\n"
     );
     
     console_set_color(CONSOLE_COLOR_MAGENTA, CONSOLE_COLOR_BLACK);

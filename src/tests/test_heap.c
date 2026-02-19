@@ -653,8 +653,8 @@ void test_heap(void) {
     LOGF("Heap Test Results: %d/%d\n\n", g_tests_passed, g_tests_total);
 
     #ifdef TEST_BUILD
-    #include <kernel/drivers/vga_console.h>
-    #include <kernel/drivers/vga_stdio.h>
+    #include <kernel/drivers/console.h>
+    #include <kernel/drivers/stdio.h>
     if (g_tests_passed != g_tests_total) {
         console_set_color(CONSOLE_COLOR_RED, CONSOLE_COLOR_BLACK);
         printf("[-] Some tests failed (%d/%d). Please check the debug log for details.\n", g_tests_passed, g_tests_total);

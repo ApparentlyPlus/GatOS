@@ -1,6 +1,7 @@
 #ifndef SERIAL_H
 #define SERIAL_H
 
+#include <arch/x86_64/cpu/io.h>
 #include <stddef.h>
 #include <stdint.h>
 

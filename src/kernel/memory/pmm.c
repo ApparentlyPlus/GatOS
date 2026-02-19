@@ -10,6 +10,7 @@
 
 #include <arch/x86_64/memory/paging.h>
 #include <kernel/memory/pmm.h>
+#include <kernel/sys/spinlock.h>
 #include <kernel/debug.h>
 #include <libc/string.h>
 #include <stdbool.h>
@@ -25,6 +26,11 @@ static uint64_t g_range_end   = 0;
 static uint64_t g_min_block = PMM_MIN_ORDER_PAGE_SIZE;
 static uint32_t g_max_order = 0;
 static uint32_t g_order_count = 0;
+
+static spinlock_t g_pmm_lock;
+
+// Forward declarations
+static pmm_status_t pmm_mark_free_range_internal(uint64_t start, uint64_t end);
 
 // Free list heads per order. Store physical address of first free block, or EMPTY_SENTINEL for empty.
 static uint64_t g_free_heads[PMM_MAX_ORDERS];
@@ -302,12 +308,25 @@ uint64_t pmm_min_block_size(void) {
  * the physical address range [range_start_phys, range_end_phys).
  */
 pmm_status_t pmm_init(uint64_t range_start_phys, uint64_t range_end_phys, uint64_t min_block_size) {
-    if (g_inited) return PMM_ERR_ALREADY_INIT;
-    if (range_end_phys <= range_start_phys) return PMM_ERR_INVALID;
-    if (min_block_size == 0 || !is_pow2_u64(min_block_size)) return PMM_ERR_INVALID;
+    spinlock_init(&g_pmm_lock, "pmm_global");
+    bool flags = spinlock_acquire(&g_pmm_lock);
+
+    if (g_inited) {
+        spinlock_release(&g_pmm_lock, flags);
+        return PMM_ERR_ALREADY_INIT;
+    }
+    if (range_end_phys <= range_start_phys) {
+        spinlock_release(&g_pmm_lock, flags);
+        return PMM_ERR_INVALID;
+    }
+    if (min_block_size == 0 || !is_pow2_u64(min_block_size)) {
+        spinlock_release(&g_pmm_lock, flags);
+        return PMM_ERR_INVALID;
+    }
     if (min_block_size < sizeof(pmm_free_header_t)) {
         LOGF("[PMM] min_block_size (%lu) too small for header (%lu)\n",
                min_block_size, sizeof(pmm_free_header_t));
+        spinlock_release(&g_pmm_lock, flags);
         return PMM_ERR_INVALID;
     }
 
@@ -319,6 +338,7 @@ pmm_status_t pmm_init(uint64_t range_start_phys, uint64_t range_end_phys, uint64
 
     if (end_aligned <= start_aligned) {
         LOGF("[PMM] After alignment, range is empty\n");
+        spinlock_release(&g_pmm_lock, flags);
         return PMM_ERR_INVALID;
     }
 
@@ -351,6 +371,7 @@ pmm_status_t pmm_init(uint64_t range_start_phys, uint64_t range_end_phys, uint64
     LOGF("[PMM] PMM initialized, managing 0x%lx - 0x%lx (%zu MiB)\n",
            pmm_managed_base(), pmm_managed_end(), pmm_managed_size() / (1024 * 1024));
 
+    spinlock_release(&g_pmm_lock, flags);
     return PMM_OK;
 }
 
@@ -358,7 +379,11 @@ pmm_status_t pmm_init(uint64_t range_start_phys, uint64_t range_end_phys, uint64
  * pmm_shutdown - Reset state so pmm_init may be called again.
  */
 void pmm_shutdown(void) {
-    if (!g_inited) return;
+    bool flags = spinlock_acquire(&g_pmm_lock);
+    if (!g_inited) {
+        spinlock_release(&g_pmm_lock, flags);
+        return;
+    }
 
     // Clear all free block headers in the managed range
     uint8_t *ptr = (uint8_t *)PHYSMAP_P2V(g_range_start);
@@ -378,6 +403,7 @@ void pmm_shutdown(void) {
     memset(&g_stats, 0, sizeof(pmm_stats_t));
 
     LOGF("[PMM] PMM Shutdown\n");
+    spinlock_release(&g_pmm_lock, flags);
 }
 
 /*
@@ -412,35 +438,59 @@ static pmm_status_t alloc_block_of_order(uint32_t req_order, uint64_t *out_phys)
  * pmm_alloc - Allocate a block large enough to satisfy size_bytes.
  */
 pmm_status_t pmm_alloc(size_t size_bytes, uint64_t *out_phys) {
-    if (out_phys == NULL) return PMM_ERR_INVALID;
-    if (!g_inited) return PMM_ERR_NOT_INIT;
-    if (size_bytes == 0) return PMM_ERR_INVALID;
+    bool flags = spinlock_acquire(&g_pmm_lock);
+    if (out_phys == NULL) {
+        spinlock_release(&g_pmm_lock, flags);
+        return PMM_ERR_INVALID;
+    }
+    if (!g_inited) {
+        spinlock_release(&g_pmm_lock, flags);
+        return PMM_ERR_NOT_INIT;
+    }
+    if (size_bytes == 0) {
+        spinlock_release(&g_pmm_lock, flags);
+        return PMM_ERR_INVALID;
+    }
 
     // Round up to multiple of g_min_block
     uint64_t rounded = (uint64_t)size_bytes;
     if (rounded & (g_min_block - 1)) rounded = align_up(rounded, g_min_block);
 
     uint32_t order = size_to_order(rounded);
-    if (order > g_max_order) return PMM_ERR_OOM;
+    if (order > g_max_order) {
+        spinlock_release(&g_pmm_lock, flags);
+        return PMM_ERR_OOM;
+    }
 
     g_stats.alloc_calls++;
-    return alloc_block_of_order(order, out_phys);
+    pmm_status_t status = alloc_block_of_order(order, out_phys);
+    spinlock_release(&g_pmm_lock, flags);
+    return status;
 }
 
 /*
  * pmm_free - Free an allocation previously returned by pmm_alloc.
  */
 pmm_status_t pmm_free(uint64_t phys, size_t size_bytes) {
-    if (!g_inited) return PMM_ERR_NOT_INIT;
-    if (size_bytes == 0) return PMM_ERR_INVALID;
+    bool flags = spinlock_acquire(&g_pmm_lock);
+    if (!g_inited) {
+        spinlock_release(&g_pmm_lock, flags);
+        return PMM_ERR_NOT_INIT;
+    }
+    if (size_bytes == 0) {
+        spinlock_release(&g_pmm_lock, flags);
+        return PMM_ERR_INVALID;
+    }
 
     // Basic range check against [g_range_start, g_range_end)
     if (phys < g_range_start) {
         LOGF("[PMM ERROR] Free: address 0x%lx below managed range\n", phys);
+        spinlock_release(&g_pmm_lock, flags);
         return PMM_ERR_OUT_OF_RANGE;
     }
     if (phys >= g_range_end) {
         LOGF("[PMM ERROR] Free: address 0x%lx above managed range\n", phys);
+        spinlock_release(&g_pmm_lock, flags);
         return PMM_ERR_OUT_OF_RANGE;
     }
 
@@ -449,7 +499,10 @@ pmm_status_t pmm_free(uint64_t phys, size_t size_bytes) {
     if (rounded & (g_min_block - 1)) rounded = align_up(rounded, g_min_block);
 
     uint32_t order = size_to_order(rounded);
-    if (order > g_max_order) return PMM_ERR_INVALID;
+    if (order > g_max_order) {
+        spinlock_release(&g_pmm_lock, flags);
+        return PMM_ERR_INVALID;
+    }
 
     uint64_t block_addr = phys;
     uint64_t block_size = order_to_size(order);
@@ -457,6 +510,7 @@ pmm_status_t pmm_free(uint64_t phys, size_t size_bytes) {
     if ((block_addr & (block_size - 1)) != 0) {
         LOGF("[PMM ERROR] Free: address 0x%lx not aligned to size 0x%lx\n",
                block_addr, block_size);
+        spinlock_release(&g_pmm_lock, flags);
         return PMM_ERR_NOT_ALIGNED;
     }
 
@@ -477,6 +531,7 @@ pmm_status_t pmm_free(uint64_t phys, size_t size_bytes) {
         if (!found) {
             // Buddy not free, push current block and exit
             push_head(order, block_addr);
+            spinlock_release(&g_pmm_lock, flags);
             return PMM_OK;
         }
 
@@ -490,6 +545,7 @@ pmm_status_t pmm_free(uint64_t phys, size_t size_bytes) {
 
     // Push the resulting (possibly coalesced) block
     push_head(order, block_addr);
+    spinlock_release(&g_pmm_lock, flags);
     return PMM_OK;
 }
 
@@ -498,13 +554,23 @@ pmm_status_t pmm_free(uint64_t phys, size_t size_bytes) {
  * This handles partial overlaps and ensures free-lists remain consistent.
  */
 pmm_status_t pmm_mark_reserved_range(uint64_t start, uint64_t end) {
-    if (!g_inited) return PMM_ERR_NOT_INIT;
-    if (end <= start) return PMM_ERR_INVALID;
+    bool flags = spinlock_acquire(&g_pmm_lock);
+    if (!g_inited) {
+        spinlock_release(&g_pmm_lock, flags);
+        return PMM_ERR_NOT_INIT;
+    }
+    if (end <= start) {
+        spinlock_release(&g_pmm_lock, flags);
+        return PMM_ERR_INVALID;
+    }
 
     // Clamp to managed range
     if (start < g_range_start) start = g_range_start;
     if (end > g_range_end) end = g_range_end;
-    if (start >= end) return PMM_ERR_INVALID;
+    if (start >= end) {
+        spinlock_release(&g_pmm_lock, flags);
+        return PMM_ERR_INVALID;
+    }
 
     // Align to min block for safe handling
     uint64_t orig_start = start, orig_end = end;
@@ -534,10 +600,10 @@ pmm_status_t pmm_mark_reserved_range(uint64_t start, uint64_t end) {
 
                 // If block is partially outside the reserved range, push remaining pieces
                 if (block_start < start) {
-                    pmm_mark_free_range(block_start, start);
+                    pmm_mark_free_range_internal(block_start, start);
                 }
                 if (block_end > end) {
-                    pmm_mark_free_range(end, block_end);
+                    pmm_mark_free_range_internal(end, block_end);
                 }
             }
 
@@ -545,14 +611,16 @@ pmm_status_t pmm_mark_reserved_range(uint64_t start, uint64_t end) {
         }
     }
 
+    spinlock_release(&g_pmm_lock, flags);
     return PMM_OK;
 }
 
 /*
- * pmm_mark_free_range - manually mark a physical range [start,end) as free.
+ * pmm_mark_free_range_internal - manually mark a physical range [start,end) as free.
  * Partitions the range into aligned blocks and pushes them into the free-lists.
+ * Internal use only since it assumes the lock is held.
  */
-pmm_status_t pmm_mark_free_range(uint64_t start, uint64_t end) {
+static pmm_status_t pmm_mark_free_range_internal(uint64_t start, uint64_t end) {
     if (!g_inited) return PMM_ERR_NOT_INIT;
     if (end <= start) return PMM_ERR_INVALID;
 
@@ -582,19 +650,33 @@ pmm_status_t pmm_mark_free_range(uint64_t start, uint64_t end) {
 }
 
 /*
+ * pmm_mark_free_range - public version
+ */
+pmm_status_t pmm_mark_free_range(uint64_t start, uint64_t end) {
+    bool flags = spinlock_acquire(&g_pmm_lock);
+    pmm_status_t status = pmm_mark_free_range_internal(start, end);
+    spinlock_release(&g_pmm_lock, flags);
+    return status;
+}
+
+/*
  * pmm_get_stats - Get current PMM statistics
  */
 void pmm_get_stats(pmm_stats_t* out_stats) {
     if (!out_stats) return;
+    bool flags = spinlock_acquire(&g_pmm_lock);
     *out_stats = g_stats;
+    spinlock_release(&g_pmm_lock, flags);
 }
 
 /*
  * pmm_dump_stats - Print detailed PMM statistics
  */
 void pmm_dump_stats(void) {
+    bool flags = spinlock_acquire(&g_pmm_lock);
     if (!g_inited) {
         LOGF("[PMM] Not initialized\n");
+        spinlock_release(&g_pmm_lock, flags);
         return;
     }
     
@@ -646,6 +728,7 @@ void pmm_dump_stats(void) {
     LOGF("  Utilization:   %.1f%%\n",
            total_managed > 0 ? (double)used_bytes / total_managed * 100.0 : 0.0);
     LOGF("======================\n");
+    spinlock_release(&g_pmm_lock, flags);
 }
 
 /*
@@ -653,8 +736,10 @@ void pmm_dump_stats(void) {
  * Returns true if all checks pass, false otherwise
  */
 bool pmm_verify_integrity(void) {
+    bool flags = spinlock_acquire(&g_pmm_lock);
     if (!g_inited) {
         LOGF("[PMM] Not initialized\n");
+        spinlock_release(&g_pmm_lock, flags);
         return false;
     }
     
@@ -715,5 +800,6 @@ bool pmm_verify_integrity(void) {
         LOGF("[PMM] FAILED - integrity compromised!\n");
     }
     
+    spinlock_release(&g_pmm_lock, flags);
     return all_ok;
 }

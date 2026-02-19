@@ -11,6 +11,7 @@
 #include <arch/x86_64/memory/paging.h>
 #include <kernel/memory/slab.h>
 #include <kernel/memory/pmm.h>
+#include <kernel/sys/spinlock.h>
 #include <kernel/debug.h>
 #include <libc/string.h>
 #include <stdbool.h>
@@ -72,6 +73,8 @@ struct slab_cache {
     slab_t* slabs_partial;
     slab_t* slabs_full;
 
+    spinlock_t lock;
+
     slab_cache_stats_t stats;
     slab_cache_t* next;
 };
@@ -81,6 +84,11 @@ static bool g_slab_initialized = false;
 static slab_cache_t* g_caches = NULL;
 static uint32_t g_next_cache_id = 1;
 static slab_stats_t g_stats;
+
+static spinlock_t g_slab_list_lock;
+
+// Forward declarations
+static slab_cache_t* slab_cache_find_internal(const char* name);
 
 #pragma region Validation Helpers
 
@@ -367,12 +375,17 @@ static void slab_free_cache_struct(slab_cache_t* cache) {
  * slab_init - Initialize the slab allocator
  */
 slab_status_t slab_init(void) {
+    spinlock_init(&g_slab_list_lock, "slab_list");
+    bool flags = spinlock_acquire(&g_slab_list_lock);
+
     if (g_slab_initialized) {
+        spinlock_release(&g_slab_list_lock, flags);
         return SLAB_ERR_ALREADY_INIT;
     }
 
     if (!pmm_is_initialized()) {
         LOGF("[SLAB] PMM must be initialized before slab allocator\n");
+        spinlock_release(&g_slab_list_lock, flags);
         return SLAB_ERR_NOT_INIT;
     }
 
@@ -384,6 +397,7 @@ slab_status_t slab_init(void) {
 
     LOGF("[SLAB] Slab (System Wide) Allocator initialized\n");
 
+    spinlock_release(&g_slab_list_lock, flags);
     return SLAB_OK;
 }
 
@@ -391,14 +405,20 @@ slab_status_t slab_init(void) {
  * slab_shutdown - Destroy all caches and mark allocator uninitialized
  */
 void slab_shutdown(void) {
-    if (!g_slab_initialized) return;
+    bool flags = spinlock_acquire(&g_slab_list_lock);
+    if (!g_slab_initialized) {
+        spinlock_release(&g_slab_list_lock, flags);
+        return;
+    }
 
     // walk the cache list and destroy them one by one
-    slab_cache_t* cache = g_caches;
-    while (cache) {
-        slab_cache_t* next = cache->next;
+    // NOTE: slab_cache_destroy acquires the list lock, so we must use internal destroy
+    // or release lock here. For production safety, we release and call public.
+    while (g_caches) {
+        slab_cache_t* cache = g_caches;
+        spinlock_release(&g_slab_list_lock, flags);
         slab_cache_destroy(cache);
-        cache = next;
+        flags = spinlock_acquire(&g_slab_list_lock);
     }
 
     // reset globals
@@ -408,6 +428,7 @@ void slab_shutdown(void) {
     memset(&g_stats, 0, sizeof(slab_stats_t));
 
     LOGF("[SLAB] Slab (System Wide) Allocator shutdown\n");
+    spinlock_release(&g_slab_list_lock, flags);
 }
 
 /*
@@ -424,19 +445,24 @@ bool slab_is_initialized(void) { return g_slab_initialized; }
  */
 slab_cache_t* slab_cache_create(const char* name, size_t obj_size,
                                 size_t align) {
+    bool list_flags = spinlock_acquire(&g_slab_list_lock);
+
     if (!g_slab_initialized) {
         LOGF("[SLAB] Allocator not initialized\n");
+        spinlock_release(&g_slab_list_lock, list_flags);
         return NULL;
     }
 
     if (!name || obj_size == 0) {
         LOGF("[SLAB] Invalid arguments\n");
+        spinlock_release(&g_slab_list_lock, list_flags);
         return NULL;
     }
 
     if (obj_size > SLAB_MAX_OBJ_SIZE) {
         LOGF("[SLAB] Object size %zu exceeds max %zu\n", obj_size,
              SLAB_MAX_OBJ_SIZE);
+        spinlock_release(&g_slab_list_lock, list_flags);
         return NULL;
     }
 
@@ -444,12 +470,14 @@ slab_cache_t* slab_cache_create(const char* name, size_t obj_size,
 
     if (!is_pow2_u64(align)) {
         LOGF("[SLAB] Alignment must be power of 2\n");
+        spinlock_release(&g_slab_list_lock, list_flags);
         return NULL;
     }
 
     // prevent duplicate cache names (keeps things sane)
-    if (slab_cache_find(name)) {
+    if (slab_cache_find_internal(name)) {
         LOGF("[SLAB] Cache '%s' already exists\n", name);
+        spinlock_release(&g_slab_list_lock, list_flags);
         return NULL;
     }
 
@@ -457,6 +485,7 @@ slab_cache_t* slab_cache_create(const char* name, size_t obj_size,
     slab_cache_t* cache = slab_alloc_cache_struct();
     if (!cache) {
         LOGF("[SLAB] Failed to allocate cache structure\n");
+        spinlock_release(&g_slab_list_lock, list_flags);
         return NULL;
     }
 
@@ -484,6 +513,8 @@ slab_cache_t* slab_cache_create(const char* name, size_t obj_size,
     cache->slabs_partial = NULL;
     cache->slabs_full = NULL;
 
+    spinlock_init(&cache->lock, "slab_cache");
+
     memset(&cache->stats, 0, sizeof(slab_cache_stats_t));
 
     // insert into global cache list (LIFO)
@@ -491,6 +522,7 @@ slab_cache_t* slab_cache_create(const char* name, size_t obj_size,
     g_caches = cache;
     g_stats.cache_count++;
 
+    spinlock_release(&g_slab_list_lock, list_flags);
     return cache;
 }
 
@@ -499,6 +531,10 @@ slab_cache_t* slab_cache_create(const char* name, size_t obj_size,
  */
 void slab_cache_destroy(slab_cache_t* cache) {
     if (!cache_validate(cache)) return;
+
+    // lock both global list and this cache
+    bool list_flags = spinlock_acquire(&g_slab_list_lock);
+    bool cache_flags = spinlock_acquire(&cache->lock);
 
     slab_t* lists[] = {cache->slabs_empty, cache->slabs_partial,
                        cache->slabs_full};
@@ -527,7 +563,25 @@ void slab_cache_destroy(slab_cache_t* cache) {
     // clear magic before freeing structure back to PMM
     cache->magic = 0;
 
+    spinlock_release(&cache->lock, cache_flags);
+    spinlock_release(&g_slab_list_lock, list_flags);
+
     slab_free_cache_struct(cache);
+}
+
+/*
+ * slab_cache_find_internal - find a cache by name (assumes lock is held)
+ */
+static slab_cache_t* slab_cache_find_internal(const char* name) {
+    slab_cache_t* cache = g_caches;
+    while (cache) {
+        if (!cache_validate(cache)) return NULL;
+        if (strncmp(cache->name, name, SLAB_CACHE_NAME_LEN) == 0) {
+            return cache;
+        }
+        cache = cache->next;
+    }
+    return NULL;
 }
 
 /*
@@ -536,19 +590,11 @@ void slab_cache_destroy(slab_cache_t* cache) {
 slab_cache_t* slab_cache_find(const char* name) {
     if (!g_slab_initialized || !name) return NULL;
 
-    slab_cache_t* cache = g_caches;
-    while (cache) {
-        if (!cache_validate(cache)) {
-            LOGF("[SLAB] Corrupted cache in list\n");
-            return NULL;
-        }
-        if (strncmp(cache->name, name, SLAB_CACHE_NAME_LEN) == 0) {
-            return cache;
-        }
-        cache = cache->next;
-    }
+    bool flags = spinlock_acquire(&g_slab_list_lock);
+    slab_cache_t* cache = slab_cache_find_internal(name);
+    spinlock_release(&g_slab_list_lock, flags);
 
-    return NULL;
+    return cache;
 }
 
 #pragma endregion
@@ -564,6 +610,8 @@ slab_status_t slab_alloc(slab_cache_t* cache, void** out_obj) {
 
     if (!cache_validate(cache)) return SLAB_ERR_INVALID;
 
+    bool flags = spinlock_acquire(&cache->lock);
+
     slab_t* slab = NULL;
 
     // prefer partial slabs (already have some allocations) -> better locality
@@ -574,22 +622,30 @@ slab_status_t slab_alloc(slab_cache_t* cache, void** out_obj) {
     } else {
         // need to allocate a new slab page
         slab = slab_allocate_page(cache);
-        if (!slab) return SLAB_ERR_NO_MEMORY;
+        if (!slab) {
+            spinlock_release(&cache->lock, flags);
+            return SLAB_ERR_NO_MEMORY;
+        }
         slab_add_to_list(&cache->slabs_empty, slab);
     }
 
-    if (!slab_validate(slab)) return SLAB_ERR_CORRUPTION;
+    if (!slab_validate(slab)) {
+        spinlock_release(&cache->lock, flags);
+        return SLAB_ERR_CORRUPTION;
+    }
 
     // pop from freelist
     if (!slab->freelist) {
         LOGF("[SLAB ERROR] Slab has no free objects but in_use=%u capacity=%u\n",
             slab->in_use, slab->capacity);
+        spinlock_release(&cache->lock, flags);
         return SLAB_ERR_CORRUPTION;
     }
 
     slab_free_obj_t* obj = (slab_free_obj_t*)slab->freelist;
     if (!validate_free_obj(obj)) {
         LOGF("[SLAB ERROR] Corrupted free object in cache '%s'\n", cache->name);
+        spinlock_release(&cache->lock, flags);
         return SLAB_ERR_CORRUPTION;
     }
 
@@ -633,6 +689,8 @@ slab_status_t slab_alloc(slab_cache_t* cache, void** out_obj) {
 
     // return pointer to user space (right after header)
     *out_obj = (void*)((uint8_t*)obj + sizeof(slab_alloc_header_t));
+    
+    spinlock_release(&cache->lock, flags);
     return SLAB_OK;
 }
 
@@ -644,6 +702,8 @@ slab_status_t slab_free(slab_cache_t* cache, void* obj) {
         return SLAB_ERR_INVALID;
     }
 
+    bool flags = spinlock_acquire(&cache->lock);
+
     // compute pointer to header (start of internal object)
     void* obj_start = (void*)((uint8_t*)obj - sizeof(slab_alloc_header_t));
 
@@ -651,12 +711,14 @@ slab_status_t slab_free(slab_cache_t* cache, void* obj) {
     slab_t* slab = get_slab_from_obj(obj_start);
     if (!slab_validate(slab)) {
         LOGF("[SLAB ERROR] Object %p does not belong to a valid slab\n", obj);
+        spinlock_release(&cache->lock, flags);
         return SLAB_ERR_NOT_FOUND;
     }
 
     // object must belong to the cache passed in
     if (slab->cache != cache) {
         LOGF("[SLAB ERROR] Object belongs to different cache\n");
+        spinlock_release(&cache->lock, flags);
         return SLAB_ERR_NOT_FOUND;
     }
 
@@ -667,10 +729,12 @@ slab_status_t slab_free(slab_cache_t* cache, void* obj) {
             "[SLAB ERROR] Invalid allocation magic (double-free or "
             "corruption)\n");
         g_stats.corruption_detected++;
+        spinlock_release(&cache->lock, flags);
         return SLAB_ERR_CORRUPTION;
     }
     if (header->cache_id != cache->cache_id) {
         LOGF("[SLAB ERROR] Cache ID mismatch\n");
+        spinlock_release(&cache->lock, flags);
         return SLAB_ERR_CORRUPTION;
     }
 
@@ -710,13 +774,14 @@ slab_status_t slab_free(slab_cache_t* cache, void* obj) {
 
     } else if (slab->in_use == slab->capacity - 1) {
         // slab went from full -> partial
-        if (slab == cache->slabs_full) {
+        if (slab == cache->slabs_full) { 
             slab_move_to_list(&cache->slabs_full, &cache->slabs_partial, slab);
             cache->stats.full_slabs--;
             cache->stats.partial_slabs++;
         }
     }
 
+    spinlock_release(&cache->lock, flags);
     return SLAB_OK;
 }
 
@@ -729,7 +794,9 @@ slab_status_t slab_free(slab_cache_t* cache, void* obj) {
  */
 void slab_cache_stats(slab_cache_t* cache, slab_cache_stats_t* out_stats) {
     if (!cache_validate(cache) || !out_stats) return;
+    bool flags = spinlock_acquire(&cache->lock);
     *out_stats = cache->stats;
+    spinlock_release(&cache->lock, flags);
 }
 
 /*
@@ -737,15 +804,19 @@ void slab_cache_stats(slab_cache_t* cache, slab_cache_stats_t* out_stats) {
  */
 void slab_get_stats(slab_stats_t* out_stats) {
     if (!out_stats) return;
+    bool flags = spinlock_acquire(&g_slab_list_lock);
     *out_stats = g_stats;
+    spinlock_release(&g_slab_list_lock, flags);
 }
 
 /*
  * slab_dump_stats - print global stats to log
  */
 void slab_dump_stats(void) {
+    bool flags = spinlock_acquire(&g_slab_list_lock);
     if (!g_slab_initialized) {
         LOGF("[SLAB] Not initialized\n");
+        spinlock_release(&g_slab_list_lock, flags);
         return;
     }
 
@@ -756,6 +827,7 @@ void slab_dump_stats(void) {
     LOGF("Active caches: %lu (dynamic allocation)\n", g_stats.cache_count);
     LOGF("Corruption events: %lu\n", g_stats.corruption_detected);
     LOGF("=================================\n");
+    spinlock_release(&g_slab_list_lock, flags);
 }
 
 /*
@@ -763,6 +835,8 @@ void slab_dump_stats(void) {
  */
 void slab_cache_dump(slab_cache_t* cache) {
     if (!cache_validate(cache)) return;
+
+    bool flags = spinlock_acquire(&cache->lock);
 
     LOGF("=== Slab Cache: %s ===\n", cache->name);
     LOGF("User object size: %zu bytes\n", cache->user_size);
@@ -791,23 +865,34 @@ void slab_cache_dump(slab_cache_t* cache) {
          used_bytes / 1024.0);
     LOGF("  Utilization:  %.1f%%\n", utilization);
     LOGF("========================\n");
+
+    spinlock_release(&cache->lock, flags);
 }
 
 /*
  * slab_dump_all_caches - dump stats for all caches
  */
 void slab_dump_all_caches(void) {
+    bool flags = spinlock_acquire(&g_slab_list_lock);
     if (!g_slab_initialized) {
         LOGF("[SLAB] Not initialized\n");
+        spinlock_release(&g_slab_list_lock, flags);
         return;
     }
 
-    slab_dump_stats();
+    LOGF("=== Slab Allocator Statistics ===\n");
+    LOGF("Total slabs: %lu\n", g_stats.total_slabs);
+    LOGF("Total PMM bytes: %lu (%.2f MiB)\n", g_stats.total_pmm_bytes,
+         g_stats.total_pmm_bytes / (1024.0 * 1024.0));
+    LOGF("Active caches: %lu (dynamic allocation)\n", g_stats.cache_count);
+    LOGF("Corruption events: %lu\n", g_stats.corruption_detected);
+    LOGF("=================================\n");
     LOGF("\n");
 
     slab_cache_t* cache = g_caches;
     if (!cache) {
         LOGF("No caches created\n");
+        spinlock_release(&g_slab_list_lock, flags);
         return;
     }
 
@@ -816,18 +901,24 @@ void slab_dump_all_caches(void) {
             LOGF("[SLAB ERROR] Corrupted cache in list\n");
             break;
         }
+        
+        // we hold the list lock, but dump needs the cache lock
+        // this is fine as long as we follow order list -> cache
         slab_cache_dump(cache);
         LOGF("\n");
         cache = cache->next;
     }
+    spinlock_release(&g_slab_list_lock, flags);
 }
 
 /*
  * slab_verify_integrity - Deep check of all caches and slabs
  */
 bool slab_verify_integrity(void) {
+    bool list_flags = spinlock_acquire(&g_slab_list_lock);
     if (!g_slab_initialized) {
         LOGF("[SLAB VERIFY] Not initialized\n");
+        spinlock_release(&g_slab_list_lock, list_flags);
         return false;
     }
 
@@ -840,9 +931,12 @@ bool slab_verify_integrity(void) {
     while (cache) {
         cache_count++;
 
+        bool cache_flags = spinlock_acquire(&cache->lock);
+
         if (!cache_validate(cache)) {
             LOGF("[SLAB VERIFY] Cache %d: validation failed\n", cache_count);
             all_ok = false;
+            spinlock_release(&cache->lock, cache_flags);
             break;
         }
 
@@ -946,6 +1040,7 @@ bool slab_verify_integrity(void) {
             }
         }
 
+        spinlock_release(&cache->lock, cache_flags);
         cache = cache->next;
 
         // guard for accidental loops in cache list
@@ -962,6 +1057,7 @@ bool slab_verify_integrity(void) {
         LOGF("[SLAB VERIFY] FAILED - integrity compromised!\n");
     }
 
+    spinlock_release(&g_slab_list_lock, list_flags);
     return all_ok;
 }
 

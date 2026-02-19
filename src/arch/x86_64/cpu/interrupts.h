@@ -88,33 +88,28 @@ typedef struct
 #define INT_MACHINE_CHECK       18   // #MC - Machine Check
 #define INT_SIMD_ERROR          19   // #XF - SIMD (SSE/AVX) error
 
+#define INT_SPURIOUS_INTERRUPT  255  // Spurious Interrupt Vector
+
 // Useful for loops and bounds checking
 #define INT_FIRST_EXCEPTION      0
 #define INT_LAST_EXCEPTION       31
 #define INT_FIRST_INTERRUPT      32
 #define INT_LAST_INTERRUPT       255
 
-// PIC Constants
 
-#define PIC_MASTER_CMD    0x20
-#define PIC_MASTER_DATA   0x21
-#define PIC_SLAVE_CMD     0xA0
-#define PIC_SLAVE_DATA    0xA1
-
-#define ICW1_INIT         0x11   // Start initialization sequence
-#define ICW4_8086         0x01   // 8086/88 (MCS-80/85) mode
-
-#define ICW2_MASTER       0x20   // Master PIC vector offset (IRQs 0–7 → IDT 0x20–0x27)
-#define ICW2_SLAVE        0x28   // Slave PIC vector offset (IRQs 8–15 → IDT 0x28–0x2F)
-
-#define ICW3_MASTER       0x04   // Tell Master PIC that there is a slave at IRQ2 (bitmask)
-#define ICW3_SLAVE        0x02   // Tell Slave PIC its cascade identity (connected to IRQ2)
-
-
-static interrupt_descriptor idt[IDT_SIZE] = {0};
+extern interrupt_descriptor idt[IDT_SIZE];
 
 extern uint32_t gdt64_code_segment;
+
+// Function pointer type for interrupt handlers
+typedef void (*irq_handler_t)(cpu_context_t*);
 
 void idt_init(void);
 void enable_interrupts(void);
 void disable_interrupts(void);
+
+void register_interrupt_handler(uint8_t vector, irq_handler_t handler);
+void unregister_interrupt_handler(uint8_t vector);
+
+bool interrupts_save(void);
+void interrupts_restore(bool enabled);

@@ -174,7 +174,7 @@ static bool test_alloc_at(void) {
     tracker_reset();
     vmm_t* vmm = vmm_kernel_get();
     
-    uintptr_t target = vmm_get_alloc_base(vmm) + (TEST_PAGE_SIZE * 50);
+    uintptr_t target = vmm_get_alloc_base(vmm) + (TEST_PAGE_SIZE * 4096);
     void* ptr;
     
     TEST_ASSERT_STATUS(vmm_alloc_at(vmm, (void*)target, TEST_PAGE_SIZE, VM_FLAG_WRITE, NULL, &ptr), VMM_OK);
@@ -717,8 +717,8 @@ void test_vmm(void) {
     LOGF("VMM Test Results: %d/%d\n\n", g_tests_passed, g_tests_total);
 
     #ifdef TEST_BUILD
-    #include <kernel/drivers/vga_console.h>
-    #include <kernel/drivers/vga_stdio.h>
+    #include <kernel/drivers/console.h>
+    #include <kernel/drivers/stdio.h>
     if (g_tests_passed != g_tests_total) {
         console_set_color(CONSOLE_COLOR_RED, CONSOLE_COLOR_BLACK);
         printf("[-] Some tests failed (%d/%d). Please check the debug log for details.\n", g_tests_passed, g_tests_total);

@@ -47,3 +47,18 @@ const CPUInfo* cpu_get_info(void);
 bool cpu_has_feature(cpu_feature_t feature);
 bool cpu_enable_feature(cpu_feature_t feature);
 bool cpu_is_feature_enabled(cpu_feature_t feature);
+
+// TSC
+uint64_t tsc_read(void);
+void tsc_deadline_arm(uint64_t target_tsc);
+
+// Register access functions
+void cpuid(uint32_t eax, uint32_t ecx, uint32_t* a, uint32_t* b, uint32_t* c, uint32_t* d);
+uint64_t read_msr(uint32_t msr);
+void write_msr(uint32_t msr, uint64_t value);
+uint64_t read_cr0(void);
+void write_cr0(uint64_t val);
+uint64_t read_cr4(void);
+void write_cr4(uint64_t val);
+uint64_t read_xcr0(void);
+void write_xcr0(uint64_t value);

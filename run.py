@@ -83,13 +83,15 @@ elif OS_NAME == "macos":
 
 # Compiler Flags & Profiles
 
-CFLAGS_BASE = ["-m64", "-ffreestanding", "-nostdlib", "-fno-pic", "-mcmodel=kernel", "-mno-red-zone", f"-I{HEADER_DIR}"]
+# Now with DCE!
+CFLAGS_BASE = ["-m64", "-ffreestanding", "-nostdlib", "-fno-pic", "-mcmodel=kernel", "-mno-red-zone", "-ffunction-sections", "-fdata-sections", f"-I{HEADER_DIR}"]
 CPPFLAGS = [f"-I{HEADER_DIR}", "-D__ASSEMBLER__"]
-LDFLAGS = ["-n", "-nostdlib", f"-T{ROOT_DIR / 'targets/x86_64/linker.ld'}", "--no-relax", "-g"]
+LDFLAGS = ["-n", "-nostdlib", "--gc-sections", f"-T{ROOT_DIR / 'targets/x86_64/linker.ld'}", "--no-relax", "-g"]
 
 # Optimization Levels
 CFLAGS_FAST = ["-O2", "-fomit-frame-pointer", "-fpredictive-commoning", "-fstrict-aliasing"]
 CFLAGS_VFAST = ["-O3", "-fpredictive-commoning", "-fstrict-aliasing", "-fno-delete-null-pointer-checks", "-fomit-frame-pointer", "-fno-stack-protector"]
+
 # Profile Definitions
 BUILD_PROFILES = {
     "default": {

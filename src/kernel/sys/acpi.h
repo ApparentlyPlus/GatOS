@@ -69,3 +69,4 @@ bool acpi_init(multiboot_parser_t* parser);
 RSDP2Descriptor* acpi_get_rsdp(void);
 void* acpi_get_root_sdt(void);
 bool acpi_is_xsdt_supported(void);
+void* acpi_find_table(const char* signature);
