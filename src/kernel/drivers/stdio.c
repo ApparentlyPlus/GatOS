@@ -17,6 +17,8 @@
 #include <kernel/drivers/stdio.h>
 #include <kernel/drivers/tty.h>
 #include <kernel/sys/panic.h>
+#include <kernel/sys/scheduler.h>
+#include <kernel/sys/process.h>
 #include <libc/string.h>
 
 
@@ -114,10 +116,20 @@ typedef struct {
 
 
 void _putchar(char character){
-    if (!g_active_tty) {
+    tty_t* target_tty = g_active_tty;
+
+    // Route to the calling thread's own TTY if the scheduler is running
+    if (scheduler_is_active()) {
+        thread_t* current = scheduler_get_current_thread();
+        if (current && current->process && current->process->tty) {
+            target_tty = current->process->tty;
+        }
+    }
+
+    if (!target_tty) {
         panic("Attempted to use printf before TTY was initialized!");
     }
-    tty_write(g_active_tty, &character, 1);
+    tty_write(target_tty, &character, 1);
 }
 
 // internal buffer output

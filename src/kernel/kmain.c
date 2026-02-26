@@ -8,6 +8,7 @@
  */
 
 #include <arch/x86_64/cpu/interrupts.h>
+#include <arch/x86_64/cpu/gdt.h>
 #include <arch/x86_64/memory/paging.h>
 #include <arch/x86_64/multiboot2.h>
 #include <arch/x86_64/cpu/cpu.h>
@@ -26,6 +27,8 @@
 #include <kernel/memory/vmm.h>
 #include <kernel/sys/acpi.h>
 #include <kernel/sys/timers.h>
+#include <kernel/sys/process.h>
+#include <kernel/sys/scheduler.h>
 #include <kernel/debug.h>
 #include <kernel/misc.h>
 #include <libc/string.h>
@@ -38,6 +41,29 @@ static char* KERNEL_VERSION = "v1.8.5-alpha";
 #ifndef TEST_BUILD
 static uint8_t multiboot_buffer[8 * 1024];
 #endif
+
+/*
+ * test_thread_a - A simple thread to test multitasking
+ */
+void test_thread_a(void* arg) {
+    (void)arg;
+
+    for(int i = 0; i < 5; i++) {
+        printf("[THREAD A] Hello from thread A! (iteration %d)\n", i);
+        sleep_ms(1000);
+    }
+}
+
+/*
+ * test_thread_b - Another simple thread to test multitasking
+ */
+void test_thread_b(void* arg) {
+    (void)arg;
+    for (int i = 0; i < 10; i++) {
+        printf("[THREAD B] Greetings from thread B! (iteration %d)\n", i);
+        sleep_ms(500);
+    }
+}
 
 /*
  * kernel_main - Main entry point for the GatOS kernel
@@ -132,6 +158,9 @@ void kernel_main(void* mb_info) {
 	}
 	QEMU_LOG("Initialized kernel virtual memory manager", TOTAL_DBG);
 
+	// Initialize GDT and TSS for Ring 3 support
+	gdt_init();
+
 	// Initialize kernel heap
 
 	heap_status_t heap_status = heap_kernel_init();
@@ -155,12 +184,6 @@ void kernel_main(void* mb_info) {
 	// Initialize Kernel TTY and a test TTY
     tty_t* k_tty = tty_create();
     if (!k_tty) panic("Failed to create kernel TTY!");
-    
-    tty_t* test_tty = tty_create(); // Secondary TTY for cycling demo
-    if (test_tty) {
-        char msg[] = "This is a secondary test TTY. Use ALT+Tab to return to Kernel.\n";
-        tty_write(test_tty, msg, sizeof(msg) - 1);
-    }
 
 	// Default to Kernel TTY
 	g_active_tty = k_tty;
@@ -194,10 +217,20 @@ void kernel_main(void* mb_info) {
 	// Initialize Keyboard
 
 	keyboard_init();
-	register_interrupt_handler(INT_FIRST_INTERRUPT + 1, keyboard_handler);
+	register_interrupt_handler(INT_FIRST_INTERRUPT + 1, (irq_handler_t)keyboard_handler);
 	ioapic_redirect(1, INT_FIRST_INTERRUPT + 1, lapic_get_id(), 0);
 	ioapic_unmask(1);
 	printf("[KBD] Keyboard IRQ 1 routed and unmasked.\n");
+
+	// Initialize Multitasking
+    process_init();
+    scheduler_init();
+
+    // Create test threads
+    // Use NULL for test_proc to create its own TTY
+    process_t* test_proc = process_create("test_proc", NULL);
+    scheduler_add_thread(thread_create(test_proc, "thread_a", test_thread_a, NULL, false));
+    scheduler_add_thread(thread_create(test_proc, "thread_b", test_thread_b, NULL, false));
 
 	// Enable interrupts
 

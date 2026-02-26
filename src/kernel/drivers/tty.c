@@ -10,6 +10,7 @@
 
 #include <kernel/drivers/tty.h>
 #include <kernel/memory/heap.h>
+#include <kernel/sys/scheduler.h>
 #include <kernel/sys/panic.h>
 #include <libc/string.h>
 
@@ -159,11 +160,12 @@ void tty_cycle(void) {
 }
 
 /*
- * tty_wait_for_input - Busy-waits (hlt) for data in the circular buffer.
+ * tty_wait_for_input - Busy-waits or yields for data in the circular buffer.
  */
 static void tty_wait_for_input(tty_t* tty) {
     while (tty->head == tty->tail) {
-        __asm__ volatile("hlt");
+        // Yield to other threads while waiting for keyboard input
+        scheduler_yield();
     }
 }
 

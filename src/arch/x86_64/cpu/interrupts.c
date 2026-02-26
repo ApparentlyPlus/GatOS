@@ -8,6 +8,7 @@
  */
 
 #include <arch/x86_64/cpu/interrupts.h>
+#include <arch/x86_64/cpu/gdt.h>
 #include <kernel/drivers/stdio.h>
 #include <arch/x86_64/cpu/cpu.h>
 #include <kernel/sys/panic.h>
@@ -79,7 +80,7 @@ void set_idt_entry(uint8_t vector, void* handler, uint8_t dpl)
     entry->address_low = handler_addr & 0xFFFF;
     entry->address_mid = (handler_addr >> 16) & 0xFFFF;
     entry->address_high = handler_addr >> 32;
-    entry->selector = (uint16_t)(uintptr_t)&gdt64_code_segment;
+    entry->selector = KERNEL_CS;
     entry->flags = INTERRUPT_GATE | ((dpl & 0b11) << 5) | (1 << 7);
 
     //ist disabled for now, will revisit when implementing userspace
@@ -174,7 +175,7 @@ cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
     // Here is the general dispatcher logic
     // If a driver or kernel subsystem has registered a handler, this is the time to invoke it
     if (g_irq_handlers[vec] != NULL) {
-        g_irq_handlers[vec](context);
+        context = g_irq_handlers[vec](context);
 
         // If it was a hardware interrupt, we must ack it
         // Exceptions (0-31) generally do not need EOI

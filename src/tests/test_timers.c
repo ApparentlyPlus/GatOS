@@ -97,9 +97,9 @@ static volatile uint32_t g_test_irq_count = 0;
 /*
  * test_irq_handler - Internal handler for delivery validation
  */
-static void test_irq_handler(cpu_context_t* ctx) {
-    (void)ctx;
+static cpu_context_t* test_irq_handler(cpu_context_t* ctx) {
     g_test_irq_count++;
+    return ctx;
 }
 
 /*

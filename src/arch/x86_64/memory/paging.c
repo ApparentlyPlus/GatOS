@@ -87,7 +87,7 @@ void flush_tlb(void) {
  */
 void PMT_switch(uint64_t pml4) {
     __asm__ volatile("mov %0, %%cr3" : : "r"(pml4));
-    LOGF("[PAGING] Page tables switched\n");
+    // LOGF("[PAGING] Page tables switched\n");
 }
 
 /*

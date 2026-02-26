@@ -131,17 +131,15 @@ bool keyboard_get_event(key_event_t* out_event) {
 /*
  * keyboard_handler - Main IRQ handler logic (State machine)
  */
-void keyboard_handler(cpu_context_t* ctx) {
-    (void)ctx;
-    
+cpu_context_t* keyboard_handler(cpu_context_t* ctx) {
     // Check status port directly for speed
-    if (!(inb(0x64) & 0x01)) return;
+    if (!(inb(0x64) & 0x01)) return ctx;
 
     uint8_t scancode = inb(0x60);
 
     if (scancode == 0xE0) {
         g_extended = true;
-        return;
+        return ctx;
     }
 
     bool pressed = !(scancode & 0x80);
@@ -157,7 +155,7 @@ void keyboard_handler(cpu_context_t* ctx) {
     }
 
     if (key == KEY_UNKNOWN) {
-        return;
+        return ctx;
     }
 
     switch (key) {
@@ -186,6 +184,8 @@ void keyboard_handler(cpu_context_t* ctx) {
 
     // Add to internal driver buffer
     push_event(key, pressed);
+
+    return ctx;
 }
 
 #pragma endregion
