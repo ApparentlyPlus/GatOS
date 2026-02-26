@@ -225,7 +225,9 @@ void thread_destroy(thread_t* thread) {
 
     // If it has a user stack, free it from the process heap
     if (thread->user_stack && thread->process && thread->process->user_heap) {
+        vmm_switch(thread->process->vmm);
         heap_free(thread->process->user_heap, thread->user_stack);
+        vmm_switch(NULL);
     }
 
     // Free kernel stack
