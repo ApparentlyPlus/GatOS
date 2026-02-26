@@ -29,6 +29,7 @@
 #include <kernel/sys/timers.h>
 #include <kernel/sys/process.h>
 #include <kernel/sys/scheduler.h>
+#include <kernel/sys/userspace.h>
 #include <kernel/debug.h>
 #include <kernel/misc.h>
 #include <libc/string.h>
@@ -43,25 +44,12 @@ static uint8_t multiboot_buffer[8 * 1024];
 #endif
 
 /*
- * test_thread_a - A simple thread to test multitasking
+ * test_thread - A simple thread to test multitasking
  */
-void test_thread_a(void* arg) {
+userspace void test_thread(void* arg) {
     (void)arg;
-
-    for(int i = 0; i < 5; i++) {
-        printf("[THREAD A] Hello from thread A! (iteration %d)\n", i);
-        sleep_ms(1000);
-    }
-}
-
-/*
- * test_thread_b - Another simple thread to test multitasking
- */
-void test_thread_b(void* arg) {
-    (void)arg;
-    for (int i = 0; i < 10; i++) {
-        printf("[THREAD B] Greetings from thread B! (iteration %d)\n", i);
-        sleep_ms(500);
+    while(1) {
+        for(volatile int j = 0; j < 5; j++);
     }
 }
 
@@ -172,6 +160,22 @@ void kernel_main(void* mb_info) {
 	}
 	QEMU_LOG("Initialized kernel heap", TOTAL_DBG);
 
+	// Initialize ACPI
+
+	acpi_init(&multiboot);
+	printf("[ACPI] Revision %u detected (%s supported), manufacturer: %.6s\n",
+	       acpi_get_rsdp()->Revision,
+	       acpi_is_xsdt_supported() ? "XSDT" : "RSDT",
+	       acpi_get_rsdp()->OEMID);
+
+	QEMU_LOG("Initialized ACPI subsystem", TOTAL_DBG);
+
+	// Initialize APIC subsystem
+
+	apic_init();
+	QEMU_LOG("Initialized APIC subsystem", TOTAL_DBG);
+	printf("[APIC] Local APIC and I/O APIC initialized successfully\n");
+
 	// Initialize timers
 
 	timer_init();
@@ -181,7 +185,7 @@ void kernel_main(void* mb_info) {
 
 	console_init(&multiboot);
 
-	// Initialize Kernel TTY and a test TTY
+	// Initialize Kernel TTY
     tty_t* k_tty = tty_create();
     if (!k_tty) panic("Failed to create kernel TTY!");
 
@@ -199,22 +203,6 @@ void kernel_main(void* mb_info) {
 	printf("[KERNEL] Framebuffer resolution %dx%d\n", multiboot_get_framebuffer(&multiboot)->width, multiboot_get_framebuffer(&multiboot)->height);
 	printf("[KERNEL] All memory subsystems initialized successfully\n");
 
-	// Initialize ACPI
-
-	acpi_init(&multiboot);
-	printf("[ACPI] Revision %u detected (%s supported), manufacturer: %.6s\n",
-	       acpi_get_rsdp()->Revision,
-	       acpi_is_xsdt_supported() ? "XSDT" : "RSDT",
-	       acpi_get_rsdp()->OEMID);
-
-	QEMU_LOG("Initialized ACPI subsystem", TOTAL_DBG);
-
-	// Initialize APIC subsystem
-
-	apic_init();
-	QEMU_LOG("Initialized APIC subsystem", TOTAL_DBG);
-	printf("[APIC] Local APIC and I/O APIC initialized successfully\n");
-
 	// Initialize Keyboard
 
 	keyboard_init();
@@ -230,8 +218,7 @@ void kernel_main(void* mb_info) {
     // Create test threads
     // Use NULL for test_proc to create its own TTY
     process_t* test_proc = process_create("test_proc", NULL);
-    scheduler_add_thread(thread_create(test_proc, "thread_a", test_thread_a, NULL, false));
-    scheduler_add_thread(thread_create(test_proc, "thread_b", test_thread_b, NULL, false));
+    scheduler_add_thread(thread_create(test_proc, "thread_a", test_thread, NULL, true));
 
 	// Enable interrupts
 

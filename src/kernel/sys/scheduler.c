@@ -39,7 +39,7 @@ static void idle_thread_entry(void* arg) {
  * scheduler_init - Initializes the scheduler and creates the idle thread
  */
 void scheduler_init(void) {
-    // 1. Create Idle Task
+    // Create Idle Task
     // The idle process shares the kernel's TTY as it does not perform I/O
     g_idle_process = process_create("idle_proc", g_active_tty);
     if (!g_idle_process) panic("Failed to create idle process!");
@@ -47,7 +47,7 @@ void scheduler_init(void) {
     g_idle_thread = thread_create(g_idle_process, "idle", idle_thread_entry, NULL, false);
     if (!g_idle_thread) panic("Failed to create idle thread!");
 
-    // 2. Bootstrap Current Execution
+    // Bootstrap Current Execution
     // Use the existing kernel TTY for the main process
     process_t* kernel_proc = process_create("kernel_main_proc", g_active_tty);
     if (!kernel_proc) panic("Failed to create kernel main process!");
@@ -55,6 +55,12 @@ void scheduler_init(void) {
     // Wrap current context into a thread so it can be preempted and resumed
     g_current_thread = thread_create_bootstrap(kernel_proc, "kernel_main");
     if (!g_current_thread) panic("Failed to bootstrap kernel main thread!");
+
+    // Allocate a dedicated kernel stack for kernel_main so it has its own safe space 
+    // when switched back from userspace threads. This also ensures the idle thread can have its own stack.
+    g_current_thread->kernel_stack = kmalloc(KERNEL_STACK_SIZE);
+    if (!g_current_thread->kernel_stack) panic("Failed to allocate kernel stack for kernel_main!");
+    memset(g_current_thread->kernel_stack, 0, KERNEL_STACK_SIZE);
 
     g_scheduler_enabled = true;
     LOGF("[SCHED] Scheduler initialized and enabled.\n");
@@ -93,7 +99,7 @@ cpu_context_t* scheduler_schedule(cpu_context_t* current_context) {
 
     uint64_t now = get_uptime_ms();
 
-    // 1. Save current context
+    // Save current context
     if (g_current_thread) {
         g_current_thread->context = current_context;
         
@@ -105,7 +111,7 @@ cpu_context_t* scheduler_schedule(cpu_context_t* current_context) {
         }
     }
 
-    // 2. Wake up sleeping threads and cleanup dead threads
+    // Wake up sleeping threads and cleanup dead threads
     process_t* proc = process_get_all();
     while (proc) {
         process_t* next_proc = proc->next; // Save next in case proc is destroyed
@@ -150,7 +156,7 @@ cpu_context_t* scheduler_schedule(cpu_context_t* current_context) {
         proc = next_proc;
     }
 
-    // 3. Pick next thread from ready queue
+    // Pick next thread from ready queue
     thread_t* next_thread = g_ready_queue_head;
     if (next_thread) {
         g_ready_queue_head = next_thread->sched_next;
@@ -163,7 +169,7 @@ cpu_context_t* scheduler_schedule(cpu_context_t* current_context) {
         next_thread = g_idle_thread;
     }
 
-    // 4. Optimization: Only switch VMM if address space actually changed
+    // Only switch VMM if address space actually changed
     if (!g_current_thread || g_current_thread->process != next_thread->process) {
         if (next_thread->process && next_thread->process->vmm) {
             vmm_switch(next_thread->process->vmm);
@@ -173,7 +179,7 @@ cpu_context_t* scheduler_schedule(cpu_context_t* current_context) {
     g_current_thread = next_thread;
     g_current_thread->state = THREAD_STATE_RUNNING;
 
-    // 5. Update Hardware State
+    // Update Hardware State
     if (g_current_thread->kernel_stack) {
         tss_set_rsp0((uint64_t)g_current_thread->kernel_stack + KERNEL_STACK_SIZE);
     }

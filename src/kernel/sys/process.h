@@ -11,6 +11,7 @@
 
 #include <arch/x86_64/cpu/interrupts.h>
 #include <kernel/memory/vmm.h>
+#include <kernel/memory/heap.h>
 #include <kernel/drivers/tty.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -58,10 +59,7 @@ typedef struct process {
     
     thread_t* threads;      // Linked list of threads in this process
     
-    // Userspace Heap management
-    void* user_heap_base;   
-    void* user_heap_brk;    // Current program break
-    void* user_heap_end;    // End of allocated heap region
+    heap_t* user_heap;      // Userspace heap instance
     
     struct process* next;   // Next process in the system
 } process_t;

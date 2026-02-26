@@ -2,14 +2,15 @@
  * process.c - Process and Thread management implementation
  *
  * This file implements the creation, destruction, and metadata management
- * for threads and processes. It coordinates with the VMM for address space
- * isolation and the heap for control block allocation.
+ * for threads and processes. It coordinates with the heap manager for 
+ * both kernel and userspace allocations.
  *
  * Author: ApparentlyPlus
  */
 
 #include <kernel/sys/process.h>
 #include <kernel/sys/scheduler.h>
+#include <kernel/sys/userspace.h>
 #include <kernel/memory/heap.h>
 #include <arch/x86_64/cpu/gdt.h>
 #include <arch/x86_64/memory/paging.h>
@@ -45,7 +46,7 @@ void process_init(void) {
 }
 
 /*
- * process_create - Creates a new process with its own address space and TTY
+ * process_create - Creates a new process with its own address space and heap
  */
 process_t* process_create(const char* name, tty_t* existing_tty) {
     process_t* proc = (process_t*)kmalloc(sizeof(process_t));
@@ -55,24 +56,36 @@ process_t* process_create(const char* name, tty_t* existing_tty) {
     proc->pid = g_next_pid++;
     strncpy(proc->name, name, MAX_PROCESS_NAME - 1);
 
-    // Create a unique address space for the process
+    // 1. Create a unique address space for the process
     proc->vmm = vmm_create(0x1000, 0x00007FFFFFFFF000);
     if (!proc->vmm) {
         kfree(proc);
         return NULL;
     }
 
-    // Initialize userspace heap tracking
-    proc->user_heap_base = (void*)0x40000000;
-    proc->user_heap_brk = proc->user_heap_base;
-    proc->user_heap_end = proc->user_heap_base;
+    // Create a private heap for the process (manages lower-half memory)
+    // We MUST switch to the new VMM so the kernel can write heap metadata to the lower half
+    vmm_switch(proc->vmm);
 
-    // Use existing TTY or create a new one
+    // Initial size 1MB, Max size 1GB. We add HEAP_FLAG_EXECUTABLE because this heap will store the program code.
+    proc->user_heap = heap_create(proc->vmm, 1024 * 1024, 1024 * 1024 * 1024, HEAP_FLAG_EXECUTABLE);
+    
+    // Switch back immediately after heap initialization
+    vmm_switch(NULL);
+
+    if (!proc->user_heap) {
+        vmm_destroy(proc->vmm);
+        kfree(proc);
+        return NULL;
+    }
+
+    // Setup TTY
     if (existing_tty) {
         proc->tty = existing_tty;
     } else {
         proc->tty = tty_create();
         if (!proc->tty) {
+            heap_destroy(proc->user_heap);
             vmm_destroy(proc->vmm);
             kfree(proc);
             return NULL;
@@ -83,12 +96,12 @@ process_t* process_create(const char* name, tty_t* existing_tty) {
     proc->next = g_processes;
     g_processes = proc;
 
-    LOGF("[PROC] Created process '%s' (PID: %u)\n", proc->name, proc->pid);
+    LOGF("[PROC] Created process '%s' (PID: %u) with private heap\n", proc->name, proc->pid);
     return proc;
 }
 
 /*
- * thread_create - Creates a new thread within a process
+ * thread_create - Creates a new thread using the process's heap
  */
 thread_t* thread_create(process_t* process, const char* name, void (*entry)(void*), void* arg, bool is_user) {
     thread_t* thread = (thread_t*)kmalloc(sizeof(thread_t));
@@ -100,7 +113,7 @@ thread_t* thread_create(process_t* process, const char* name, void (*entry)(void
     thread->state = THREAD_STATE_READY;
     strncpy(thread->name, name, MAX_THREAD_NAME - 1);
 
-    // Allocate kernel stack
+    // Allocate kernel stack from kernel heap
     thread->kernel_stack = kmalloc(KERNEL_STACK_SIZE);
     if (!thread->kernel_stack) {
         kfree(thread);
@@ -108,42 +121,74 @@ thread_t* thread_create(process_t* process, const char* name, void (*entry)(void
     }
     memset(thread->kernel_stack, 0, KERNEL_STACK_SIZE);
 
-    // Set up the initial CPU context on the kernel stack
     uintptr_t stack_top = (uintptr_t)thread->kernel_stack + KERNEL_STACK_SIZE;
     thread->context = (cpu_context_t*)(stack_top - sizeof(cpu_context_t));
     memset(thread->context, 0, sizeof(cpu_context_t));
 
-    // Initialize the IRET frame to point to the wrapper
-    thread->context->iret_rip = (uint64_t)thread_entry_wrapper;
-    thread->context->iret_flags = 0x202; // IF (Interrupt Flag) enabled
+    thread->context->iret_flags = 0x202; // IF enabled
     
     if (is_user) {
         thread->context->iret_cs = USER_CS;
         thread->context->iret_ss = USER_DS;
         
-        // Allocate userspace stack
-        vmm_status_t status = vmm_alloc(process->vmm, USER_STACK_SIZE, VM_FLAG_WRITE | VM_FLAG_USER, NULL, &thread->user_stack);
-        if (status != VMM_OK) {
+        // Critical section here
+        vmm_switch(process->vmm);
+
+        // Load userspace code into the process heap
+        size_t user_text_size = (uintptr_t)&USER_TEXT_END - (uintptr_t)&USER_TEXT_START;
+        if (user_text_size == 0) user_text_size = PAGE_SIZE;
+
+        // Use the heap to allocate space for the program code
+        void* code_buffer = heap_malloc(process->user_heap, user_text_size);
+        if (!code_buffer) {
+            vmm_switch(NULL);
+            LOGF("[PROC] ERROR: Failed to allocate heap memory for code of thread '%s'\n", name);
             kfree(thread->kernel_stack);
             kfree(thread);
             return NULL;
         }
-        thread->context->iret_rsp = (uint64_t)thread->user_stack + USER_STACK_SIZE;
+
+        // Copy hardcoded code into the heap buffer
+        memcpy(code_buffer, &USER_TEXT_START, user_text_size);
+
+        // Calculate the RIP relative to the heap buffer
+        uintptr_t offset = (uintptr_t)entry - (uintptr_t)&USER_TEXT_START;
+        thread->context->iret_rip = (uint64_t)code_buffer + offset;
+
+        // Allocate and clear userspace stack from the process heap
+        thread->user_stack = heap_malloc(process->user_heap, USER_STACK_SIZE);
+        if (!thread->user_stack) {
+            heap_free(process->user_heap, code_buffer);
+            vmm_switch(NULL);
+            kfree(thread->kernel_stack);
+            kfree(thread);
+            return NULL;
+        }
+        memset(thread->user_stack, 0, USER_STACK_SIZE);
+        
+        // Subtract 8 bytes to avoid pointing exactly at the heap footer
+        thread->context->iret_rsp = (uint64_t)thread->user_stack + USER_STACK_SIZE - 8;
+
+        // Back to the kernel vmm
+        vmm_switch(NULL);
+
+        thread->context->rdi = (uint64_t)arg;
+
     } else {
         thread->context->iret_cs = KERNEL_CS;
         thread->context->iret_ss = KERNEL_DS;
+        thread->context->iret_rip = (uint64_t)thread_entry_wrapper;
         thread->context->iret_rsp = stack_top - sizeof(cpu_context_t);
+        
+        thread->context->rdi = (uint64_t)entry;
+        thread->context->rsi = (uint64_t)arg;
     }
 
-    // Parameters for thread_entry_wrapper(entry, arg)
-    thread->context->rdi = (uint64_t)entry;
-    thread->context->rsi = (uint64_t)arg;
-
-    // Add to process thread list
     thread->next = process->threads;
     process->threads = thread;
 
-    LOGF("[PROC] Created thread '%s' (TID: %u) in PID %u\n", thread->name, thread->tid, process->pid);
+    LOGF("[PROC] Created %s thread '%s' (TID: %u) in PID %u\n", 
+         is_user ? "USER" : "KERNEL", thread->name, thread->tid, process->pid);
     return thread;
 }
 
@@ -157,14 +202,12 @@ thread_t* thread_create_bootstrap(process_t* process, const char* name) {
     memset(thread, 0, sizeof(thread_t));
     thread->tid = g_next_tid++;
     thread->process = process;
-    thread->state = THREAD_STATE_RUNNING; // It's already running!
+    thread->state = THREAD_STATE_RUNNING; 
     strncpy(thread->name, name, MAX_THREAD_NAME - 1);
 
-    // Bootstrap thread uses the stack already in use (no new allocation)
     thread->kernel_stack = NULL; 
-    thread->context = NULL; // Will be set on the first interrupt
+    thread->context = NULL; 
 
-    // Add to process thread list
     thread->next = process->threads;
     process->threads = thread;
 
@@ -180,9 +223,9 @@ void thread_destroy(thread_t* thread) {
 
     LOGF("[PROC] Destroying thread '%s' (TID: %u)\n", thread->name, thread->tid);
 
-    // If it has a user stack, unmap/free it
-    if (thread->user_stack && thread->process && thread->process->vmm) {
-        vmm_free(thread->process->vmm, thread->user_stack);
+    // If it has a user stack, free it from the process heap
+    if (thread->user_stack && thread->process && thread->process->user_heap) {
+        heap_free(thread->process->user_heap, thread->user_stack);
     }
 
     // Free kernel stack
@@ -194,7 +237,7 @@ void thread_destroy(thread_t* thread) {
 }
 
 /*
- * process_destroy - Cleans up a process and all its threads
+ * process_destroy - Cleans up a process, its heap, and all its threads
  */
 void process_destroy(process_t* process) {
     if (!process) return;
@@ -207,6 +250,11 @@ void process_destroy(process_t* process) {
         thread_t* next = thread->next;
         thread_destroy(thread);
         thread = next;
+    }
+
+    // Destroy userspace heap
+    if (process->user_heap) {
+        heap_destroy(process->user_heap);
     }
 
     if (process->vmm) {
@@ -242,13 +290,11 @@ void process_terminate_by_tty(tty_t* tty) {
     process_t* proc = g_processes;
     while (proc) {
         if (proc->tty == tty) {
-            // Found a process using this TTY
             thread_t* thread = proc->threads;
             while (thread) {
                 thread->state = THREAD_STATE_DEAD;
                 thread = thread->next;
             }
-            // Null out the pointer so we don't try to use it during reaping
             proc->tty = NULL;
         }
         proc = proc->next;
