@@ -146,7 +146,7 @@ cpu_context_t* scheduler_schedule(cpu_context_t* current_context) {
             if (proc->tty) {
                 char term_msg[128];
                 int len = snprintf_(term_msg, sizeof(term_msg), 
-                                   "\n\n[Process \"%s\" (PID %u) had termined]\n", 
+                                   "\n[Process %s (PID %u) has terminated]\n", 
                                    proc->name, proc->pid);
                 tty_write(proc->tty, term_msg, len);
             }

@@ -43,14 +43,20 @@ static char* KERNEL_VERSION = "v1.8.6-alpha";
 static uint8_t multiboot_buffer[8 * 1024];
 #endif
 
-/*
- * test_thread - A simple thread to test multitasking
- */
-userspace void test_thread(void* arg) {
+void tA(void* arg) {
     (void)arg;
-    while(1) {
-        for(volatile int j = 0; j < 5; j++);
-    }
+    for (int i = 1; i < 6; i++) {
+		printf("Hello from Thread A (iteration %d)\n", i);
+		sleep_ms(500);
+	}
+}
+
+void tB(void* arg) {
+	(void)arg;
+	for (int i = 1; i < 6; i++) {
+		printf("Greetings from Thread B (iteration %d)\n", i);
+		sleep_ms(1000);
+	}
 }
 
 /*
@@ -218,7 +224,8 @@ void kernel_main(void* mb_info) {
     // Create test threads
     // Use NULL for test_proc to create its own TTY
     process_t* test_proc = process_create("test_proc", NULL);
-    scheduler_add_thread(thread_create(test_proc, "thread_a", test_thread, NULL, true));
+    scheduler_add_thread(thread_create(test_proc, "thread_a", tA, NULL, false));
+    scheduler_add_thread(thread_create(test_proc, "thread_b", tB, NULL, false));
 
 	// Enable interrupts
 
@@ -241,4 +248,4 @@ void kernel_main(void* mb_info) {
 	}
 	
 	#endif
-	}
+}
