@@ -126,9 +126,11 @@ void _putchar(char character){
         }
     }
 
+    // If the TTY is NULL (closed via ALT+F4), discard the output
     if (!target_tty) {
-        panic("Attempted to use printf before TTY was initialized!");
+        return;
     }
+
     tty_write(target_tty, &character, 1);
 }
 

@@ -88,3 +88,4 @@ void tty_cycle(void);
 
 // Global active TTY
 extern tty_t* g_active_tty;
+extern tty_t* g_kernel_tty;

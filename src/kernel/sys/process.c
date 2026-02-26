@@ -232,3 +232,25 @@ void process_destroy(process_t* process) {
 process_t* process_get_all(void) {
     return g_processes;
 }
+
+/*
+ * process_terminate_by_tty - Marks all threads of processes using the given TTY as DEAD
+ */
+void process_terminate_by_tty(tty_t* tty) {
+    if (!tty) return;
+
+    process_t* proc = g_processes;
+    while (proc) {
+        if (proc->tty == tty) {
+            // Found a process using this TTY
+            thread_t* thread = proc->threads;
+            while (thread) {
+                thread->state = THREAD_STATE_DEAD;
+                thread = thread->next;
+            }
+            // Null out the pointer so we don't try to use it during reaping
+            proc->tty = NULL;
+        }
+        proc = proc->next;
+    }
+}

@@ -187,6 +187,7 @@ void kernel_main(void* mb_info) {
 
 	// Default to Kernel TTY
 	g_active_tty = k_tty;
+    g_kernel_tty = k_tty; // Protect this from ALT+F4
 
 	// Initialize input handling subsystem
 

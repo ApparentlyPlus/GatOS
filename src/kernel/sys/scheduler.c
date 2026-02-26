@@ -108,27 +108,46 @@ cpu_context_t* scheduler_schedule(cpu_context_t* current_context) {
     // 2. Wake up sleeping threads and cleanup dead threads
     process_t* proc = process_get_all();
     while (proc) {
-        thread_t** prev = &proc->threads;
+        process_t* next_proc = proc->next; // Save next in case proc is destroyed
+        
+        thread_t** prev_thread = &proc->threads;
         thread_t* thread = proc->threads;
+        
         while (thread) {
             if (thread->state == THREAD_STATE_SLEEPING && now >= thread->sleep_until) {
                 thread->state = THREAD_STATE_READY;
                 scheduler_add_thread(thread);
             } else if (thread->state == THREAD_STATE_DEAD) {
-                // Production robustness: Clean up dead threads
-                // (Except the current one if it just exited, though it won't be RUNNING)
-                if (thread != g_current_thread) {
-                    *prev = thread->next;
-                    thread_t* to_free = thread;
-                    thread = thread->next;
-                    thread_destroy(to_free);
-                    continue;
-                }
+                // Remove from process thread list
+                *prev_thread = thread->next;
+                thread_t* to_free = thread;
+                thread = thread->next;
+                
+                // If this was the current thread, it's safe to destroy now 
+                // because its context is already saved and we are about to switch.
+                thread_destroy(to_free);
+                continue;
             }
-            prev = &thread->next;
+            
+            prev_thread = &thread->next;
             thread = thread->next;
         }
-        proc = proc->next;
+
+        // If a process has no threads left, reap it
+        // We protect PID 1 (Idle) and PID 2 (Kernel Main)
+        if (proc->threads == NULL && proc->pid > 2) {
+            // Inform the user via the process's terminal
+            if (proc->tty) {
+                char term_msg[128];
+                int len = snprintf_(term_msg, sizeof(term_msg), 
+                                   "\n\n[Process \"%s\" (PID %u) had termined]\n", 
+                                   proc->name, proc->pid);
+                tty_write(proc->tty, term_msg, len);
+            }
+            process_destroy(proc);
+        }
+
+        proc = next_proc;
     }
 
     // 3. Pick next thread from ready queue

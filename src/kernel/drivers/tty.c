@@ -20,6 +20,7 @@ static spinlock_t g_tty_list_lock = {0};
 static bool g_tty_list_lock_initialized = false;
 
 tty_t* g_active_tty = NULL;
+tty_t* g_kernel_tty = NULL; // Protected primary console
 
 /*
  * tty_init - Internal helper to initialize a TTY structure.
@@ -93,8 +94,11 @@ tty_t* tty_create(void) {
  */
 void tty_destroy(tty_t* tty) {
     if (!tty) return;
-    ensure_lock_init();
+    
+    // Kill any processes associated with this TTY
+    process_terminate_by_tty(tty);
 
+    ensure_lock_init();
     bool flags = spinlock_acquire(&g_tty_list_lock);
     
     // Remove from linked list

@@ -25,9 +25,19 @@ void input_init(void) {
 void input_handle_key(key_event_t event) {
     if (!event.pressed) return;
 
-    // Handle System Hotkeys (Alt + Tab for TTY cycling)
+    // Handle System Hotkeys
+    
+    // Alt + Tab: Cycle through virtual terminals
     if ((event.modifiers & MOD_ALT) && event.keycode == KEY_TAB) {
         tty_cycle();
+        return;
+    }
+
+    // Alt + F4: Close the current virtual terminal (if not protected)
+    if ((event.modifiers & MOD_ALT) && event.keycode == KEY_F4) {
+        if (g_active_tty && g_active_tty != g_kernel_tty) {
+            tty_destroy(g_active_tty);
+        }
         return;
     }
 
