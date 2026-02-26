@@ -473,8 +473,13 @@ static heap_arena_t* create_arena(heap_t* heap, size_t size) {
 
     // Now allocate the address space for the arena via VMM
     void* arena_region = NULL;
+    size_t vmm_flags = VM_FLAG_WRITE | (heap->is_kernel ? 0 : VM_FLAG_USER);
+    if (heap->flags & HEAP_FLAG_EXECUTABLE) {
+        vmm_flags |= VM_FLAG_EXEC;
+    }
+
     vmm_status_t vmm_status = vmm_alloc(
-        heap->vmm, size, VM_FLAG_WRITE | (heap->is_kernel ? 0 : VM_FLAG_USER),
+        heap->vmm, size, vmm_flags,
         NULL, &arena_region);
 
     if (vmm_status != VMM_OK) {

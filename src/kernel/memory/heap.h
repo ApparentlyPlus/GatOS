@@ -30,6 +30,7 @@
 #define HEAP_FLAG_NONE      0
 #define HEAP_FLAG_ZERO      (1 << 0)  // Zero memory on allocation
 #define HEAP_FLAG_URGENT    (1 << 1)  // Don't fail, panic instead
+#define HEAP_FLAG_EXECUTABLE (1 << 2) // Memory is executable
 
 // Return codes
 typedef enum {
