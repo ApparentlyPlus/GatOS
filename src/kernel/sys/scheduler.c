@@ -12,6 +12,7 @@
 #include <kernel/sys/process.h>
 #include <kernel/sys/panic.h>
 #include <arch/x86_64/cpu/gdt.h>
+#include <arch/x86_64/cpu/cpu.h>
 #include <kernel/memory/heap.h>
 #include <kernel/debug.h>
 #include <libc/string.h>
@@ -67,16 +68,16 @@ void scheduler_init(void) {
 }
 
 /*
- * scheduler_is_active - Returns whether the scheduler is initialized and enabled
+ * sched_active - Returns whether the scheduler is initialized and enabled
  */
-bool scheduler_is_active(void) {
+bool sched_active(void) {
     return g_scheduler_enabled;
 }
 
 /*
- * scheduler_add_thread - Adds a thread to the scheduler's ready queue
+ * sched_add - Adds a thread to the scheduler's ready queue
  */
-void scheduler_add_thread(thread_t* thread) {
+void sched_add(thread_t* thread) {
     if (!thread) return;
 
     thread->state = THREAD_STATE_READY;
@@ -92,9 +93,9 @@ void scheduler_add_thread(thread_t* thread) {
 }
 
 /*
- * scheduler_schedule - Picks the next thread to run and performs context switch
+ * sched_schedule - Picks the next thread to run and performs context switch
  */
-cpu_context_t* scheduler_schedule(cpu_context_t* current_context) {
+cpu_context_t* sched_schedule(cpu_context_t* current_context) {
     if (!g_scheduler_enabled) return current_context;
 
     uint64_t now = get_uptime_ms();
@@ -106,10 +107,13 @@ cpu_context_t* scheduler_schedule(cpu_context_t* current_context) {
         if (g_current_thread->state == THREAD_STATE_RUNNING) {
             g_current_thread->state = THREAD_STATE_READY;
             if (g_current_thread != g_idle_thread) {
-                scheduler_add_thread(g_current_thread);
+                sched_add(g_current_thread);
             }
         }
     }
+
+    // Capture the process before we potentially destroy it
+    process_t* old_process = g_current_thread ? g_current_thread->process : NULL;
 
     // Wake up sleeping threads and cleanup dead threads
     process_t* proc = process_get_all();
@@ -122,12 +126,17 @@ cpu_context_t* scheduler_schedule(cpu_context_t* current_context) {
         while (thread) {
             if (thread->state == THREAD_STATE_SLEEPING && now >= thread->sleep_until) {
                 thread->state = THREAD_STATE_READY;
-                scheduler_add_thread(thread);
+                sched_add(thread);
             } else if (thread->state == THREAD_STATE_DEAD) {
                 // Remove from process thread list
                 *prev_thread = thread->next;
                 thread_t* to_free = thread;
                 thread = thread->next;
+                
+                // If we are destroying the thread we just came from, clear the global pointer
+                if (to_free == g_current_thread) {
+                    g_current_thread = NULL;
+                }
                 
                 // If this was the current thread, it's safe to destroy now 
                 // because its context is already saved and we are about to switch.
@@ -139,16 +148,21 @@ cpu_context_t* scheduler_schedule(cpu_context_t* current_context) {
             thread = thread->next;
         }
 
-        // If a process has no threads left, reap it
+        // Reap processes with no threads
         // We protect PID 1 (Idle) and PID 2 (Kernel Main)
         if (proc->threads == NULL && proc->pid > 2) {
+            // If we are reaping the process we just came from, clear the old_process pointer
+            if (proc == old_process) {
+                old_process = NULL;
+            }
+
             // Inform the user via the process's terminal
             if (proc->tty) {
                 char term_msg[128];
                 int len = snprintf_(term_msg, sizeof(term_msg), 
                                    "\n[Process %s (PID %u) has terminated]\n", 
                                    proc->name, proc->pid);
-                tty_write(proc->tty, term_msg, len);
+                tty_write(proc->tty, term_msg, (size_t)len);
             }
             process_destroy(proc);
         }
@@ -169,10 +183,14 @@ cpu_context_t* scheduler_schedule(cpu_context_t* current_context) {
         next_thread = g_idle_thread;
     }
 
+    // Context Switch
     // Only switch VMM if address space actually changed
-    if (!g_current_thread || g_current_thread->process != next_thread->process) {
+    if (old_process != next_thread->process) {
         if (next_thread->process && next_thread->process->vmm) {
             vmm_switch(next_thread->process->vmm);
+        } else {
+            // Fallback to kernel VMM if next thread has no process or no VMM
+            vmm_switch(NULL);
         }
     }
 
@@ -181,48 +199,52 @@ cpu_context_t* scheduler_schedule(cpu_context_t* current_context) {
 
     // Update Hardware State
     if (g_current_thread->kernel_stack) {
-        tss_set_rsp0((uint64_t)g_current_thread->kernel_stack + KERNEL_STACK_SIZE);
+        uint64_t stack_top = (uint64_t)g_current_thread->kernel_stack + KERNEL_STACK_SIZE;
+        tss_set_rsp0(stack_top);
+        
+        // Update local CPU structure for syscall entries
+        g_cpu_local.kernel_stack = stack_top;
     }
 
     return g_current_thread->context;
 }
 
 /*
- * scheduler_yield - Voluntarily gives up the remaining time slice
+ * sched_yield - Voluntarily gives up the remaining time slice
  */
-void scheduler_yield(void) {
+void sched_yield(void) {
     if (!g_scheduler_enabled) return;
     __asm__ volatile("int $32");
 }
 
 /*
- * scheduler_get_current_thread - Returns the currently running thread
+ * sched_current - Returns the currently running thread
  */
-thread_t* scheduler_get_current_thread(void) {
+thread_t* sched_current(void) {
     return g_current_thread;
 }
 
 /*
- * scheduler_thread_sleep - Puts the current thread to sleep for X ms
+ * sched_sleep - Puts the current thread to sleep for X ms
  */
-void scheduler_thread_sleep(uint64_t ms) {
+void sched_sleep(uint64_t ms) {
     if (!g_current_thread || !g_scheduler_enabled) return;
 
     g_current_thread->state = THREAD_STATE_SLEEPING;
     g_current_thread->sleep_until = get_uptime_ms() + ms;
     
-    scheduler_yield();
+    sched_yield();
 }
 
 /*
- * scheduler_thread_exit - Terminates the current thread
+ * sched_exit - Terminates the current thread
  */
-void scheduler_thread_exit(void) {
+void sched_exit(void) {
     if (!g_current_thread) return;
 
     g_current_thread->state = THREAD_STATE_DEAD;
     LOGF("[SCHED] Thread '%s' (TID: %u) exited.\n", g_current_thread->name, g_current_thread->tid);
     
-    scheduler_yield();
+    sched_yield();
     while(1);
 }

@@ -119,8 +119,8 @@ void _putchar(char character){
     tty_t* target_tty = g_active_tty;
 
     // Route to the calling thread's own TTY if the scheduler is running
-    if (scheduler_is_active()) {
-        thread_t* current = scheduler_get_current_thread();
+    if (sched_active()) {
+        thread_t* current = sched_current();
         if (current && current->process && current->process->tty) {
             target_tty = current->process->tty;
         }

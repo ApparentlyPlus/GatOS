@@ -30,6 +30,7 @@
 #include <kernel/sys/process.h>
 #include <kernel/sys/scheduler.h>
 #include <kernel/sys/userspace.h>
+#include <kernel/sys/syscall.h>
 #include <kernel/debug.h>
 #include <kernel/misc.h>
 #include <libc/string.h>
@@ -43,20 +44,15 @@ static char* KERNEL_VERSION = "v1.8.6-alpha";
 static uint8_t multiboot_buffer[8 * 1024];
 #endif
 
-void tA(void* arg) {
+userspace void tA(void* arg) {
     (void)arg;
-    for (int i = 1; i < 6; i++) {
-		printf("Hello from Thread A (iteration %d)\n", i);
-		sleep_ms(500);
+	for(volatile int i = 0; i < 5; i++) {
 	}
 }
 
-void tB(void* arg) {
+userspace void tB(void* arg) {
 	(void)arg;
-	for (int i = 1; i < 6; i++) {
-		printf("Greetings from Thread B (iteration %d)\n", i);
-		sleep_ms(1000);
-	}
+	while(1);
 }
 
 /*
@@ -187,6 +183,9 @@ void kernel_main(void* mb_info) {
 	timer_init();
 	QEMU_LOG("Initialized system timers", TOTAL_DBG);
 
+	// Initialize Syscall Interface
+    syscall_init();
+
 	// Initialize Framebuffer Console hardware
 
 	console_init(&multiboot);
@@ -212,7 +211,7 @@ void kernel_main(void* mb_info) {
 	// Initialize Keyboard
 
 	keyboard_init();
-	register_interrupt_handler(INT_FIRST_INTERRUPT + 1, (irq_handler_t)keyboard_handler);
+	irq_register(INT_FIRST_INTERRUPT + 1, (irq_handler_t)keyboard_handler);
 	ioapic_redirect(1, INT_FIRST_INTERRUPT + 1, lapic_get_id(), 0);
 	ioapic_unmask(1);
 	printf("[KBD] Keyboard IRQ 1 routed and unmasked.\n");
@@ -224,8 +223,8 @@ void kernel_main(void* mb_info) {
     // Create test threads
     // Use NULL for test_proc to create its own TTY
     process_t* test_proc = process_create("test_proc", NULL);
-    scheduler_add_thread(thread_create(test_proc, "thread_a", tA, NULL, false));
-    scheduler_add_thread(thread_create(test_proc, "thread_b", tB, NULL, false));
+    sched_add(thread_create(test_proc, "thread_a", tA, NULL, true));
+    sched_add(thread_create(test_proc, "thread_b", tB, NULL, true));
 
 	// Enable interrupts
 

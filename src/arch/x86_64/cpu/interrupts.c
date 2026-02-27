@@ -13,6 +13,8 @@
 #include <arch/x86_64/cpu/cpu.h>
 #include <kernel/sys/panic.h>
 #include <kernel/sys/apic.h>
+#include <kernel/sys/scheduler.h>
+#include <kernel/sys/process.h>
 #include <kernel/debug.h>
 #include <kernel/misc.h>
 #include <libc/string.h>
@@ -34,17 +36,17 @@ extern char interrupt_handler_0[];
 #pragma region Interrupt Management API
 
 /*
- * register_interrupt_handler - Register a custom handler for a specific vector
+ * irq_register - Register a custom handler for a specific vector
  */
-void register_interrupt_handler(uint8_t vector, irq_handler_t handler)
+void irq_register(uint8_t vector, irq_handler_t handler)
 {
     g_irq_handlers[vector] = handler;
 }
 
 /*
- * unregister_interrupt_handler - Remove a custom handler for a specific vector
+ * irq_unregister - Remove a custom handler for a specific vector
  */
-void unregister_interrupt_handler(uint8_t vector)
+void irq_unregister(uint8_t vector)
 {
     g_irq_handlers[vector] = NULL;
 }
@@ -187,23 +189,6 @@ cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
 
     // Handle Exceptions
     if (vec < INT_FIRST_INTERRUPT) {
-        // Print extra debug info for specific faults
-        if (vec == INT_PAGE_FAULT) {
-            uint64_t cr2;
-            __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
-
-            LOGF("[EXCEPTION] Page Fault at address: 0x%lx\n", cr2);
-            LOGF("CR2 (Fault Address): 0x%lx\n", cr2);
-            LOGF("Error Code: 0x%lx (P:%d W:%d U:%d R:%d I:%d)\n", 
-                context->error_code,
-                (context->error_code & 1) ? 1 : 0, // Present
-                (context->error_code & 2) ? 1 : 0, // Write
-                (context->error_code & 4) ? 1 : 0, // User
-                (context->error_code & 8) ? 1 : 0, // Reserved Write
-                (context->error_code & 16)? 1 : 0  // Instruction Fetch
-            );
-        }
-
         const char* panic_msg = "Unknown Exception";
         
         switch (vec) {
@@ -227,8 +212,63 @@ cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
             case INT_SIMD_ERROR:           panic_msg = "SIMD exception"; break;
         }
 
+        // Check if the fault came from Ring 3
+        bool is_user = (context->iret_cs & 3) == 3;
+
+        if (is_user && sched_active()) {
+            thread_t* current = sched_current();
+            if (current && current->process) {
+                char buf[256];
+                int len;
+                
+                if (vec == INT_PAGE_FAULT) {
+                    uint64_t cr2;
+                    __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+                    
+                    // Special case: if we fault at address 0 with an instruction fetch error,
+                    // it usually means a thread tried to return but the stack return address was 0.
+                    if (cr2 == 0 && (context->error_code & 16)) {
+                        len = snprintf_(buf, sizeof(buf), "\n[Process %s (PID %u)] Thread returned from entry point (RIP: 0x%lx)\n", 
+                                       current->process->name, current->process->pid, context->iret_rip);
+                    } else {
+                        len = snprintf_(buf, sizeof(buf), "\n[Process %s (PID %u)] Segmentation Fault at 0x%lx (RIP: 0x%lx)\n", 
+                                       current->process->name, current->process->pid, cr2, context->iret_rip);
+                    }
+                } else {
+                    len = snprintf_(buf, sizeof(buf), "\n[Process %s (PID %u)] %s (Vector %lu) at RIP: 0x%lx\n", 
+                                   current->process->name, current->process->pid, panic_msg, vec, context->iret_rip);
+                }
+                
+                if (current->process->tty) {
+                    tty_write(current->process->tty, buf, (size_t)len);
+                }
+                LOGF("[USERSPACE FAULT] %s", buf + 1);
+
+                // Terminate the thread and yield
+                current->state = THREAD_STATE_DEAD;
+                return sched_schedule(context);
+            }
+        }
+
+        // Print extra debug info for specific faults (Kernel space)
+        if (vec == INT_PAGE_FAULT) {
+            uint64_t cr2;
+            __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+
+            LOGF("[EXCEPTION] Page Fault at address: 0x%lx\n", cr2);
+            LOGF("CR2 (Fault Address): 0x%lx\n", cr2);
+            LOGF("Error Code: 0x%lx (P:%d W:%d U:%d R:%d I:%d)\n", 
+                context->error_code,
+                (context->error_code & 1) ? 1 : 0, // Present
+                (context->error_code & 2) ? 1 : 0, // Write
+                (context->error_code & 4) ? 1 : 0, // User
+                (context->error_code & 8) ? 1 : 0, // Reserved Write
+                (context->error_code & 16)? 1 : 0  // Instruction Fetch
+            );
+        }
+
         // Panic will dump the register state from ctx
-        LOGF("[PANIC] %s (Vector %d)\n", panic_msg, vec);
+        LOGF("[PANIC] %s (Vector %d)\n", panic_msg, (int)vec);
         panic_c(panic_msg, context);
     }
 

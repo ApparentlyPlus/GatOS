@@ -23,6 +23,19 @@ static tid_t g_next_tid = 1;
 static process_t* g_processes = NULL;
 
 /*
+ * userspace_exit_stub - Stub called when a userspace thread returns.
+ * It invokes the SYS_EXIT syscall to terminate the thread gracefully.
+ */
+userspace void userspace_exit_stub(void) {
+    __asm__ volatile(
+        "mov $1, %rax \n"
+        "syscall \n"
+    );
+
+    while (1); // This will never be executed.
+}
+
+/*
  * thread_entry_wrapper - Wrapper function that calls the thread's entry point
  * and then gracefully exits the thread if the entry point returns.
  */
@@ -32,7 +45,7 @@ static void thread_entry_wrapper(void (*entry)(void*), void* arg) {
     }
     
     // If the thread returns, terminate it properly
-    scheduler_thread_exit();
+    sched_exit();
 }
 
 /*
@@ -155,6 +168,10 @@ thread_t* thread_create(process_t* process, const char* name, void (*entry)(void
         uintptr_t offset = (uintptr_t)entry - (uintptr_t)&USER_TEXT_START;
         thread->context->iret_rip = (uint64_t)code_buffer + offset;
 
+        // Calculate the address of the exit stub in the heap
+        uintptr_t exit_stub_offset = (uintptr_t)userspace_exit_stub - (uintptr_t)&USER_TEXT_START;
+        uint64_t exit_stub_addr = (uint64_t)code_buffer + exit_stub_offset;
+
         // Allocate and clear userspace stack from the process heap
         thread->user_stack = heap_malloc(process->user_heap, USER_STACK_SIZE);
         if (!thread->user_stack) {
@@ -166,8 +183,11 @@ thread_t* thread_create(process_t* process, const char* name, void (*entry)(void
         }
         memset(thread->user_stack, 0, USER_STACK_SIZE);
         
-        // Subtract 8 bytes to avoid pointing exactly at the heap footer
-        thread->context->iret_rsp = (uint64_t)thread->user_stack + USER_STACK_SIZE - 8;
+        // Push the exit stub address onto the stack so returning from entry point calls it
+        uint64_t* user_rsp = (uint64_t*)((uint64_t)thread->user_stack + USER_STACK_SIZE - 8);
+        *user_rsp = exit_stub_addr;
+        
+        thread->context->iret_rsp = (uint64_t)user_rsp;
 
         // Back to the kernel vmm
         vmm_switch(NULL);
@@ -225,9 +245,13 @@ void thread_destroy(thread_t* thread) {
 
     // If it has a user stack, free it from the process heap
     if (thread->user_stack && thread->process && thread->process->user_heap) {
+        vmm_t* prev_vmm = vmm_get_current();
+        
         vmm_switch(thread->process->vmm);
         heap_free(thread->process->user_heap, thread->user_stack);
-        vmm_switch(NULL);
+        
+        // Restore previous VMM state instead of always switching to NULL
+        vmm_switch(prev_vmm);
     }
 
     // Free kernel stack

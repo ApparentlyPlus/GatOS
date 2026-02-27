@@ -36,7 +36,7 @@ static void kernel_test_thread_entry(void* arg) {
     g_kernel_thread_val = val;
     
     // Threads must either loop forever or exit via scheduler
-    scheduler_thread_exit();
+    sched_exit();
 }
 
 // A simple userspace-compatible function (placed in .user_text)
@@ -89,7 +89,7 @@ static bool test_kernel_thread_creation(void) {
     TEST_ASSERT(thread->state == THREAD_STATE_READY);
     
     // Add to scheduler to let it run
-    scheduler_add_thread(thread);
+    sched_add(thread);
     
     process_destroy(proc); // This will cleanup threads too
     return true;
@@ -117,9 +117,9 @@ static bool test_user_thread_creation(void) {
  * test_scheduler_bootstrap - Verifies scheduler_init and kernel_main wrapping
  */
 static bool test_scheduler_bootstrap(void) {
-    TEST_ASSERT(scheduler_is_active() == true);
+    TEST_ASSERT(sched_active() == true);
     
-    thread_t* current = scheduler_get_current_thread();
+    thread_t* current = sched_current();
     TEST_ASSERT(current != NULL);
     TEST_ASSERT(strcmp(current->name, "kernel_main") == 0);
     TEST_ASSERT(current->kernel_stack != NULL);

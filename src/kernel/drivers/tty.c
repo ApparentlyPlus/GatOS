@@ -169,7 +169,7 @@ void tty_cycle(void) {
 static void tty_wait_for_input(tty_t* tty) {
     while (tty->head == tty->tail) {
         // Yield to other threads while waiting for keyboard input
-        scheduler_yield();
+        sched_yield();
     }
 }
 

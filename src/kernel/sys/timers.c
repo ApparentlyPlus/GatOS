@@ -150,7 +150,7 @@ static cpu_context_t* timer_handler(cpu_context_t* ctx) {
     g_ticks++;
     
     // Call the scheduler to perform a context switch
-    return scheduler_schedule(ctx);
+    return sched_schedule(ctx);
 }
 
 /*
@@ -228,7 +228,7 @@ void timer_init(void) {
     timer_calibrate_all();
 
     // Register handler and unmask IRQ 0 (System Timer)
-    register_interrupt_handler(INT_FIRST_INTERRUPT, (irq_handler_t)timer_handler);
+    irq_register(INT_FIRST_INTERRUPT, (irq_handler_t)timer_handler);
     ioapic_unmask(0);
 
     // Start the Local APIC timer in periodic mode (10ms interval) for scheduling
@@ -248,8 +248,8 @@ void timer_init(void) {
 void sleep_ms(uint64_t ms) {
     if (ms == 0) return;
 
-    if (scheduler_get_current_thread() != NULL) {
-        scheduler_thread_sleep(ms);
+    if (sched_current() != NULL) {
+        sched_sleep(ms);
         return;
     }
 
