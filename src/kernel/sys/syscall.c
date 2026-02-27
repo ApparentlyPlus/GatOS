@@ -12,6 +12,7 @@
 #include <arch/x86_64/cpu/gdt.h>
 #include <arch/x86_64/cpu/msr.h>
 #include <kernel/sys/scheduler.h>
+#include <kernel/sys/process.h>
 #include <kernel/drivers/stdio.h>
 #include <kernel/debug.h>
 
@@ -48,22 +49,38 @@ void syscall_init(void) {
  */
 void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
     // registers[0] = r15 ... registers[14] = rax
-    // to access specific registers, we can index from the top.
+    // According to our push order:
+    // rdi = registers[9]
+    // rsi = registers[10]
+    // rdx = registers[11]
     
+    thread_t* current = sched_current();
+    if (!current) return;
+
     switch (syscall_num) {
         case SYS_EXIT:
             // sys_exit: Terminate current thread
             sched_exit();
             break;
             
-        case SYS_WRITE:
-            // Soon
+        case SYS_WRITE: {
+            // sys_write(buffer, length)
+            const char* buf = (const char*)registers[9];
+            size_t len = (size_t)registers[10];
+            
+            // Basic security: In a real kernel we'd verify the buffer is in user memory.
+            // For now, let's just use the process's TTY if it has one.
+            if (current->process && current->process->tty) {
+                tty_write(current->process->tty, buf, len);
+            }
             break;
+        }
             
         default:
-            LOGF("[SYSCALL] Unknown syscall: %lu\n", syscall_num);
+            LOGF("[SYSCALL] Unknown syscall: %lu from thread '%s' (PID %u)\n", 
+                 syscall_num, current->name, current->process ? current->process->pid : 0);
 
-            // Eh, we should probs terminate the thread here
+            // Terminate offending thread
             sched_exit();
             break;
     }

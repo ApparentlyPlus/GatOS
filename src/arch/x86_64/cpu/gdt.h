@@ -69,5 +69,6 @@ typedef struct {
 
 void gdt_init(void);
 void tss_set_rsp0(uint64_t rsp);
+void tss_set_ist(int index, uint64_t rsp);
 
 #endif

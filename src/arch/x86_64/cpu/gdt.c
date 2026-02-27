@@ -88,6 +88,20 @@ void gdt_init(void) {
         LOGF("[GDT] ERROR: Failed to allocate kernel stack for TSS!\n");
     }
 
+    // Allocate IST stack for Double Faults (IST 1)
+    uint64_t df_stack_phys;
+    if (pmm_alloc(16384, &df_stack_phys) == PMM_OK) {
+        g_tss.ist[0] = PHYSMAP_P2V(df_stack_phys + 16384);
+        LOGF("[GDT] Double Fault IST stack allocated at 0x%lx\n", g_tss.ist[0]);
+    }
+
+    // Allocate IST stack for Page Faults (IST 2)
+    uint64_t pf_stack_phys;
+    if (pmm_alloc(16384, &pf_stack_phys) == PMM_OK) {
+        g_tss.ist[1] = PHYSMAP_P2V(pf_stack_phys + 16384);
+        LOGF("[GDT] Page Fault IST stack allocated at 0x%lx\n", g_tss.ist[1]);
+    }
+
     gdt_ptr_t ptr;
     ptr.limit = sizeof(g_gdt) - 1;
     ptr.base = (uintptr_t)&g_gdt;
@@ -121,4 +135,13 @@ void gdt_init(void) {
  */
 void tss_set_rsp0(uint64_t rsp) {
     g_tss.rsp0 = rsp;
+}
+
+/*
+ * tss_set_ist - Updates a specific IST stack pointer in the global TSS structure
+ */
+void tss_set_ist(int index, uint64_t rsp) {
+    if (index >= 0 && index < 7) {
+        g_tss.ist[index] = rsp;
+    }
 }

@@ -46,14 +46,28 @@ static uint8_t multiboot_buffer[8 * 1024];
 
 userspace void tA(void* arg) {
     (void)arg;
-	for(volatile int i = 0; i < 5; i++) {
-	}
+    const char* msg = "Hello from userspace via SYS_WRITE!\n";
+    // Trigger SYS_WRITE (rax=2, rdi=buffer, rsi=length)
+    __asm__ volatile (
+        "mov $2, %%rax\n"
+        "mov %0, %%rdi\n"
+        "mov %1, %%rsi\n"
+        "syscall\n"
+        :
+        : "r"(msg), "r"((uint64_t)36)
+        : "rax", "rdi", "rsi", "rcx", "r11"
+    );
+    for(volatile int i = 0; i < 1000000; i++);
 }
 
 userspace void tB(void* arg) {
 	(void)arg;
-	for(volatile int i = 0; i < 5000000; i++) {
-	}
+    // Wait a bit to ensure tA prints first
+	for(volatile int i = 0; i < 1000000; i++);
+    
+    // Trigger a Page Fault by writing to an unmapped address
+    volatile int* p = (int*)0xDEADC0DE;
+    *p = 1337;
 }
 
 /*

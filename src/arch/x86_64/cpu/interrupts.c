@@ -74,7 +74,7 @@ void disable_interrupts()
 /*
  * set_idt_entry - Populate a single IDT entry
  */
-void set_idt_entry(uint8_t vector, void* handler, uint8_t dpl)
+void set_idt_entry(uint8_t vector, void* handler, uint8_t dpl, uint8_t ist_index)
 {
     uint64_t handler_addr = (uint64_t)handler;
 
@@ -85,8 +85,8 @@ void set_idt_entry(uint8_t vector, void* handler, uint8_t dpl)
     entry->selector = KERNEL_CS;
     entry->flags = INTERRUPT_GATE | ((dpl & 0b11) << 5) | (1 << 7);
 
-    //ist disabled for now, will revisit when implementing userspace
-    entry->ist = 0;
+    // IST index (0 means no IST stack switching)
+    entry->ist = ist_index & 0x7;
 
     entry->reserved = 0;
 }
@@ -120,7 +120,25 @@ void idt_init(void)
     for (size_t i = 0; i < IDT_SIZE; i++)
     {
         void* handler = (void*)((uint64_t)interrupt_handler_0 + (i * 16));
-        set_idt_entry(i, handler, DPL_RING_0);
+        
+        // Default: No IST, Ring 0 DPL
+        uint8_t ist = 0;
+        uint8_t dpl = DPL_RING_0;
+
+        // Use IST 1 for Double Fault
+        if (i == INT_DOUBLE_FAULT) {
+            ist = 1;
+        }
+        // Use IST 2 for Page Fault
+        else if (i == INT_PAGE_FAULT) {
+            ist = 2;
+        }
+        // Breakpoint and Debug can be triggered from Ring 3 for debugging
+        else if (i == INT_BREAKPOINT || i == INT_DEBUG) {
+            dpl = DPL_RING_3;
+        }
+
+        set_idt_entry(i, handler, dpl, ist);
     }
 
     // Load the IDT into the CPU
@@ -228,15 +246,15 @@ cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
                     // Special case: if we fault at address 0 with an instruction fetch error,
                     // it usually means a thread tried to return but the stack return address was 0.
                     if (cr2 == 0 && (context->error_code & 16)) {
-                        len = snprintf_(buf, sizeof(buf), "\n[Process %s (PID %u)] Thread returned from entry point (RIP: 0x%lx)\n", 
-                                       current->process->name, current->process->pid, context->iret_rip);
+                        len = snprintf_(buf, sizeof(buf), "\n[Thread %u from %s (PID %u)] Returned from entry point (RIP: 0x%lx)\n", 
+                                       current->tid, current->process->name, current->process->pid, context->iret_rip);
                     } else {
-                        len = snprintf_(buf, sizeof(buf), "\n[Process %s (PID %u)] Segmentation Fault at 0x%lx (RIP: 0x%lx)\n", 
-                                       current->process->name, current->process->pid, cr2, context->iret_rip);
+                        len = snprintf_(buf, sizeof(buf), "\n[Thread %u from %s (PID %u)] Segmentation Fault at 0x%lx (RIP: 0x%lx)\n", 
+                                       current->tid, current->process->name, current->process->pid, cr2, context->iret_rip);
                     }
                 } else {
-                    len = snprintf_(buf, sizeof(buf), "\n[Process %s (PID %u)] %s (Vector %lu) at RIP: 0x%lx\n", 
-                                   current->process->name, current->process->pid, panic_msg, vec, context->iret_rip);
+                    len = snprintf_(buf, sizeof(buf), "\n[Thread %u from %s (PID %u)] %s (Vector %lu) at RIP: 0x%lx\n", 
+                                   current->tid, current->process->name, current->process->pid, panic_msg, vec, context->iret_rip);
                 }
                 
                 if (current->process->tty) {
