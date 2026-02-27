@@ -12,6 +12,8 @@
 #include <kernel/sys/scheduler.h>
 #include <kernel/sys/userspace.h>
 #include <kernel/memory/heap.h>
+#include <kernel/memory/pmm.h>
+#include <kernel/memory/vmm.h>
 #include <arch/x86_64/cpu/gdt.h>
 #include <arch/x86_64/memory/paging.h>
 #include <kernel/debug.h>
@@ -23,16 +25,21 @@ static tid_t g_next_tid = 1;
 static process_t* g_processes = NULL;
 
 /*
- * userspace_exit_stub - Stub called when a userspace thread returns.
- * It invokes the SYS_EXIT syscall to terminate the thread gracefully.
+ * userspace_start - Global entry point for all Ring 3 threads.
+ * It calls the entry function and then exits via SYS_EXIT.
  */
-userspace void userspace_exit_stub(void) {
-    __asm__ volatile(
+userspace void userspace_start(void (*entry)(void*), void* arg) {
+    if (entry) {
+        entry(arg);
+    }
+
+    // SYS_EXIT syscall
+    __asm__ volatile (
         "mov $1, %rax \n"
         "syscall \n"
     );
 
-    while (1); // This will never be executed.
+    while(1); // Should never reach here, but just in case
 }
 
 /*
@@ -76,12 +83,29 @@ process_t* process_create(const char* name, tty_t* existing_tty) {
         return NULL;
     }
 
+    // Map the kernel's .user_text into the process's VMM at USER_CODE_VIRT_ADDR
+    // Every process sees the same code, but it only exists once in physical RAM.
+    uintptr_t user_text_phys = (uintptr_t)KERNEL_V2P(&USER_TEXT_START);
+    size_t user_text_size = (uintptr_t)&USER_TEXT_END - (uintptr_t)&USER_TEXT_START;
+    user_text_size = align_up(user_text_size, PAGE_SIZE);
+
+    vmm_status_t map_status = vmm_map_range(proc->vmm, user_text_phys, 
+                                            (void*)USER_CODE_VIRT_ADDR, 
+                                            user_text_size, 
+                                            VM_FLAG_USER | VM_FLAG_EXEC);
+    if (map_status != VMM_OK) {
+        vmm_destroy(proc->vmm);
+        kfree(proc);
+        panic("Failed to map user text segment into process VMM");
+        return NULL;
+    }
+
     // Create a private heap for the process (manages lower-half memory)
     // We MUST switch to the new VMM so the kernel can write heap metadata to the lower half
     vmm_switch(proc->vmm);
 
-    // Initial size 1MB, Max size 1GB. We add HEAP_FLAG_EXECUTABLE because this heap will store the program code.
-    proc->user_heap = heap_create(proc->vmm, 1024 * 1024, 1024 * 1024 * 1024, HEAP_FLAG_EXECUTABLE);
+    // Initial size 1MB, Max size 1GB.
+    proc->user_heap = heap_create(proc->vmm, 1024 * 1024, 1024 * 1024 * 1024, 0);
     
     // Switch back immediately after heap initialization
     vmm_switch(NULL);
@@ -109,7 +133,7 @@ process_t* process_create(const char* name, tty_t* existing_tty) {
     proc->next = g_processes;
     g_processes = proc;
 
-    LOGF("[PROC] Created process '%s' (PID: %u) with private heap\n", proc->name, proc->pid);
+    LOGF("[PROC] Created process '%s' (PID: %u) with shared code mapping\n", proc->name, proc->pid);
     return proc;
 }
 
@@ -144,55 +168,27 @@ thread_t* thread_create(process_t* process, const char* name, void (*entry)(void
         thread->context->iret_cs = USER_CS;
         thread->context->iret_ss = USER_DS;
         
-        // Critical section here
+        // Use the global userspace_start as the RIP
+        uintptr_t offset_start = (uintptr_t)userspace_start - (uintptr_t)&USER_TEXT_START;
+        thread->context->iret_rip = USER_CODE_VIRT_ADDR + offset_start;
+
+        // The actual entry function and its argument are passed via registers
+        uintptr_t offset_entry = (uintptr_t)entry - (uintptr_t)&USER_TEXT_START;
+        thread->context->rdi = USER_CODE_VIRT_ADDR + offset_entry;
+        thread->context->rsi = (uint64_t)arg;
+
+        // Allocate userspace stack from the process heap
         vmm_switch(process->vmm);
-
-        // Load userspace code into the process heap
-        size_t user_text_size = (uintptr_t)&USER_TEXT_END - (uintptr_t)&USER_TEXT_START;
-        if (user_text_size == 0) user_text_size = PAGE_SIZE;
-
-        // Use the heap to allocate space for the program code
-        void* code_buffer = heap_malloc(process->user_heap, user_text_size);
-        if (!code_buffer) {
-            vmm_switch(NULL);
-            LOGF("[PROC] ERROR: Failed to allocate heap memory for code of thread '%s'\n", name);
-            kfree(thread->kernel_stack);
-            kfree(thread);
-            return NULL;
-        }
-
-        // Copy hardcoded code into the heap buffer
-        memcpy(code_buffer, &USER_TEXT_START, user_text_size);
-
-        // Calculate the RIP relative to the heap buffer
-        uintptr_t offset = (uintptr_t)entry - (uintptr_t)&USER_TEXT_START;
-        thread->context->iret_rip = (uint64_t)code_buffer + offset;
-
-        // Calculate the address of the exit stub in the heap
-        uintptr_t exit_stub_offset = (uintptr_t)userspace_exit_stub - (uintptr_t)&USER_TEXT_START;
-        uint64_t exit_stub_addr = (uint64_t)code_buffer + exit_stub_offset;
-
-        // Allocate and clear userspace stack from the process heap
         thread->user_stack = heap_malloc(process->user_heap, USER_STACK_SIZE);
-        if (!thread->user_stack) {
-            heap_free(process->user_heap, code_buffer);
-            vmm_switch(NULL);
-            kfree(thread->kernel_stack);
-            kfree(thread);
-            return NULL;
-        }
-        memset(thread->user_stack, 0, USER_STACK_SIZE);
-        
-        // Push the exit stub address onto the stack so returning from entry point calls it
-        uint64_t* user_rsp = (uint64_t*)((uint64_t)thread->user_stack + USER_STACK_SIZE - 8);
-        *user_rsp = exit_stub_addr;
-        
-        thread->context->iret_rsp = (uint64_t)user_rsp;
-
-        // Back to the kernel vmm
         vmm_switch(NULL);
 
-        thread->context->rdi = (uint64_t)arg;
+        if (!thread->user_stack) {
+            kfree(thread->kernel_stack);
+            kfree(thread);
+            return NULL;
+        }
+        
+        thread->context->iret_rsp = (uint64_t)thread->user_stack + USER_STACK_SIZE;
 
     } else {
         thread->context->iret_cs = KERNEL_CS;
