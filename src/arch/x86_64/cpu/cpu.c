@@ -9,10 +9,12 @@
  */
 
 #include <arch/x86_64/cpu/cpu.h>
+#include <arch/x86_64/cpu/msr.h>
 #include <kernel/debug.h>
 #include <libc/string.h>
 
 static CPUInfo g_cpu;
+cpu_local_t g_cpu_local = {0};
 
 /*
  * cpuid - Execute the CPUID instruction with given EAX and ECX inputs
@@ -167,6 +169,10 @@ void cpu_init(void)
         g_cpu.core_count = ((b >> 26) & 0x3F) + 1;
     }
 
+    // Set KERNEL_GS_BASE to our cpu_local structure
+    // When returning to userspace, swapgs will move this into GS_BASE.
+    write_msr(MSR_KERNEL_GS_BASE, (uint64_t)&g_cpu_local);
+
     // Log gathered CPU information
     LOGF("[CPU] Vendor: %s\n", g_cpu.vendor);
     LOGF("[CPU] Brand:  %s\n", g_cpu.brand);
@@ -237,9 +243,9 @@ bool cpu_enable_feature(cpu_feature_t feature)
             return true;
 
         case CPU_FEAT_NX:
-            efer = read_msr(0xC0000080); // IA32_EFER
-            efer |= (1 << 11); // EFER.NXE
-            write_msr(0xC0000080, efer);
+            efer = read_msr(MSR_EFER);
+            efer |= EFER_NXE;
+            write_msr(MSR_EFER, efer);
             return true;
 
         case CPU_FEAT_VMX:
@@ -289,8 +295,8 @@ bool cpu_is_feature_enabled(cpu_feature_t feature)
                     (xcr0 & (1 << 0)) && (xcr0 & (1 << 1)) && (xcr0 & (1 << 2)));
 
         case CPU_FEAT_NX:
-            efer = read_msr(0xC0000080); // IA32_EFER
-            return (efer & (1 << 11)) != 0;
+            efer = read_msr(MSR_EFER);
+            return (efer & EFER_NXE) != 0;
 
         case CPU_FEAT_VMX:
             cr4 = read_cr4();

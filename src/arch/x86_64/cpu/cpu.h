@@ -41,6 +41,14 @@ typedef struct {
     uint64_t features;
 } CPUInfo;
 
+// CPU-local data structure for GS base
+typedef struct {
+    uint64_t kernel_stack; // offset 0
+    uint64_t user_stack;   // offset 8
+} __attribute__((packed)) cpu_local_t;
+
+extern cpu_local_t g_cpu_local;
+
 // Public API
 void cpu_init(void);
 const CPUInfo* cpu_get_info(void);
