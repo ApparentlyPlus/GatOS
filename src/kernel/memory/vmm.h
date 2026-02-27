@@ -73,6 +73,7 @@ vmm_status_t vmm_free(vmm_t* vmm, void* addr);
 vmm_t* vmm_create(uintptr_t alloc_base, uintptr_t alloc_end);
 void vmm_destroy(vmm_t* vmm);
 void vmm_switch(vmm_t* vmm);
+vmm_t* vmm_get_current(void);
 
 // Kernel VMM Management
 

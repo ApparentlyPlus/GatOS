@@ -46,6 +46,9 @@ typedef struct {
 // Global kernel VMM
 static vmm_internal* g_kernel_vmm = NULL;
 
+// Global current VMM tracker
+static vmm_t* g_current_vmm = NULL;
+
 // Slab caches for VMM internal structures
 static slab_cache_t* g_vmm_internal_cache = NULL;
 static slab_cache_t* g_vm_object_internal_cache = NULL;
@@ -977,6 +980,18 @@ void vmm_switch(vmm_t* vmm_pub) {
 
     // Switch to the root page table of the VMM
     PMT_switch(vmm->public.pt_root);
+    g_current_vmm = &vmm->public;
+}
+
+/*
+ * vmm_get_current - Get the currently active VMM instance
+ */
+vmm_t* vmm_get_current(void) {
+    if (!g_current_vmm && g_kernel_vmm) {
+        // If not explicitly set yet, assume kernel VMM
+        return &g_kernel_vmm->public;
+    }
+    return g_current_vmm;
 }
 
 #pragma endregion
@@ -1028,6 +1043,7 @@ vmm_status_t vmm_kernel_init(uintptr_t alloc_base, uintptr_t alloc_end) {
     vmm->public.alloc_end = alloc_end;
 
     g_kernel_vmm = vmm;
+    g_current_vmm = &g_kernel_vmm->public;
 
     // Create slab caches for VMM structures
     g_vmm_internal_cache = slab_cache_create(
