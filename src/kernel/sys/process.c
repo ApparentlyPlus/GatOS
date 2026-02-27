@@ -96,7 +96,6 @@ process_t* process_create(const char* name, tty_t* existing_tty) {
     if (map_status != VMM_OK) {
         vmm_destroy(proc->vmm);
         kfree(proc);
-        panic("Failed to map user text segment into process VMM");
         return NULL;
     }
 
