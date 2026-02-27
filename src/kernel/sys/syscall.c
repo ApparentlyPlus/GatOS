@@ -14,6 +14,7 @@
 #include <kernel/sys/scheduler.h>
 #include <kernel/sys/process.h>
 #include <kernel/drivers/stdio.h>
+#include <kernel/memory/vmm.h>
 #include <kernel/debug.h>
 
 extern void syscall_entry(void);
@@ -67,12 +68,49 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
             // sys_write(buffer, length)
             const char* buf = (const char*)registers[9];
             size_t len = (size_t)registers[10];
-            
-            // Basic security: In a real kernel we'd verify the buffer is in user memory.
+
+            // We need to verify the buffer is in user space
             // For now, let's just use the process's TTY if it has one.
             if (current->process && current->process->tty) {
                 tty_write(current->process->tty, buf, len);
             }
+            break;
+        }
+            
+        case SYS_MMAP: {
+            void* addr = (void*)registers[9];
+            size_t length = (size_t)registers[10];
+            size_t vm_flags = (size_t)registers[11];
+            
+            void* out_addr = NULL;
+            vmm_status_t status;
+            
+            if (addr) {
+                status = vmm_alloc_at(current->process->vmm, addr, length, vm_flags | VM_FLAG_USER, NULL, &out_addr);
+            } else {
+                status = vmm_alloc(current->process->vmm, length, vm_flags | VM_FLAG_USER, NULL, &out_addr);
+            }
+            
+            if (status == VMM_OK) {
+                registers[14] = (uint64_t)out_addr; // rax
+            } else {
+                registers[14] = (uint64_t)-1;
+            }
+            break;
+        }
+        
+        case SYS_MUNMAP: {
+            void* addr = (void*)registers[9];
+            vmm_free(current->process->vmm, addr);
+            registers[14] = 0;
+            break;
+        }
+        
+        case SYS_SET_FS_BASE: {
+            uint64_t base = registers[9];
+            current->fs_base = base;
+            write_msr(MSR_FS_BASE, base);
+            registers[14] = 0;
             break;
         }
             

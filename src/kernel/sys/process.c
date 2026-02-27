@@ -33,7 +33,7 @@ userspace void userspace_start(void (*entry)(void*), void* arg) {
         entry(arg);
     }
 
-    // SYS_EXIT syscall
+    // SYS_EXIT
     __asm__ volatile (
         "mov $1, %rax \n"
         "syscall \n"
@@ -99,29 +99,12 @@ process_t* process_create(const char* name, tty_t* existing_tty) {
         return NULL;
     }
 
-    // Create a private heap for the process (manages lower-half memory)
-    // We MUST switch to the new VMM so the kernel can write heap metadata to the lower half
-    vmm_switch(proc->vmm);
-
-    // Initial size 1MB, Max size 1GB.
-    proc->user_heap = heap_create(proc->vmm, 1024 * 1024, 1024 * 1024 * 1024, 0);
-    
-    // Switch back immediately after heap initialization
-    vmm_switch(NULL);
-
-    if (!proc->user_heap) {
-        vmm_destroy(proc->vmm);
-        kfree(proc);
-        return NULL;
-    }
-
     // Setup TTY
     if (existing_tty) {
         proc->tty = existing_tty;
     } else {
         proc->tty = tty_create();
         if (!proc->tty) {
-            heap_destroy(proc->user_heap);
             vmm_destroy(proc->vmm);
             kfree(proc);
             return NULL;
@@ -139,7 +122,7 @@ process_t* process_create(const char* name, tty_t* existing_tty) {
 /*
  * thread_create - Creates a new thread using the process's heap
  */
-thread_t* thread_create(process_t* process, const char* name, void (*entry)(void*), void* arg, bool is_user) {
+thread_t* thread_create(process_t* process, const char* name, void (*entry)(void*), void* arg, bool is_user, uintptr_t user_rsp) {
     thread_t* thread = (thread_t*)kmalloc(sizeof(thread_t));
     if (!thread) return NULL;
 
@@ -176,18 +159,23 @@ thread_t* thread_create(process_t* process, const char* name, void (*entry)(void
         thread->context->rdi = USER_CODE_VIRT_ADDR + offset_entry;
         thread->context->rsi = (uint64_t)arg;
 
-        // Allocate userspace stack from the process heap
-        vmm_switch(process->vmm);
-        thread->user_stack = heap_malloc(process->user_heap, USER_STACK_SIZE);
-        vmm_switch(NULL);
+        if (user_rsp == 0) {
+            // Allocate userspace stack from the process VMM directly
+            vmm_status_t alloc_status = vmm_alloc(process->vmm, USER_STACK_SIZE, VM_FLAG_USER | VM_FLAG_WRITE, NULL, &thread->user_stack);
 
-        if (!thread->user_stack) {
-            kfree(thread->kernel_stack);
-            kfree(thread);
-            return NULL;
+            if (alloc_status != VMM_OK || !thread->user_stack) {
+                kfree(thread->kernel_stack);
+                kfree(thread);
+                return NULL;
+            }
+            
+            user_rsp = (uint64_t)thread->user_stack + USER_STACK_SIZE;
+        } else {
+            // Userspace provided a stack, we don't track it
+            thread->user_stack = NULL;
         }
-        
-        thread->context->iret_rsp = (uint64_t)thread->user_stack + USER_STACK_SIZE;
+
+        thread->context->iret_rsp = user_rsp;
 
     } else {
         thread->context->iret_cs = KERNEL_CS;
@@ -238,15 +226,9 @@ void thread_destroy(thread_t* thread) {
 
     LOGF("[PROC] Destroying thread '%s' (TID: %u)\n", thread->name, thread->tid);
 
-    // If it has a user stack, free it from the process heap
-    if (thread->user_stack && thread->process && thread->process->user_heap) {
-        vmm_t* prev_vmm = vmm_get_current();
-        
-        vmm_switch(thread->process->vmm);
-        heap_free(thread->process->user_heap, thread->user_stack);
-        
-        // Restore previous VMM state instead of always switching to NULL
-        vmm_switch(prev_vmm);
+    // If it has a user stack, free it from the process VMM
+    if (thread->user_stack && thread->process && thread->process->vmm) {
+        vmm_free(thread->process->vmm, thread->user_stack);
     }
 
     // Free kernel stack
@@ -273,10 +255,7 @@ void process_destroy(process_t* process) {
         thread = next;
     }
 
-    // Destroy userspace heap
-    if (process->user_heap) {
-        heap_destroy(process->user_heap);
-    }
+    // User heap no longer exists, memory is freed when vmm_destroy is called
 
     if (process->vmm) {
         vmm_destroy(process->vmm);

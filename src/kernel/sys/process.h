@@ -44,6 +44,7 @@ typedef struct thread {
     cpu_context_t* context; // Pointer to the saved state on the kernel stack
     void* kernel_stack;     // Base of the kernel stack
     void* user_stack;       // Virtual address of the user stack
+    uint64_t fs_base;       // Thread Local Storage base
     
     uint64_t sleep_until;   // Timestamp for waking up
     
@@ -59,14 +60,12 @@ typedef struct process {
     
     thread_t* threads;      // Linked list of threads in this process
     
-    heap_t* user_heap;      // Userspace heap instance
-    
     struct process* next;   // Next process in the system
 } process_t;
 
 void process_init(void);
 process_t* process_create(const char* name, tty_t* existing_tty);
-thread_t* thread_create(process_t* process, const char* name, void (*entry)(void*), void* arg, bool is_user);
+thread_t* thread_create(process_t* process, const char* name, void (*entry)(void*), void* arg, bool is_user, uintptr_t user_rsp);
 thread_t* thread_create_bootstrap(process_t* process, const char* name);
 void thread_destroy(thread_t* thread);
 void process_destroy(process_t* process);

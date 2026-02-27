@@ -62,9 +62,8 @@ static bool test_process_creation(void) {
     TEST_ASSERT(proc->pid > 0);
     TEST_ASSERT(strcmp(proc->name, "test_proc") == 0);
     
-    // Verify private VMM and Heap
+    // Verify private VMM
     TEST_ASSERT(proc->vmm != NULL);
-    TEST_ASSERT(proc->user_heap != NULL);
     
     // Verify TTY was created
     TEST_ASSERT(proc->tty != NULL);
@@ -81,7 +80,7 @@ static bool test_kernel_thread_creation(void) {
     TEST_ASSERT(proc != NULL);
     
     g_kernel_thread_val = 0;
-    thread_t* thread = thread_create(proc, "k_thread", kernel_test_thread_entry, (void*)42, false);
+    thread_t* thread = thread_create(proc, "k_thread", kernel_test_thread_entry, (void*)42, false, 0);
     
     TEST_ASSERT(thread != NULL);
     TEST_ASSERT(thread->process == proc);
@@ -103,7 +102,7 @@ static bool test_user_thread_creation(void) {
     TEST_ASSERT(proc != NULL);
     
     // Create a USER thread
-    thread_t* thread = thread_create(proc, "u_thread", user_test_thread_entry, NULL, true);
+    thread_t* thread = thread_create(proc, "u_thread", user_test_thread_entry, NULL, true, 0);
     
     TEST_ASSERT(thread != NULL);
     TEST_ASSERT(thread->user_stack != NULL);

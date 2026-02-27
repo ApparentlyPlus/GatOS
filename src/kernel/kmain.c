@@ -46,7 +46,7 @@ static uint8_t multiboot_buffer[8 * 1024];
 
 userspace void tA(void* arg) {
     (void)arg;
-    const char* msg = "Hello from userspace via SYS_WRITE!\n";
+    const char* msg = "[Thread A] Hello from userspace via SYS_WRITE!\n";
     // Trigger SYS_WRITE (rax=2, rdi=buffer, rsi=length)
     __asm__ volatile (
         "mov $2, %%rax\n"
@@ -54,18 +54,20 @@ userspace void tA(void* arg) {
         "mov %1, %%rsi\n"
         "syscall\n"
         :
-        : "r"(msg), "r"((uint64_t)36)
+        : "r"(msg), "r"((uint64_t)47)
         : "rax", "rdi", "rsi", "rcx", "r11"
     );
-    for(volatile int i = 0; i < 1000000; i++);
 }
 
 userspace void tB(void* arg) {
 	(void)arg;
-    // Wait a bit to ensure tA prints first
-	for(volatile int i = 0; i < 1000000; i++);
+    // Wait a bit to ensure others print first
+	for(volatile int i = 0; i < 2000000; i++);
     
     // Trigger a Page Fault by writing to an unmapped address
+    const char* msg = "[Thread B] About to trigger a intentional Segfault...\n";
+    __asm__ volatile ("mov $2, %%rax; mov %0, %%rdi; mov $53, %%rsi; syscall" :: "r"(msg) : "rax", "rdi", "rsi", "rcx", "r11");
+
     volatile int* p = (int*)0xDEADC0DE;
     *p = 1337;
 }
@@ -237,8 +239,8 @@ void kernel_main(void* mb_info) {
     // Create test threads
     // Use NULL for test_proc to create its own TTY
     process_t* test_proc = process_create("test_proc", NULL);
-    sched_add(thread_create(test_proc, "thread_a", tA, NULL, true));
-    sched_add(thread_create(test_proc, "thread_b", tB, NULL, true));
+    sched_add(thread_create(test_proc, "thread_a", tA, NULL, true, 0));
+    sched_add(thread_create(test_proc, "thread_b", tB, NULL, true, 0));
 
 	// Enable interrupts
 

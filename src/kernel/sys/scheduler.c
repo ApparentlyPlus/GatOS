@@ -13,6 +13,7 @@
 #include <kernel/sys/panic.h>
 #include <arch/x86_64/cpu/gdt.h>
 #include <arch/x86_64/cpu/cpu.h>
+#include <arch/x86_64/cpu/msr.h>
 #include <kernel/memory/heap.h>
 #include <kernel/debug.h>
 #include <libc/string.h>
@@ -45,7 +46,7 @@ void sched_init(void) {
     g_idle_process = process_create("idle_proc", g_active_tty);
     if (!g_idle_process) panic("Failed to create idle process!");
 
-    g_idle_thread = thread_create(g_idle_process, "idle", idle_thread_entry, NULL, false);
+    g_idle_thread = thread_create(g_idle_process, "idle", idle_thread_entry, NULL, false, 0);
     if (!g_idle_thread) panic("Failed to create idle thread!");
 
     // Bootstrap Current Execution
@@ -103,6 +104,7 @@ cpu_context_t* sched_schedule(cpu_context_t* current_context) {
     // Save current context
     if (g_current_thread) {
         g_current_thread->context = current_context;
+        g_current_thread->fs_base = read_msr(MSR_FS_BASE);
         
         if (g_current_thread->state == THREAD_STATE_RUNNING) {
             g_current_thread->state = THREAD_STATE_READY;
@@ -205,6 +207,8 @@ cpu_context_t* sched_schedule(cpu_context_t* current_context) {
         // Update local CPU structure for syscall entries
         g_cpu_local.kernel_stack = stack_top;
     }
+    
+    write_msr(MSR_FS_BASE, g_current_thread->fs_base);
 
     return g_current_thread->context;
 }
