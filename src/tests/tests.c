@@ -155,7 +155,7 @@ void kernel_test(void* mb_info, char* KERNEL_VERSION) {
 
     printf("Running Multitasking & Userspace tests...\n");
     process_init();
-    scheduler_init();
+    sched_init();
     test_multitasking();
     QEMU_LOG("Multitasking Test Suite Completed", TOTAL_DBG);
 

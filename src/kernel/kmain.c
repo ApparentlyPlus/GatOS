@@ -52,7 +52,8 @@ userspace void tA(void* arg) {
 
 userspace void tB(void* arg) {
 	(void)arg;
-	while(1);
+	for(volatile int i = 0; i < 5000000; i++) {
+	}
 }
 
 /*
@@ -80,11 +81,6 @@ void kernel_main(void* mb_info) {
 
 	idt_init();
 	QEMU_LOG("Initialized the IDT", TOTAL_DBG);
-
-	// Parse CPU information
-
-	cpu_init();
-	QEMU_LOG("Parsed CPU information", TOTAL_DBG);
 
 	// Initialize multiboot parser (copies everything to higher half)
 
@@ -150,6 +146,10 @@ void kernel_main(void* mb_info) {
 
 	// Initialize GDT and TSS for Ring 3 support
 	gdt_init();
+
+	// Parse CPU information and setup GS base
+	cpu_init();
+	QEMU_LOG("Parsed CPU information and configured GS base", TOTAL_DBG);
 
 	// Initialize kernel heap
 
@@ -218,7 +218,7 @@ void kernel_main(void* mb_info) {
 
 	// Initialize Multitasking
     process_init();
-    scheduler_init();
+    sched_init();
 
     // Create test threads
     // Use NULL for test_proc to create its own TTY

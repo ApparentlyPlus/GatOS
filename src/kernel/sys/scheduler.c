@@ -37,9 +37,9 @@ static void idle_thread_entry(void* arg) {
 }
 
 /*
- * scheduler_init - Initializes the scheduler and creates the idle thread
+ * sched_init - Initializes the scheduler and creates the idle thread
  */
-void scheduler_init(void) {
+void sched_init(void) {
     // Create Idle Task
     // The idle process shares the kernel's TTY as it does not perform I/O
     g_idle_process = process_create("idle_proc", g_active_tty);

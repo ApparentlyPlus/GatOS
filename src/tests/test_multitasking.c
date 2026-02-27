@@ -114,7 +114,7 @@ static bool test_user_thread_creation(void) {
 }
 
 /*
- * test_scheduler_bootstrap - Verifies scheduler_init and kernel_main wrapping
+ * test_scheduler_bootstrap - Verifies sched_init and kernel_main wrapping
  */
 static bool test_scheduler_bootstrap(void) {
     TEST_ASSERT(sched_active() == true);

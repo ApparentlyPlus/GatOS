@@ -12,7 +12,7 @@
 #include <kernel/sys/process.h>
 #include <arch/x86_64/cpu/interrupts.h>
 
-void scheduler_init(void);
+void sched_init(void);
 void sched_add(thread_t* thread);
 cpu_context_t* sched_schedule(cpu_context_t* current_context);
 void sched_yield(void);

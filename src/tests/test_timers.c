@@ -117,7 +117,7 @@ static bool test_lapic_timer_oneshot(void) {
         sleep_ms(1);
     }
 
-    unirq_register(vector);
+    irq_unregister(vector);
     TEST_ASSERT(g_test_irq_count == 1);
 
     return true;
@@ -137,7 +137,7 @@ static bool test_lapic_timer_periodic(void) {
     sleep_ms(105);
 
     lapic_timer_stop();
-    unirq_register(vector);
+    irq_unregister(vector);
 
     uint32_t final_count = g_test_irq_count;
     LOGF("[INFO] Periodic count (105ms): %u\n", final_count);

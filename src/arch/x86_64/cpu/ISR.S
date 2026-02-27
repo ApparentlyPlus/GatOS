@@ -44,8 +44,20 @@
 # -----------------------------------------------------------------------------
 .align 16
 generic_interrupt_handler:
+    // Check if we came from userspace (Ring 3)
+    // Current stack:
+    // [rsp + 0]  - vector number
+    // [rsp + 8]  - error code
+    // [rsp + 16] - iret rip
+    // [rsp + 24] - iret cs
+    // ...
+    
+    test qword ptr [rsp + 24], 3
+    jz .no_swapgs
+    swapgs
+.no_swapgs:
 
-    // First, save all general purpose registers to the stack
+    // Save all general purpose registers
     push rax
     push rbx
     push rcx
@@ -63,15 +75,13 @@ generic_interrupt_handler:
     push r15
     
     // Call our C interrupt dispatcher
-    // with the current stack pointer as argument
     mov rdi, rsp
     call interrupt_dispatcher
 
-    // After the dispatcher returns, we need to restore the stack pointer
-    // from the output of the dispatcher (in rax)
+    // Restore the stack pointer
     mov rsp, rax
     
-    // Restore all general purpose registers
+    // Restore general purpose registers
     pop r15
     pop r14
     pop r13
@@ -87,15 +97,16 @@ generic_interrupt_handler:
     pop rcx
     pop rbx
     pop rax
-    
-    // A thing to notice is that we added 16 bytes to the stack before the iret. 
-    // This is because there will be an error code (real or dummy) and the vector number that we need to remove, 
-    // so that the iret frame is at the top of the stack. If we don't do this, iret will use the wrong data and likely 
-    // trigger a general protection fault.
 
+    // Swap GS back if returning to userspace
+    // Current stack: [rsp] vector, [rsp+8] err, [rsp+16] rip, [rsp+24] cs
+    test qword ptr [rsp + 24], 3
+    jz .no_swapgs_back
+    swapgs
+.no_swapgs_back:
+    // Cleanup vector and error code
     add rsp, 16
     
-    // Return from the interrupt
     iretq
 
 
