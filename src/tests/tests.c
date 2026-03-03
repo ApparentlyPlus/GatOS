@@ -13,6 +13,7 @@
 #include <arch/x86_64/memory/paging.h>
 #include <arch/x86_64/multiboot2.h>
 #include <arch/x86_64/cpu/cpu.h>
+#include <arch/x86_64/cpu/gdt.h>
 
 #include <kernel/drivers/console.h>
 #include <kernel/drivers/stdio.h>
@@ -24,6 +25,8 @@
 #include <kernel/sys/timers.h>
 #include <kernel/sys/acpi.h>
 #include <kernel/sys/apic.h>
+#include <kernel/sys/process.h>
+#include <kernel/sys/scheduler.h>
 #include <kernel/drivers/tty.h>
 #include <kernel/drivers/input.h>
 #include <kernel/debug.h>
@@ -31,7 +34,7 @@
 #include <tests/tests.h>
 #include <libc/string.h>
 
-#define TOTAL_DBG 11
+#define TOTAL_DBG 12
 
 static uint8_t multiboot_buffer[8 * 1024];
 
@@ -74,6 +77,8 @@ void kernel_test(void* mb_info, char* KERNEL_VERSION) {
 	}
     
     QEMU_LOG("PMM Initialized (Tests deferred)", TOTAL_DBG);
+
+    gdt_init();
 
 	slab_status_t slab_status = slab_init();
 	if(slab_status != SLAB_OK){
@@ -150,6 +155,12 @@ void kernel_test(void* mb_info, char* KERNEL_VERSION) {
     printf("Running TTY Abstraction tests...\n");
     test_tty();
     QEMU_LOG("TTY Test Suite Completed", TOTAL_DBG);
+
+    printf("Running Multitasking & Userspace tests...\n");
+    process_init();
+    sched_init();
+    test_multitasking();
+    QEMU_LOG("Multitasking Test Suite Completed", TOTAL_DBG);
 
     // Finish up
     printf("\nAll kernel tests completed. Halting system.");

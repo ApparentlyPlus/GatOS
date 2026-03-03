@@ -30,16 +30,9 @@
 #define HEAP_MIN_ALIGN   16
 #define MIN_BLOCK_SIZE   32
 
-typedef enum {
-    TRACK_KERNEL,
-    TRACK_USER_HEAP
-} track_source_t;
-
 typedef struct {
     bool active;
-    track_source_t source;
     void* ptr;
-    heap_t* heap_inst;
 } heap_tracker_t;
 
 // Mirror of heap_arena_t
@@ -106,7 +99,6 @@ static void tracker_reset(void) {
     for (int i = 0; i < MAX_TRACKED_ITEMS; i++) {
         g_tracker[i].active = false;
         g_tracker[i].ptr = NULL;
-        g_tracker[i].heap_inst = NULL;
     }
     g_tracker_idx = 0;
 }
@@ -114,17 +106,7 @@ static void tracker_reset(void) {
 // Registers a kernel heap allocation to be freed during cleanup.
 static void tracker_add_k(void* ptr) {
     if (g_tracker_idx < MAX_TRACKED_ITEMS) {
-        g_tracker[g_tracker_idx] = (heap_tracker_t){ .active = true, .source = TRACK_KERNEL, .ptr = ptr };
-        g_tracker_idx++;
-    } else {
-        LOGF("[TEST WARN] Heap Tracker full.\n");
-    }
-}
-
-// Registers a user heap allocation to be freed during cleanup.
-static void tracker_add_u(heap_t* heap, void* ptr) {
-    if (g_tracker_idx < MAX_TRACKED_ITEMS) {
-        g_tracker[g_tracker_idx] = (heap_tracker_t){ .active = true, .source = TRACK_USER_HEAP, .ptr = ptr, .heap_inst = heap };
+        g_tracker[g_tracker_idx] = (heap_tracker_t){ .active = true, .ptr = ptr };
         g_tracker_idx++;
     } else {
         LOGF("[TEST WARN] Heap Tracker full.\n");
@@ -135,11 +117,7 @@ static void tracker_add_u(heap_t* heap, void* ptr) {
 static void tracker_cleanup(void) {
     for (int i = 0; i < MAX_TRACKED_ITEMS; i++) {
         if (g_tracker[i].active) {
-            if (g_tracker[i].source == TRACK_KERNEL) {
-                kfree(g_tracker[i].ptr);
-            } else {
-                heap_free(g_tracker[i].heap_inst, g_tracker[i].ptr);
-            }
+            kfree(g_tracker[i].ptr);
             g_tracker[i].active = false;
         }
     }
@@ -366,20 +344,20 @@ static bool test_splitting_threshold(void) {
 static bool test_free_list_sorting(void) {
     tracker_reset();
     
-    heap_t* u_heap = heap_create(vmm_kernel_get(), 8192, 1024*1024, HEAP_FLAG_NONE);
-    heap_test_struct_t* h_struct = access_heap(u_heap);
+    heap_t* heap = heap_kernel_get();
+    heap_test_struct_t* h_struct = access_heap(heap);
 
     // Alloc blocks with spacers to prevent coalescing upon free
-    void* s1 = heap_malloc(u_heap, 16); 
-    void* large = heap_malloc(u_heap, 256);
-    void* s2 = heap_malloc(u_heap, 16); 
-    void* small = heap_malloc(u_heap, 32);
-    void* s3 = heap_malloc(u_heap, 16); 
-    void* med = heap_malloc(u_heap, 128);
+    void* s1 = kmalloc(16); tracker_add_k(s1);
+    void* large = kmalloc(256);
+    void* s2 = kmalloc(16); tracker_add_k(s2);
+    void* small = kmalloc(32);
+    void* s3 = kmalloc(16); tracker_add_k(s3);
+    void* med = kmalloc(128);
 
-    heap_free(u_heap, med);
-    heap_free(u_heap, large);
-    heap_free(u_heap, small);
+    kfree(med);
+    kfree(large);
+    kfree(small);
 
     // Verify sort order: Small -> Med -> Large
     heap_test_header_t* cur = (heap_test_header_t*)h_struct->free_list;
@@ -395,7 +373,7 @@ static bool test_free_list_sorting(void) {
     }
     TEST_ASSERT(count >= 3);
 
-    heap_destroy(u_heap);
+    tracker_cleanup();
     return true;
 }
 
@@ -522,31 +500,7 @@ static bool test_redzone_check(void) {
 
 #pragma endregion
 
-#pragma region Isolation & Stress Tests
-
-// Validates the lifecycle of a separate user-space heap instance.
-static bool test_user_heap_lifecycle(void) {
-    tracker_reset();
-
-    heap_t* u_heap = heap_create(vmm_kernel_get(), 4096, 1024*1024, HEAP_FLAG_ZERO);
-    TEST_ASSERT(u_heap != NULL);
-
-    void* p1 = heap_malloc(u_heap, 64);
-    TEST_ASSERT(p1 != NULL);
-    tracker_add_u(u_heap, p1);
-
-    uint64_t* check = (uint64_t*)p1;
-    TEST_ASSERT(check[0] == 0); // Check ZERO flag
-
-    TEST_ASSERT_STATUS(heap_check_integrity(u_heap), HEAP_OK);
-    TEST_ASSERT_STATUS(heap_check_integrity(heap_kernel_get()), HEAP_OK);
-
-    heap_free(u_heap, p1);
-    g_tracker[0].active = false;
-
-    heap_destroy(u_heap);
-    return true;
-}
+#pragma region Stress Tests
 
 // Performs randomized allocation/deallocation churn to stress stability.
 static bool test_heap_stress_churn(void) {
@@ -642,9 +596,6 @@ void test_heap(void) {
     run_test("Header Corruption Detect", test_header_corruption_detection);
     run_test("Footer Corruption Detect", test_footer_corruption_detection);
     run_test("RedZone Integrity Check", test_redzone_check);
-    
-    // Isolation
-    run_test("User Heap Lifecycle", test_user_heap_lifecycle);
     
     // Stress
     run_test("Randomized Churn Stress", test_heap_stress_churn);

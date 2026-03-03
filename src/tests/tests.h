@@ -36,3 +36,4 @@ void test_heap();
 void test_timers();
 void test_spinlock();
 void test_tty();
+void test_multitasking();

@@ -102,14 +102,14 @@ extern interrupt_descriptor idt[IDT_SIZE];
 extern uint32_t gdt64_code_segment;
 
 // Function pointer type for interrupt handlers
-typedef void (*irq_handler_t)(cpu_context_t*);
+typedef cpu_context_t* (*irq_handler_t)(cpu_context_t*);
 
 void idt_init(void);
 void enable_interrupts(void);
 void disable_interrupts(void);
 
-void register_interrupt_handler(uint8_t vector, irq_handler_t handler);
-void unregister_interrupt_handler(uint8_t vector);
+void irq_register(uint8_t vector, irq_handler_t handler);
+void irq_unregister(uint8_t vector);
 
 bool interrupts_save(void);
 void interrupts_restore(bool enabled);

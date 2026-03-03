@@ -30,6 +30,7 @@
 #define HEAP_FLAG_NONE      0
 #define HEAP_FLAG_ZERO      (1 << 0)  // Zero memory on allocation
 #define HEAP_FLAG_URGENT    (1 << 1)  // Don't fail, panic instead
+#define HEAP_FLAG_EXECUTABLE (1 << 2) // Memory is executable
 
 // Return codes
 typedef enum {
@@ -55,15 +56,6 @@ void* kmalloc(size_t size);
 void kfree(void* ptr);
 void* krealloc(void* ptr, size_t size);
 void* kcalloc(size_t nmemb, size_t size);
-
-// User heap interface
-
-heap_t* heap_create(vmm_t* vmm, size_t min_size, size_t max_size, uint32_t flags);
-void heap_destroy(heap_t* heap);
-void* heap_malloc(heap_t* heap, size_t size);
-void heap_free(heap_t* heap, void* ptr);
-void* heap_realloc(heap_t* heap, void* ptr, size_t size);
-void* heap_calloc(heap_t* heap, size_t nmemb, size_t size);
 
 // Heap introspection and debugging
 

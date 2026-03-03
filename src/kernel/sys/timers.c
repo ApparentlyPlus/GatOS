@@ -10,9 +10,10 @@
 
 #include <arch/x86_64/cpu/interrupts.h>
 #include <arch/x86_64/memory/paging.h>
-#include <arch/x86_64/cpu/io.h>
 #include <kernel/drivers/serial.h>
+#include <kernel/sys/scheduler.h>
 #include <arch/x86_64/cpu/cpu.h>
+#include <arch/x86_64/cpu/io.h>
 #include <kernel/memory/vmm.h>
 #include <kernel/sys/timers.h>
 #include <kernel/sys/acpi.h>
@@ -143,11 +144,13 @@ uint64_t hpet_read_counter(void) {
 #pragma region Calibration Logic
 
 /*
- * timer_handler - Currently a sinkhole for PIC Interrupts, soon to be scheduler invoker
+ * timer_handler - Periodic timer interrupt handler
  */
-static void timer_handler(cpu_context_t* ctx) {
-    (void)ctx;
+static cpu_context_t* timer_handler(cpu_context_t* ctx) {
     g_ticks++;
+    
+    // Call the scheduler to perform a context switch
+    return sched_schedule(ctx);
 }
 
 /*
@@ -225,8 +228,11 @@ void timer_init(void) {
     timer_calibrate_all();
 
     // Register handler and unmask IRQ 0 (System Timer)
-    register_interrupt_handler(INT_FIRST_INTERRUPT, timer_handler);
+    irq_register(INT_FIRST_INTERRUPT, (irq_handler_t)timer_handler);
     ioapic_unmask(0);
+
+    // Start the Local APIC timer in periodic mode (10ms interval) for scheduling
+    lapic_timer_periodic(10000, INT_FIRST_INTERRUPT);
 
     // Check for TSC Deadline support
     uint32_t a, b, c, d;
@@ -240,6 +246,13 @@ void timer_init(void) {
  * sleep_ms - Blocks execution for at least the specified number of milliseconds
  */
 void sleep_ms(uint64_t ms) {
+    if (ms == 0) return;
+
+    if (sched_current() != NULL) {
+        sched_sleep(ms);
+        return;
+    }
+
     if (g_tsc_ticks_per_ms > 0) {
         uint64_t target = tsc_read() + (ms * g_tsc_ticks_per_ms);
         while (tsc_read() < target) __asm__ volatile("pause");

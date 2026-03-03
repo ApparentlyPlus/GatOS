@@ -29,6 +29,7 @@
 #define VM_FLAG_EXEC  (1 << 1)
 #define VM_FLAG_USER  (1 << 2)
 #define VM_FLAG_MMIO  (1 << 3)
+#define VM_FLAG_LAZY  (1 << 4)
 
 // Return codes
 typedef enum {
@@ -73,6 +74,7 @@ vmm_status_t vmm_free(vmm_t* vmm, void* addr);
 vmm_t* vmm_create(uintptr_t alloc_base, uintptr_t alloc_end);
 void vmm_destroy(vmm_t* vmm);
 void vmm_switch(vmm_t* vmm);
+vmm_t* vmm_get_current(void);
 
 // Kernel VMM Management
 
@@ -91,6 +93,7 @@ bool vmm_table_is_empty(uint64_t *table);
 bool vmm_get_physical(vmm_t* vmm, void* virt, uint64_t* out_phys);
 vm_object* vmm_find_mapped_object(vmm_t* vmm, void* addr);
 bool vmm_check_flags(vmm_t* vmm, void* addr, size_t required_flags);
+bool vmm_check_buffer(vmm_t* vmm, const void* ptr, size_t size, size_t required_flags);
 
 // Page Table Manipulation
 
@@ -115,21 +118,12 @@ bool vmm_verify_integrity(vmm_t* vmm_pub);
 
 Notes on improving the VMM in the future:
 
-1. Add Lazy Allocation Support
-
-Currently we use immediate backing. I should add a flag for demand paging:
-
-#define VM_FLAG_LAZY (1 << 4)  // Don't back immediately
-
-In vmm_alloc(), skip the mapping loop if VM_FLAG_LAZY. Later, handle page faults to back on-demand.
-This would be crucial for efficient mmap() implementation later.
-
-2. Range Operations Could Be Optimized
+1. Range Operations Could Be Optimized
 
 vmm_map_range maps page by page. For large contiguous ranges, we could potentially use 
 larger page sizes (2MB/1GB pages).
 
-3. Add Copy on Write Support
+2. Add Copy on Write Support
 
 For fork() later, we'll want CoW:
 
@@ -143,7 +137,7 @@ if (fault_address has VM_FLAG_COW) {
     Remap with write permissions
 }
 
-4. Add vmm_resize()
+3. Add vmm_resize()
 
 Heap will need to grow, so good to have a function to handle that
 

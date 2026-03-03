@@ -97,9 +97,9 @@ static volatile uint32_t g_test_irq_count = 0;
 /*
  * test_irq_handler - Internal handler for delivery validation
  */
-static void test_irq_handler(cpu_context_t* ctx) {
-    (void)ctx;
+static cpu_context_t* test_irq_handler(cpu_context_t* ctx) {
     g_test_irq_count++;
+    return ctx;
 }
 
 /*
@@ -109,7 +109,7 @@ static bool test_lapic_timer_oneshot(void) {
     const uint8_t vector = 0xE0;
     g_test_irq_count = 0;
 
-    register_interrupt_handler(vector, test_irq_handler);
+    irq_register(vector, test_irq_handler);
     lapic_timer_oneshot(5000, vector); // 5ms
 
     // Timeout after 50ms
@@ -117,7 +117,7 @@ static bool test_lapic_timer_oneshot(void) {
         sleep_ms(1);
     }
 
-    unregister_interrupt_handler(vector);
+    irq_unregister(vector);
     TEST_ASSERT(g_test_irq_count == 1);
 
     return true;
@@ -130,14 +130,14 @@ static bool test_lapic_timer_periodic(void) {
     const uint8_t vector = 0xE1;
     g_test_irq_count = 0;
 
-    register_interrupt_handler(vector, test_irq_handler);
+    irq_register(vector, test_irq_handler);
     lapic_timer_periodic(10000, vector); // 10ms period
 
     // Wait for 105ms (should see ~10 interrupts)
     sleep_ms(105);
 
     lapic_timer_stop();
-    unregister_interrupt_handler(vector);
+    irq_unregister(vector);
 
     uint32_t final_count = g_test_irq_count;
     LOGF("[INFO] Periodic count (105ms): %u\n", final_count);

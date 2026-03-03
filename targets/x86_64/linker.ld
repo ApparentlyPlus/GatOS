@@ -18,6 +18,13 @@ SECTIONS
         *(.text .text.*) 
     }
 
+    .user_text : AT(ADDR(.user_text) - KERNEL_VIRTUAL_BASE) ALIGN(4K)
+    {
+        USER_TEXT_START = .;
+        *(.user_text .user_text.*)
+        USER_TEXT_END = .;
+    }
+
     .rodata : AT(ADDR(.rodata) - KERNEL_VIRTUAL_BASE) ALIGN(4K)
     {
         *(.rodata*)
