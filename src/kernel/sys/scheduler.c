@@ -22,6 +22,9 @@ static thread_t* g_current_thread = NULL;
 static thread_t* g_ready_queue_head = NULL;
 static thread_t* g_ready_queue_tail = NULL;
 
+static thread_t* g_sleep_queue_head = NULL;
+static thread_t* g_dead_queue_head = NULL;
+
 static thread_t* g_idle_thread = NULL;
 static process_t* g_idle_process = NULL;
 
@@ -94,6 +97,44 @@ void sched_add(thread_t* thread) {
 }
 
 /*
+ * sched_add_sleep - Adds a thread to the scheduler's sleep queue, sorted by wake time
+ */
+static void sched_add_sleep(thread_t* thread) {
+    if (!thread) return;
+    
+    thread->sched_next = NULL;
+    
+    if (!g_sleep_queue_head) {
+        g_sleep_queue_head = thread;
+        return;
+    }
+    
+    if (thread->sleep_until < g_sleep_queue_head->sleep_until) {
+        thread->sched_next = g_sleep_queue_head;
+        g_sleep_queue_head = thread;
+        return;
+    }
+    
+    thread_t* current = g_sleep_queue_head;
+    while (current->sched_next && current->sched_next->sleep_until <= thread->sleep_until) {
+        current = current->sched_next;
+    }
+    
+    thread->sched_next = current->sched_next;
+    current->sched_next = thread;
+}
+
+/*
+ * sched_add_dead - Adds a thread to the dead queue to be reaped
+ */
+static void sched_add_dead(thread_t* thread) {
+    if (!thread) return;
+    
+    thread->sched_next = g_dead_queue_head;
+    g_dead_queue_head = thread;
+}
+
+/*
  * sched_schedule - Picks the next thread to run and performs context switch
  */
 cpu_context_t* sched_schedule(cpu_context_t* current_context) {
@@ -101,7 +142,7 @@ cpu_context_t* sched_schedule(cpu_context_t* current_context) {
 
     uint64_t now = get_uptime_ms();
 
-    // Save current context
+    // Save current context and handle enqueueing based on new state
     if (g_current_thread) {
         g_current_thread->context = current_context;
         g_current_thread->fs_base = read_msr(MSR_FS_BASE);
@@ -111,54 +152,57 @@ cpu_context_t* sched_schedule(cpu_context_t* current_context) {
             if (g_current_thread != g_idle_thread) {
                 sched_add(g_current_thread);
             }
+        } else if (g_current_thread->state == THREAD_STATE_SLEEPING) {
+            sched_add_sleep(g_current_thread);
+        } else if (g_current_thread->state == THREAD_STATE_DEAD) {
+            sched_add_dead(g_current_thread);
         }
     }
 
-    // Capture the process before we potentially destroy it
+    // Wake up sleeping threads
+    while (g_sleep_queue_head && now >= g_sleep_queue_head->sleep_until) {
+        thread_t* thread = g_sleep_queue_head;
+        g_sleep_queue_head = thread->sched_next;
+        sched_add(thread);
+    }
+
+    // Capture the old process before we potentially destroy it
     process_t* old_process = g_current_thread ? g_current_thread->process : NULL;
 
-    // Wake up sleeping threads and cleanup dead threads
-    process_t* proc = process_get_all();
-    while (proc) {
-        process_t* next_proc = proc->next; // Save next in case proc is destroyed
+    // Process dead threads (reaping)
+    while (g_dead_queue_head) {
+        thread_t* thread = g_dead_queue_head;
+        g_dead_queue_head = thread->sched_next;
         
-        thread_t** prev_thread = &proc->threads;
-        thread_t* thread = proc->threads;
+        process_t* proc = thread->process;
         
-        while (thread) {
-            if (thread->state == THREAD_STATE_SLEEPING && now >= thread->sleep_until) {
-                thread->state = THREAD_STATE_READY;
-                sched_add(thread);
-            } else if (thread->state == THREAD_STATE_DEAD) {
-                // Remove from process thread list
-                *prev_thread = thread->next;
-                thread_t* to_free = thread;
-                thread = thread->next;
-                
-                // If we are destroying the thread we just came from, clear the global pointer
-                if (to_free == g_current_thread) {
-                    g_current_thread = NULL;
+        // Remove thread from process thread list
+        if (proc) {
+            if (proc->threads == thread) {
+                proc->threads = thread->next;
+            } else {
+                thread_t* curr = proc->threads;
+                while (curr && curr->next != thread) {
+                    curr = curr->next;
                 }
-                
-                // If this was the current thread, it's safe to destroy now 
-                // because its context is already saved and we are about to switch.
-                thread_destroy(to_free);
-                continue;
+                if (curr) {
+                    curr->next = thread->next;
+                }
             }
-            
-            prev_thread = &thread->next;
-            thread = thread->next;
         }
-
-        // Reap processes with no threads
+        
+        if (thread == g_current_thread) {
+            g_current_thread = NULL;
+        }
+        
+        thread_destroy(thread);
+        
+        // Reap process if it has no more threads
         // We protect PID 1 (Idle) and PID 2 (Kernel Main)
-        if (proc->threads == NULL && proc->pid > 2) {
-            // If we are reaping the process we just came from, clear the old_process pointer
+        if (proc && proc->threads == NULL && proc->pid > 2) {
             if (proc == old_process) {
                 old_process = NULL;
             }
-
-            // Inform the user via the process's terminal
             if (proc->tty) {
                 char term_msg[128];
                 int len = snprintf_(term_msg, sizeof(term_msg), 
@@ -168,8 +212,6 @@ cpu_context_t* sched_schedule(cpu_context_t* current_context) {
             }
             process_destroy(proc);
         }
-
-        proc = next_proc;
     }
 
     // Pick next thread from ready queue
