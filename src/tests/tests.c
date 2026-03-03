@@ -13,6 +13,7 @@
 #include <arch/x86_64/memory/paging.h>
 #include <arch/x86_64/multiboot2.h>
 #include <arch/x86_64/cpu/cpu.h>
+#include <arch/x86_64/cpu/gdt.h>
 
 #include <kernel/drivers/console.h>
 #include <kernel/drivers/stdio.h>
@@ -76,6 +77,8 @@ void kernel_test(void* mb_info, char* KERNEL_VERSION) {
 	}
     
     QEMU_LOG("PMM Initialized (Tests deferred)", TOTAL_DBG);
+
+    gdt_init();
 
 	slab_status_t slab_status = slab_init();
 	if(slab_status != SLAB_OK){

@@ -160,8 +160,8 @@ thread_t* thread_create(process_t* process, const char* name, void (*entry)(void
         thread->context->rsi = (uint64_t)arg;
 
         if (user_rsp == 0) {
-            // Allocate userspace stack from the process VMM directly
-            vmm_status_t alloc_status = vmm_alloc(process->vmm, USER_STACK_SIZE, VM_FLAG_USER | VM_FLAG_WRITE, NULL, &thread->user_stack);
+            // Allocate userspace stack lazily from the process VMM directly
+            vmm_status_t alloc_status = vmm_alloc(process->vmm, USER_STACK_SIZE, VM_FLAG_USER | VM_FLAG_WRITE | VM_FLAG_LAZY, NULL, &thread->user_stack);
 
             if (alloc_status != VMM_OK || !thread->user_stack) {
                 kfree(thread->kernel_stack);
@@ -254,8 +254,6 @@ void process_destroy(process_t* process) {
         thread_destroy(thread);
         thread = next;
     }
-
-    // User heap no longer exists, memory is freed when vmm_destroy is called
 
     if (process->vmm) {
         vmm_destroy(process->vmm);

@@ -69,6 +69,13 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
             const char* buf = (const char*)registers[9];
             size_t len = (size_t)registers[10];
 
+            if (!vmm_check_buffer(current->process->vmm, buf, len, VM_FLAG_USER)) {
+                LOGF("[SYSCALL] SYS_WRITE: Invalid buffer pointer 0x%lx (len: %zu) from thread '%s' (PID %u)\n", 
+                     (uintptr_t)buf, len, current->name, current->process ? current->process->pid : 0);
+                sched_exit();
+                break;
+            }
+
             // We need to verify the buffer is in user space
             // For now, let's just use the process's TTY if it has one.
             if (current->process && current->process->tty) {

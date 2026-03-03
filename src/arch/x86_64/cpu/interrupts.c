@@ -18,6 +18,8 @@
 #include <kernel/debug.h>
 #include <kernel/misc.h>
 #include <libc/string.h>
+#include <kernel/memory/pmm.h>
+#include <arch/x86_64/memory/paging.h>
 
 #pragma region Types and Globals
 
@@ -228,6 +230,46 @@ cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
             case INT_ALIGNMENT_CHECK:      panic_msg = "Alignment check"; break;
             case INT_MACHINE_CHECK:        panic_msg = "Machine check"; break;
             case INT_SIMD_ERROR:           panic_msg = "SIMD exception"; break;
+        }
+
+        // Demand Paging: check process VMM first, then kernel VMM as fallback
+        if (vec == INT_PAGE_FAULT) {
+            uint64_t cr2;
+            __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+
+            vmm_t* demand_vmm = NULL;
+            vm_object* demand_obj = NULL;
+
+            thread_t* current = sched_current();
+            if (current && current->process && current->process->vmm) {
+                demand_obj = vmm_find_mapped_object(current->process->vmm, (void*)cr2);
+                if (demand_obj && (demand_obj->flags & VM_FLAG_LAZY)) {
+                    demand_vmm = current->process->vmm;
+                }
+            }
+
+            if (!demand_vmm) {
+                demand_obj = vmm_find_mapped_object(vmm_kernel_get(), (void*)cr2);
+                if (demand_obj && (demand_obj->flags & VM_FLAG_LAZY)) {
+                    demand_vmm = vmm_kernel_get();
+                }
+            }
+
+            if (demand_vmm && demand_obj) {
+                uint64_t phys_base;
+                if (pmm_alloc(PAGE_SIZE, &phys_base) == PMM_OK) {
+                    uint64_t page_aligned_cr2 = cr2 & ~(PAGE_SIZE - 1);
+                    vmm_status_t status = vmm_map_page(demand_vmm, phys_base, (void*)page_aligned_cr2, demand_obj->flags);
+                    if (status == VMM_OK) {
+                        return context; // Success, retry instruction
+                    } else if (status == VMM_ERR_ALREADY_MAPPED) {
+                        pmm_free(phys_base, PAGE_SIZE); // Already backed by another CPU
+                        return context;
+                    } else {
+                        pmm_free(phys_base, PAGE_SIZE);
+                    }
+                }
+            }
         }
 
         // Check if the fault came from Ring 3

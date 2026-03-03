@@ -530,6 +530,13 @@ vmm_status_t vmm_alloc(vmm_t* vmm_pub, size_t length, size_t flags, void* arg,
         vmm->objects_internal = obj;
     }
 
+    // Handle lazy allocation
+    if (flags & VM_FLAG_LAZY) {
+        *out_addr = (void*)obj->public.base;
+        spinlock_release(&vmm->lock, lock_flags);
+        return VMM_OK;
+    }
+
     // Back with physical memory (immediate backing)
     uint64_t phys_base = 0;
     if (flags & VM_FLAG_MMIO) {
@@ -1168,6 +1175,55 @@ bool vmm_check_flags(vmm_t* vmm_pub, void* addr, size_t required_flags) {
     if (!obj) return false;
 
     return (obj->flags & required_flags) == required_flags;
+}
+
+/*
+ * vmm_check_buffer - Checks if a contiguous virtual buffer is fully mapped with the required flags
+ */
+bool vmm_check_buffer(vmm_t* vmm_pub, const void* ptr, size_t size, size_t required_flags) {
+    vmm_internal* vmm = vmm_get_instance(vmm_pub);
+    if (!vmm || !ptr || size == 0) return false;
+
+    bool lock_flags = spinlock_acquire(&vmm->lock);
+
+    uintptr_t start = (uintptr_t)ptr;
+    uintptr_t end = start + size;
+    uintptr_t current = start;
+
+    while (current < end) {
+        vm_object_internal* cur_obj = vmm->objects_internal;
+        bool found = false;
+
+        while (cur_obj) {
+            if (!vm_object_validate(cur_obj)) {
+                spinlock_release(&vmm->lock, lock_flags);
+                return false;
+            }
+
+            uintptr_t obj_start = cur_obj->public.base;
+            uintptr_t obj_end = obj_start + cur_obj->public.length;
+
+            if (current >= obj_start && current < obj_end) {
+                if ((cur_obj->public.flags & required_flags) != required_flags) {
+                    spinlock_release(&vmm->lock, lock_flags);
+                    return false;
+                }
+                
+                current = (end < obj_end) ? end : obj_end;
+                found = true;
+                break;
+            }
+            cur_obj = cur_obj->next_internal;
+        }
+
+        if (!found) {
+            spinlock_release(&vmm->lock, lock_flags);
+            return false;
+        }
+    }
+
+    spinlock_release(&vmm->lock, lock_flags);
+    return true;
 }
 
 #pragma endregion

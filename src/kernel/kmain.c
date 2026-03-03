@@ -46,28 +46,37 @@ static uint8_t multiboot_buffer[8 * 1024];
 
 userspace void tA(void* arg) {
     (void)arg;
-    const char* msg = "[Thread A] Hello from userspace via SYS_WRITE!\n";
-    // Trigger SYS_WRITE (rax=2, rdi=buffer, rsi=length)
+    char msg[] = "[Thread A] Hello from userspace via SYS_WRITE!\n";
+    uint64_t len = sizeof(msg) - 1;
     __asm__ volatile (
         "mov $2, %%rax\n"
         "mov %0, %%rdi\n"
         "mov %1, %%rsi\n"
         "syscall\n"
         :
-        : "r"(msg), "r"((uint64_t)47)
+        : "r"(msg), "r"(len)
         : "rax", "rdi", "rsi", "rcx", "r11"
     );
 }
 
 userspace void tB(void* arg) {
-	(void)arg;
-    // Wait a bit to ensure others print first
-	for(volatile int i = 0; i < 2000000; i++);
-    
-    // Trigger a Page Fault by writing to an unmapped address
-    const char* msg = "[Thread B] About to trigger a intentional Segfault...\n";
-    __asm__ volatile ("mov $2, %%rax; mov %0, %%rdi; mov $53, %%rsi; syscall" :: "r"(msg) : "rax", "rdi", "rsi", "rcx", "r11");
+    (void)arg;
+    // Wait a bit to ensure tA prints first
+    for (volatile int i = 0; i < 2000000; i++);
 
+    char msg[] = "[Thread B] About to trigger an intentional Segfault...\n";
+    uint64_t len = sizeof(msg) - 1;
+    __asm__ volatile (
+        "mov $2, %%rax\n"
+        "mov %0, %%rdi\n"
+        "mov %1, %%rsi\n"
+        "syscall\n"
+        :
+        : "r"(msg), "r"(len)
+        : "rax", "rdi", "rsi", "rcx", "r11"
+    );
+
+    // Trigger a Page Fault by writing to an unmapped address
     volatile int* p = (int*)0xDEADC0DE;
     *p = 1337;
 }

@@ -654,6 +654,35 @@ static bool test_nx_bit_enforcement(void) {
     return true;
 }
 
+// Tests lazy allocation (demand paging) by verifying the page is unmapped initially and becomes mapped after access.
+static bool test_demand_paging_lazy(void) {
+    tracker_reset();
+    vmm_t* vmm = vmm_kernel_get();
+    void* ptr;
+    size_t size = TEST_PAGE_SIZE * 4;
+
+    TEST_ASSERT_STATUS(vmm_alloc(vmm, size, VM_FLAG_WRITE | VM_FLAG_LAZY, NULL, &ptr), VMM_OK);
+    tracker_add_alloc(vmm, ptr, size);
+
+    // Ensure it's NOT mapped yet
+    TEST_ASSERT(!inspect_pte(vmm->pt_root, ptr, NULL, NULL));
+
+    // Access it. This should trigger a page fault, which the handler should resolve by mapping it.
+    volatile uint64_t* p = (volatile uint64_t*)ptr;
+    *p = 0x1ADBABE;
+    
+    // Now it should be mapped
+    TEST_ASSERT(inspect_pte(vmm->pt_root, ptr, NULL, NULL));
+    TEST_ASSERT(*p == 0x1ADBABE);
+    
+    // The rest of the allocation should still be unmapped
+    void* ptr2 = (void*)((uintptr_t)ptr + TEST_PAGE_SIZE);
+    TEST_ASSERT(!inspect_pte(vmm->pt_root, ptr2, NULL, NULL));
+
+    tracker_cleanup();
+    return true;
+}
+
 #pragma endregion
 
 #pragma region Test Runner
@@ -705,6 +734,7 @@ void test_vmm(void) {
     run_test("Context Switching", test_context_switch);
     run_test("Page Table Cleanup", test_pt_cleanup);
     run_test("NX Bit Enforcement", test_nx_bit_enforcement);
+    run_test("Lazy Alloc (Demand Paging)", test_demand_paging_lazy);
     
     // Stress Tests
     run_test("Fragmentation Stress", test_fragmentation_stress);
