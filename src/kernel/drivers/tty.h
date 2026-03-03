@@ -41,49 +41,14 @@ typedef struct tty {
 
 // Public API
 
-/*
- * tty_create - Dynamically allocates and initializes a new TTY and Console.
- */
 tty_t* tty_create(void);
-
-/*
- * tty_destroy - Removes a TTY from the system and frees its resources.
- */
 void tty_destroy(tty_t* tty);
-
-/*
- * tty_input - Routes hardware input into the TTY's line discipline.
- */
 void tty_input(tty_t* tty, char c);
-
-/*
- * tty_push_char_raw - Internal helper to push characters to the read buffer.
- */
 void tty_push_char_raw(tty_t* tty, char c);
-
-/*
- * tty_read_char - Blocks until a character is available and returns it.
- */
 char tty_read_char(tty_t* tty);
-
-/*
- * tty_read - Reads up to count bytes into buf (Canonical mode).
- */
 size_t tty_read(tty_t* tty, char* buf, size_t count);
-
-/*
- * tty_write - Writes a buffer of characters to the TTY's console.
- */
 void tty_write(tty_t* tty, const char* buf, size_t count);
-
-/*
- * tty_switch - Sets the specified TTY as the active foreground terminal.
- */
 void tty_switch(tty_t* tty);
-
-/*
- * tty_cycle - Cycles the active focus to the next TTY in the linked list.
- */
 void tty_cycle(void);
 
 // Global active TTY

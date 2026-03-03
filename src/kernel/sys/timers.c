@@ -10,14 +10,14 @@
 
 #include <arch/x86_64/cpu/interrupts.h>
 #include <arch/x86_64/memory/paging.h>
-#include <arch/x86_64/cpu/io.h>
 #include <kernel/drivers/serial.h>
+#include <kernel/sys/scheduler.h>
 #include <arch/x86_64/cpu/cpu.h>
+#include <arch/x86_64/cpu/io.h>
 #include <kernel/memory/vmm.h>
 #include <kernel/sys/timers.h>
 #include <kernel/sys/acpi.h>
 #include <kernel/sys/apic.h>
-#include <kernel/sys/scheduler.h>
 #include <kernel/debug.h>
 #include <libc/string.h>
 

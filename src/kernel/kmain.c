@@ -19,66 +19,52 @@
 #include <kernel/drivers/serial.h>
 #include <kernel/drivers/stdio.h>
 #include <kernel/drivers/keyboard.h>
-#include <kernel/drivers/tty.h>
-#include <kernel/drivers/input.h>
-#include <kernel/memory/heap.h>
-#include <kernel/memory/slab.h>
-#include <kernel/memory/pmm.h>
-#include <kernel/memory/vmm.h>
-#include <kernel/sys/acpi.h>
-#include <kernel/sys/timers.h>
-#include <kernel/sys/process.h>
 #include <kernel/sys/scheduler.h>
 #include <kernel/sys/userspace.h>
+#include <kernel/drivers/input.h>
+#include <kernel/drivers/tty.h>
+#include <kernel/memory/heap.h>
+#include <kernel/memory/slab.h>
+#include <kernel/sys/process.h>
 #include <kernel/sys/syscall.h>
+#include <kernel/memory/pmm.h>
+#include <kernel/memory/vmm.h>
+#include <kernel/sys/timers.h>
+#include <kernel/sys/acpi.h>
 #include <kernel/debug.h>
 #include <kernel/misc.h>
 #include <libc/string.h>
 
-#define TOTAL_DBG 17
+#define TOTAL_DBG 24
 
-static char* KERNEL_VERSION = "v1.8.9-alpha";
+static char* KERNEL_VERSION = "v1.9.0-alpha";
 
 // If it is a test build, the multiboot buffer will be defined in tests.c
 #ifndef TEST_BUILD
 static uint8_t multiboot_buffer[8 * 1024];
 #endif
 
-userspace void tA(void* arg) {
+/*
+ * tA - Sample thread function A for showcase
+ */
+void tA(void* arg) {
     (void)arg;
-    char msg[] = "[Thread A] Hello from userspace via SYS_WRITE!\n";
-    uint64_t len = sizeof(msg) - 1;
-    __asm__ volatile (
-        "mov $2, %%rax\n"
-        "mov %0, %%rdi\n"
-        "mov %1, %%rsi\n"
-        "syscall\n"
-        :
-        : "r"(msg), "r"(len)
-        : "rax", "rdi", "rsi", "rcx", "r11"
-    );
+    for (int i = 1; i < 6; i++) {
+		printf("Hello from Thread A (iteration %d)\n", i);
+		sleep_ms(500);
+	}
 }
 
-userspace void tB(void* arg) {
-    (void)arg;
-    // Wait a bit to ensure tA prints first
-    for (volatile int i = 0; i < 2000000; i++);
-
-    char msg[] = "[Thread B] About to trigger an intentional Segfault...\n";
-    uint64_t len = sizeof(msg) - 1;
-    __asm__ volatile (
-        "mov $2, %%rax\n"
-        "mov %0, %%rdi\n"
-        "mov %1, %%rsi\n"
-        "syscall\n"
-        :
-        : "r"(msg), "r"(len)
-        : "rax", "rdi", "rsi", "rcx", "r11"
-    );
-
-    // Trigger a Page Fault by writing to an unmapped address
-    volatile int* p = (int*)0xDEADC0DE;
-    *p = 1337;
+/*
+ * tB - Sample thread function B for showcase
+ */
+void tB(void* arg) {
+	(void)arg;
+	for (int i = 1; i < 6; i++) {
+		printf("Greetings from Thread B (iteration %d)\n", i);
+		sleep_ms(1000);
+	}
+	printf("You can press ALT+F4 to terminate this tty session and see how the kernel handles it!\n");
 }
 
 /*
@@ -87,11 +73,11 @@ userspace void tB(void* arg) {
 void kernel_main(void* mb_info) {
 
 	// If this is a test build, run the test suite instead
-#ifdef TEST_BUILD
-#include <tests/tests.h>
-	kernel_test(mb_info, KERNEL_VERSION);
-	return;
-#else
+	#ifdef TEST_BUILD
+	#include <tests/tests.h>
+		kernel_test(mb_info, KERNEL_VERSION);
+		return;
+	#else
 
 	// Initialize serial (COM1) for QEMU output
 
@@ -210,10 +196,12 @@ void kernel_main(void* mb_info) {
 
 	// Initialize Syscall Interface
     syscall_init();
+	QEMU_LOG("Initialized Syscall Interface", TOTAL_DBG);
 
 	// Initialize Framebuffer Console hardware
 
 	console_init(&multiboot);
+	QEMU_LOG("Initialized Framebuffer Console hardware", TOTAL_DBG);
 
 	// Initialize Kernel TTY
     tty_t* k_tty = tty_create();
@@ -222,16 +210,29 @@ void kernel_main(void* mb_info) {
 	// Default to Kernel TTY
 	g_active_tty = k_tty;
     g_kernel_tty = k_tty; // Protect this from ALT+F4
+	QEMU_LOG("Initialized Kernel TTY", TOTAL_DBG);
 
 	// Initialize input handling subsystem
 
 	input_init();
+	QEMU_LOG("Initialized input handling subsystem", TOTAL_DBG);
 
 	print_banner(KERNEL_VERSION);
-	printf("[KERNEL] Dynamic TTY system initialized.\n");
+	printf("[KERNEL] CPU initialization complete (x86_64, long mode).\n");
+	printf("[KERNEL] ACPI revision %u detected (%s supported).\n", 
+           acpi_get_rsdp()->Revision, 
+           acpi_is_xsdt_supported() ? "XSDT" : "RSDT");
+	printf("[KERNEL] Advanced Programmable Interrupt Controller (APIC) routed.\n");
+	printf("[KERNEL] Physical Memory Manager (PMM) configured (RAM mapped via Physmap).\n");
+	printf("[KERNEL] Virtual Memory Manager (VMM) active (Higher Half).\n");
+	printf("[KERNEL] Heap and Slab allocators initialized.\n");
+	printf("[KERNEL] Syscall Interface (MSRs) enabled.\n");
+	printf("[KERNEL] Framebuffer resolution %dx%dx%d initialized.\n", 
+           multiboot_get_framebuffer(&multiboot)->width, 
+           multiboot_get_framebuffer(&multiboot)->height,
+           multiboot_get_framebuffer(&multiboot)->bpp);
+	printf("[KERNEL] Dynamic TTY subsystem online.\n");
 	printf("[KERNEL] Use ALT+Tab to cycle between available consoles.\n");
-	printf("[KERNEL] Framebuffer resolution %dx%d\n", multiboot_get_framebuffer(&multiboot)->width, multiboot_get_framebuffer(&multiboot)->height);
-	printf("[KERNEL] All memory subsystems initialized successfully\n");
 
 	// Initialize Keyboard
 
@@ -239,22 +240,25 @@ void kernel_main(void* mb_info) {
 	irq_register(INT_FIRST_INTERRUPT + 1, (irq_handler_t)keyboard_handler);
 	ioapic_redirect(1, INT_FIRST_INTERRUPT + 1, lapic_get_id(), 0);
 	ioapic_unmask(1);
+	QEMU_LOG("Initialized Keyboard and routed IRQ 1", TOTAL_DBG);
 	printf("[KBD] Keyboard IRQ 1 routed and unmasked.\n");
 
 	// Initialize Multitasking
     process_init();
     sched_init();
+	QEMU_LOG("Initialized Multitasking (Process & Scheduler)", TOTAL_DBG);
 
     // Create test threads
     // Use NULL for test_proc to create its own TTY
     process_t* test_proc = process_create("test_proc", NULL);
-    sched_add(thread_create(test_proc, "thread_a", tA, NULL, true, 0));
-    sched_add(thread_create(test_proc, "thread_b", tB, NULL, true, 0));
+    sched_add(thread_create(test_proc, "thread_a", tA, NULL, false, 0));
+	sched_add(thread_create(test_proc, "thread_b", tB, NULL, false, 0));
+	QEMU_LOG("Created test_proc and test threads", TOTAL_DBG);
 
 	// Enable interrupts
 
 	enable_interrupts();
-	QEMU_LOG("Enabled interrupts using asm(\"sti\")", TOTAL_DBG);
+	QEMU_LOG("Enabled interrupts", TOTAL_DBG);
 
 	// All subsystems initialized successfully
 	QEMU_LOG("Reached kernel end", TOTAL_DBG);
