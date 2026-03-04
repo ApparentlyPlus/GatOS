@@ -12,6 +12,8 @@ on:
 jobs:
   macos-test:
     runs-on: self-hosted
+    env:
+      RUNNER_TOOL_CACHE: /Users/github-runner/actions-runner/_work/_tool
     
     steps:
     - name: Checkout code
