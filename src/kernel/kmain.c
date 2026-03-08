@@ -14,7 +14,6 @@
 #include <arch/x86_64/cpu/cpu.h>
 #include <kernel/sys/apic.h>
 
-
 #include <kernel/drivers/console.h>
 #include <kernel/drivers/serial.h>
 #include <kernel/drivers/keyboard.h>
@@ -31,8 +30,9 @@
 #include <kernel/sys/timers.h>
 #include <kernel/sys/acpi.h>
 #include <kernel/debug.h>
-#include <kernel/misc.h>
 #include <klibc/string.h>
+#include <kernel/umain.h>
+#include <kernel/misc.h>
 #include <klibc/stdio.h>
 
 #define TOTAL_DBG 24
@@ -43,29 +43,6 @@ static char* KERNEL_VERSION = "v1.9.1-alpha";
 #ifndef TEST_BUILD
 static uint8_t multiboot_buffer[8 * 1024];
 #endif
-
-/*
- * tA - Sample thread function A for showcase
- */
-void tA(void* arg) {
-    (void)arg;
-    for (int i = 1; i < 6; i++) {
-		kprintf("Hello from Thread A (iteration %d)\n", i);
-		sleep_ms(500);
-	}
-}
-
-/*
- * tB - Sample thread function B for showcase
- */
-void tB(void* arg) {
-	(void)arg;
-	for (int i = 1; i < 6; i++) {
-		kprintf("Greetings from Thread B (iteration %d)\n", i);
-		sleep_ms(1000);
-	}
-	kprintf("You can press ALT+F4 to terminate this tty session and see how the kernel handles it!\n");
-}
 
 /*
  * kernel_main - Main entry point for the GatOS kernel
@@ -248,12 +225,9 @@ void kernel_main(void* mb_info) {
     sched_init();
 	QEMU_LOG("Initialized Multitasking (Process & Scheduler)", TOTAL_DBG);
 
-    // Create test threads
-    // Use NULL for test_proc to create its own TTY
-    process_t* test_proc = process_create("test_proc", NULL);
-    sched_add(thread_create(test_proc, "thread_a", tA, NULL, false, 0));
-	sched_add(thread_create(test_proc, "thread_b", tB, NULL, false, 0));
-	QEMU_LOG("Created test_proc and test threads", TOTAL_DBG);
+	// Create userspace processes and threads
+	uapps();
+	QEMU_LOG("Created userspace processes and threads", TOTAL_DBG);
 
 	// Enable interrupts
 

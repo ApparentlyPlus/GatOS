@@ -846,9 +846,13 @@ int uprintf_(const char* format, ...)
 {
   va_list va;
   va_start(va, format);
-  char buffer[1];
-  const int ret = _vsnprintf(_out_char, buffer, (size_t)-1, format, va);
+  char buffer[1024];
+  const int ret = _vsnprintf(_out_buffer, buffer, sizeof(buffer), format, va);
   va_end(va);
+  if (ret > 0) {
+      size_t to_write = ((size_t)ret < sizeof(buffer)) ? (size_t)ret : (sizeof(buffer) - 1);
+      sys_write(buffer, to_write);
+  }
   return ret;
 }
 
@@ -875,8 +879,13 @@ int usnprintf_(char* buffer, size_t count, const char* format, ...)
 
 int uvprintf_(const char* format, va_list va)
 {
-  char buffer[1];
-  return _vsnprintf(_out_char, buffer, (size_t)-1, format, va);
+  char buffer[1024];
+  const int ret = _vsnprintf(_out_buffer, buffer, sizeof(buffer), format, va);
+  if (ret > 0) {
+      size_t to_write = ((size_t)ret < sizeof(buffer)) ? (size_t)ret : (sizeof(buffer) - 1);
+      sys_write(buffer, to_write);
+  }
+  return ret;
 }
 
 

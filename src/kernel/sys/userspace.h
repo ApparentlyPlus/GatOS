@@ -22,12 +22,19 @@
 // Linker symbols for the userspace regions
 extern uint8_t USER_TEXT_START;
 extern uint8_t USER_TEXT_END;
+extern uint8_t USER_TEXT_LOAD_ADDR;
+
 extern uint8_t USER_RODATA_START;
 extern uint8_t USER_RODATA_END;
+extern uint8_t USER_RODATA_LOAD_ADDR;
+
 extern uint8_t USER_DATA_START;
 extern uint8_t USER_DATA_END;
+extern uint8_t USER_DATA_LOAD_ADDR;
+
 extern uint8_t USER_BSS_START;
 extern uint8_t USER_BSS_END;
+extern uint8_t USER_BSS_LOAD_ADDR;
 
 // Global entry point for userspace threads
 userspace void userspace_start(void (*entry)(void*), void* arg);

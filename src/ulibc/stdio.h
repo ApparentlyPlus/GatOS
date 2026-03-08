@@ -31,7 +31,7 @@ void u_putchar(char character);
  * \param format A string that specifies the format of the output
  * \return The number of characters that are written into the array, not counting the terminating null character
  */
-#define printf printf_
+#define printf uprintf_
 int uprintf_(const char* format, ...);
 
 
@@ -42,7 +42,7 @@ int uprintf_(const char* format, ...);
  * \param format A string that specifies the format of the output
  * \return The number of characters that are WRITTEN into the buffer, not counting the terminating null character
  */
-#define sprintf sprintf_
+#define sprintf usprintf_
 int usprintf_(char* buffer, const char* format, ...);
 
 
@@ -56,8 +56,8 @@ int usprintf_(char* buffer, const char* format, ...);
  *         null character. A value equal or larger than count indicates truncation. Only when the returned value
  *         is non-negative and less than count, the string has been completely written.
  */
-#define snprintf  snprintf_
-#define vsnprintf vsnprintf_
+#define snprintf  usnprintf_
+#define vsnprintf uvsnprintf_
 int  usnprintf_(char* buffer, size_t count, const char* format, ...);
 int uvsnprintf_(char* buffer, size_t count, const char* format, va_list va);
 
@@ -68,7 +68,7 @@ int uvsnprintf_(char* buffer, size_t count, const char* format, va_list va);
  * \param va A value identifying a variable arguments list
  * \return The number of characters that are WRITTEN into the buffer, not counting the terminating null character
  */
-#define vprintf vprintf_
+#define vprintf uvprintf_
 int uvprintf_(const char* format, va_list va);
 
 
@@ -95,7 +95,7 @@ int u_getchar(void);
  * \param format A string that specifies the format of the input
  * \return The number of successfully matched and assigned input items
  */
-#define scanf scanf_
+#define scanf uscanf_
 int uscanf_(const char* format, ...);
 
 
@@ -105,5 +105,5 @@ int uscanf_(const char* format, ...);
  * \param va A value identifying a variable arguments list
  * \return The number of successfully matched and assigned input items
  */
-#define vscanf vscanf_
+#define vscanf uvscanf_
 int uvscanf_(const char* format, va_list va);

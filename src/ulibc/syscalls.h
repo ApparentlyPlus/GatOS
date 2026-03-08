@@ -15,8 +15,11 @@
 #define SYS_MUNMAP 4
 #define SYS_SET_FS_BASE 5
 #define SYS_YIELD 6
+#define SYS_SLEEP_MS 7
 
-static inline uint64_t syscall0(uint64_t num) {
+#define userspace __attribute__((section(".user_text")))
+
+userspace static inline uint64_t syscall0(uint64_t num) {
     uint64_t ret;
     __asm__ volatile(
         "syscall"
@@ -27,7 +30,7 @@ static inline uint64_t syscall0(uint64_t num) {
     return ret;
 }
 
-static inline uint64_t syscall1(uint64_t num, uint64_t arg1) {
+userspace static inline uint64_t syscall1(uint64_t num, uint64_t arg1) {
     uint64_t ret;
     __asm__ volatile(
         "syscall"
@@ -38,7 +41,7 @@ static inline uint64_t syscall1(uint64_t num, uint64_t arg1) {
     return ret;
 }
 
-static inline uint64_t syscall2(uint64_t num, uint64_t arg1, uint64_t arg2) {
+userspace static inline uint64_t syscall2(uint64_t num, uint64_t arg1, uint64_t arg2) {
     uint64_t ret;
     __asm__ volatile(
         "syscall"
@@ -49,7 +52,7 @@ static inline uint64_t syscall2(uint64_t num, uint64_t arg1, uint64_t arg2) {
     return ret;
 }
 
-static inline uint64_t syscall3(uint64_t num, uint64_t arg1, uint64_t arg2, uint64_t arg3) {
+userspace static inline uint64_t syscall3(uint64_t num, uint64_t arg1, uint64_t arg2, uint64_t arg3) {
     uint64_t ret;
     __asm__ volatile(
         "syscall"
@@ -60,27 +63,31 @@ static inline uint64_t syscall3(uint64_t num, uint64_t arg1, uint64_t arg2, uint
     return ret;
 }
 
-static inline void sys_exit(void) {
+userspace static inline void sys_exit(void) {
     syscall0(SYS_EXIT);
     while (1);
 }
 
-static inline void sys_write(const char* buf, size_t len) {
+userspace static inline void sys_write(const char* buf, size_t len) {
     syscall2(SYS_WRITE, (uint64_t)buf, (uint64_t)len);
 }
 
-static inline void* sys_mmap(void* addr, size_t length, size_t flags) {
+userspace static inline void* sys_mmap(void* addr, size_t length, size_t flags) {
     return (void*)syscall3(SYS_MMAP, (uint64_t)addr, (uint64_t)length, (uint64_t)flags);
 }
 
-static inline void sys_munmap(void* addr) {
+userspace static inline void sys_munmap(void* addr) {
     syscall1(SYS_MUNMAP, (uint64_t)addr);
 }
 
-static inline void sys_set_fs_base(uint64_t base) {
+userspace static inline void sys_set_fs_base(uint64_t base) {
     syscall1(SYS_SET_FS_BASE, base);
 }
 
-static inline void sys_yield(void) {
+userspace static inline void sys_yield(void) {
     syscall0(SYS_YIELD);
+}
+
+userspace static inline void sys_sleep_ms(uint64_t ms) {
+    syscall1(SYS_SLEEP_MS, ms);
 }
