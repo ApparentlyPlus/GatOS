@@ -36,6 +36,9 @@ SECTIONS
     {
         USER_DATA_START = .;
         *(.user_data .user_data.*)
+        *ulibc*math.o(.data .data.*)
+        *ulibc*stdio.o(.data .data.*)
+        *ulibc*string.o(.data .data.*)
         USER_DATA_END = .;
     }
 

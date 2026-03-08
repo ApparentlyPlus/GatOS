@@ -120,6 +120,10 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
             registers[14] = 0;
             break;
         }
+
+        case SYS_YIELD:
+            sched_yield();
+            break;
             
         default:
             LOGF("[SYSCALL] Unknown syscall: %lu from thread '%s' (PID %u)\n", 

@@ -15,5 +15,6 @@
 #define SYS_MMAP 3
 #define SYS_MUNMAP 4
 #define SYS_SET_FS_BASE 5
+#define SYS_YIELD 6
 
 void syscall_init(void);
