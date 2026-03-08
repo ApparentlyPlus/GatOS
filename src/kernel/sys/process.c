@@ -83,20 +83,49 @@ process_t* process_create(const char* name, tty_t* existing_tty) {
         return NULL;
     }
 
-    // Map the kernel's .user_text into the process's VMM at USER_CODE_VIRT_ADDR
+    // Map the kernel's userspace sections into the process's VMM at USER_CODE_VIRT_ADDR
     // Every process sees the same code, but it only exists once in physical RAM.
     uintptr_t user_text_phys = (uintptr_t)KERNEL_V2P(&USER_TEXT_START);
-    size_t user_text_size = (uintptr_t)&USER_TEXT_END - (uintptr_t)&USER_TEXT_START;
-    user_text_size = align_up(user_text_size, PAGE_SIZE);
+    size_t user_text_size = align_up((uintptr_t)&USER_TEXT_END - (uintptr_t)&USER_TEXT_START, PAGE_SIZE);
+    if (user_text_size > 0) {
+        vmm_status_t map_status = vmm_map_range(proc->vmm, user_text_phys, 
+                                                (void*)USER_CODE_VIRT_ADDR, 
+                                                user_text_size, 
+                                                VM_FLAG_USER | VM_FLAG_EXEC);
+        if (map_status != VMM_OK) goto map_fail;
+    }
 
-    vmm_status_t map_status = vmm_map_range(proc->vmm, user_text_phys, 
-                                            (void*)USER_CODE_VIRT_ADDR, 
-                                            user_text_size, 
-                                            VM_FLAG_USER | VM_FLAG_EXEC);
-    if (map_status != VMM_OK) {
-        vmm_destroy(proc->vmm);
-        kfree(proc);
-        return NULL;
+    uintptr_t user_rodata_phys = (uintptr_t)KERNEL_V2P(&USER_RODATA_START);
+    size_t user_rodata_size = align_up((uintptr_t)&USER_RODATA_END - (uintptr_t)&USER_RODATA_START, PAGE_SIZE);
+    if (user_rodata_size > 0) {
+        uintptr_t user_rodata_virt = USER_CODE_VIRT_ADDR + (user_rodata_phys - user_text_phys);
+        vmm_status_t map_status = vmm_map_range(proc->vmm, user_rodata_phys, 
+                                                (void*)user_rodata_virt, 
+                                                user_rodata_size, 
+                                                VM_FLAG_USER);
+        if (map_status != VMM_OK) goto map_fail;
+    }
+
+    uintptr_t user_data_phys = (uintptr_t)KERNEL_V2P(&USER_DATA_START);
+    size_t user_data_size = align_up((uintptr_t)&USER_DATA_END - (uintptr_t)&USER_DATA_START, PAGE_SIZE);
+    if (user_data_size > 0) {
+        uintptr_t user_data_virt = USER_CODE_VIRT_ADDR + (user_data_phys - user_text_phys);
+        vmm_status_t map_status = vmm_map_range(proc->vmm, user_data_phys, 
+                                                (void*)user_data_virt, 
+                                                user_data_size, 
+                                                VM_FLAG_USER | VM_FLAG_WRITE);
+        if (map_status != VMM_OK) goto map_fail;
+    }
+
+    uintptr_t user_bss_phys = (uintptr_t)KERNEL_V2P(&USER_BSS_START);
+    size_t user_bss_size = align_up((uintptr_t)&USER_BSS_END - (uintptr_t)&USER_BSS_START, PAGE_SIZE);
+    if (user_bss_size > 0) {
+        uintptr_t user_bss_virt = USER_CODE_VIRT_ADDR + (user_bss_phys - user_text_phys);
+        vmm_status_t map_status = vmm_map_range(proc->vmm, user_bss_phys, 
+                                                (void*)user_bss_virt, 
+                                                user_bss_size, 
+                                                VM_FLAG_USER | VM_FLAG_WRITE);
+        if (map_status != VMM_OK) goto map_fail;
     }
 
     // Setup TTY
@@ -104,11 +133,7 @@ process_t* process_create(const char* name, tty_t* existing_tty) {
         proc->tty = existing_tty;
     } else {
         proc->tty = tty_create();
-        if (!proc->tty) {
-            vmm_destroy(proc->vmm);
-            kfree(proc);
-            return NULL;
-        }
+        if (!proc->tty) goto map_fail;
     }
 
     // Add to global process list
@@ -117,6 +142,11 @@ process_t* process_create(const char* name, tty_t* existing_tty) {
 
     LOGF("[PROC] Created process '%s' (PID: %u) with shared code mapping\n", proc->name, proc->pid);
     return proc;
+
+map_fail:
+    vmm_destroy(proc->vmm);
+    kfree(proc);
+    return NULL;
 }
 
 /*

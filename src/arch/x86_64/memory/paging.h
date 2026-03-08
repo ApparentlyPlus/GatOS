@@ -9,11 +9,7 @@
 
 #pragma once
 
-// This is the base address of all the kernel code. Kernel execution happens here.
-#define KERNEL_VIRTUAL_BASE 0xFFFFFFFF80000000
-
-// This is the base address of the physmap (mapping of the entirety of RAM into virtual space)
-#define PHYSMAP_VIRTUAL_BASE 0xFFFF800000000000
+#include <arch/x86_64/memory/layout.h>
 
 /*
  * x86_64 Canonical Address Space Layout (48-bit addressing):

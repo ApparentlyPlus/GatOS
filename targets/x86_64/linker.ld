@@ -25,6 +25,27 @@ SECTIONS
         USER_TEXT_END = .;
     }
 
+    .user_rodata : AT(ADDR(.user_rodata) - KERNEL_VIRTUAL_BASE) ALIGN(4K)
+    {
+        USER_RODATA_START = .;
+        *(.user_rodata .user_rodata.*)
+        USER_RODATA_END = .;
+    }
+
+    .user_data : AT(ADDR(.user_data) - KERNEL_VIRTUAL_BASE) ALIGN(4K)
+    {
+        USER_DATA_START = .;
+        *(.user_data .user_data.*)
+        USER_DATA_END = .;
+    }
+
+    .user_bss : AT(ADDR(.user_bss) - KERNEL_VIRTUAL_BASE) ALIGN(4K)
+    {
+        USER_BSS_START = .;
+        *(.user_bss .user_bss.*)
+        USER_BSS_END = .;
+    }
+
     .rodata : AT(ADDR(.rodata) - KERNEL_VIRTUAL_BASE) ALIGN(4K)
     {
         *(.rodata*)
