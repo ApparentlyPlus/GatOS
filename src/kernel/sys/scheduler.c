@@ -147,6 +147,9 @@ cpu_context_t* sched_schedule(cpu_context_t* current_context) {
         g_current_thread->context = current_context;
         g_current_thread->fs_base = read_msr(MSR_FS_BASE);
         
+        // Save FPU state
+        __asm__ volatile ("fxsave %0" : "=m"(g_current_thread->fpu_state));
+
         if (g_current_thread->state == THREAD_STATE_RUNNING) {
             g_current_thread->state = THREAD_STATE_READY;
             if (g_current_thread != g_idle_thread) {
@@ -251,6 +254,9 @@ cpu_context_t* sched_schedule(cpu_context_t* current_context) {
     }
     
     write_msr(MSR_FS_BASE, g_current_thread->fs_base);
+    
+    // Restore FPU state
+    __asm__ volatile ("fxrstor %0" :: "m"(g_current_thread->fpu_state));
 
     return g_current_thread->context;
 }

@@ -162,6 +162,13 @@ thread_t* thread_create(process_t* process, const char* name, void (*entry)(void
     thread->state = THREAD_STATE_READY;
     kstrncpy(thread->name, name, MAX_THREAD_NAME - 1);
 
+    // Initialize FPU state
+    __asm__ volatile (
+        "fninit \n"
+        "fxsave %0 \n"
+        : "=m"(thread->fpu_state)
+    );
+
     // Allocate kernel stack from kernel heap
     thread->kernel_stack = kmalloc(KERNEL_STACK_SIZE);
     if (!thread->kernel_stack) {
@@ -199,7 +206,11 @@ thread_t* thread_create(process_t* process, const char* name, void (*entry)(void
                 return NULL;
             }
             
-            user_rsp = (uint64_t)thread->user_stack + USER_STACK_SIZE;
+            // Align to 16 bytes and leave 8 bytes for ABI (as if called)
+            // The System V ABI says: "The value (%rsp + 8) is always a multiple of 16 
+            // when control is transferred to the function entry point."
+            // Since userspace_start is entered via iretq, we want it to look like a call.
+            user_rsp = (uint64_t)thread->user_stack + USER_STACK_SIZE - 8;
         } else {
             // Userspace provided a stack, we don't track it
             thread->user_stack = NULL;
@@ -237,6 +248,12 @@ thread_t* thread_create_bootstrap(process_t* process, const char* name) {
     thread->process = process;
     thread->state = THREAD_STATE_RUNNING; 
     kstrncpy(thread->name, name, MAX_THREAD_NAME - 1);
+
+    // Save current FPU state
+    __asm__ volatile (
+        "fxsave %0 \n"
+        : "=m"(thread->fpu_state)
+    );
 
     thread->kernel_stack = NULL; 
     thread->context = NULL; 

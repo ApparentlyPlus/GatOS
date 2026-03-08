@@ -4,6 +4,7 @@
 
 #include <ulibc/syscalls.h>
 #include <ulibc/stdio.h>
+#include <ulibc/math.h>
 #include <kernel/sys/scheduler.h>
 #include <kernel/sys/process.h>
 #include <kernel/sys/userspace.h>
@@ -11,11 +12,11 @@
 /*
  * tA - Sample thread function A for showcase
  */
-userspace_rodata static const char fmtA[] = "Hello from USERSPACE Thread A (iteration %d)\n";
+userspace_rodata const char fmtA[] = "Hello from USERSPACE Thread A (sqrt(%d) = %lf)\n";
 userspace void tA(void* arg) {
     (void)arg;
     for (int i = 1; i <= 10; i++) {
-		printf(fmtA, i);
+		printf(fmtA, i, sqrt(i));
 		sys_sleep_ms(500);
 	}
 }
@@ -23,8 +24,8 @@ userspace void tA(void* arg) {
 /*
  * tB - Sample thread function B for showcase
  */
-userspace_rodata static const char fmtB[] = "Greetings from USERSPACE Thread B (iteration %d)\n";
-userspace_rodata static const char fmtB2[] = "You can press ALT+F4 to terminate this tty session and see how the kernel handles it!\n";
+userspace_rodata const char fmtB[] = "Greetings from USERSPACE Thread B (iteration %d)\n";
+userspace_rodata const char fmtB2[] = "You can press ALT+F4 to terminate this tty session and see how the kernel handles it!\n";
 userspace void tB(void* arg) {
 	(void)arg;
 	for (int i = 1; i <= 10; i++) {
@@ -35,7 +36,7 @@ userspace void tB(void* arg) {
 }
 
 /*
- * uapps - Entry point for the user-space applications
+ * uapps - Entry point for the userspace applications
  */
 void uapps(){
     // Create test threads
