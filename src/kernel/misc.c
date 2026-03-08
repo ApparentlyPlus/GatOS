@@ -8,7 +8,7 @@
  */
 
 #include <kernel/drivers/console.h>
-#include <kernel/drivers/stdio.h>
+#include <klibc/stdio.h>
 #include <stdint.h>
 
 /*
@@ -35,26 +35,26 @@ void print_banner(char* KERNEL_VERSION) {
         "  ░░░░░░░░░   ░░░░░░░░    ░░░░░     ░░░░░░░     ░░░░░░░░░  "
     };
 
-    printf("\n");
+    kprintf("\n");
 
     pad = (screen_width - CONTENT_WIDTH) / 2;
     if (pad < 0) pad = 0;
 
     for (i = 0; i < 8; i++) {
-        for (j = 0; j < pad; j++) printf(" ");
-        printf("%s\n", logo_lines[i]);
+        for (j = 0; j < pad; j++) kprintf(" ");
+        kprintf("%s\n", logo_lines[i]);
     }
 
     // Print Version
     console_set_color(CONSOLE_COLOR_MAGENTA, CONSOLE_COLOR_BLACK);
 
-    len = 23 + strlen(KERNEL_VERSION); 
+    len = 23 + kstrlen(KERNEL_VERSION); 
     pad = (screen_width - len) / 2;
     if (pad < 0) pad = 0;
 
-    printf("\n");
-    for (j = 0; j < pad; j++) printf(" ");
-    printf("G a t O S   K e r n e l  %s\n\n", KERNEL_VERSION);
+    kprintf("\n");
+    for (j = 0; j < pad; j++) kprintf(" ");
+    kprintf("G a t O S   K e r n e l  %s\n\n", KERNEL_VERSION);
     
     // Print Metadata
     console_set_color(CONSOLE_COLOR_YELLOW, CONSOLE_COLOR_BLACK);
@@ -65,23 +65,23 @@ void print_banner(char* KERNEL_VERSION) {
     };
 
     for (i = 0; i < 2; i++) {
-        len = strlen(metadata[i]);
+        len = kstrlen(metadata[i]);
         pad = (screen_width - len) / 2;
         if (pad < 0) pad = 0;
         
-        for (j = 0; j < pad; j++) printf(" ");
-        printf("%s\n", metadata[i]);
+        for (j = 0; j < pad; j++) kprintf(" ");
+        kprintf("%s\n", metadata[i]);
     }
 
-    printf("\n");
+    kprintf("\n");
 
     // Print Separator
     console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     
     // Print underscores across the full width of the screen
-    for (j = 0; j < screen_width; j++) printf("_");
+    for (j = 0; j < screen_width; j++) kprintf("_");
     
-    printf("\n\n");
+    kprintf("\n\n");
 }
 
 /*
@@ -90,7 +90,7 @@ void print_banner(char* KERNEL_VERSION) {
 void print_test_banner(char* KERNEL_VERSION){
     console_set_color(CONSOLE_COLOR_CYAN, CONSOLE_COLOR_BLACK);
     
-    printf(
+    kprintf(
         " @@@@@@@@   @@@@@@   @@@@@@@   @@@@@@    @@@@@@   \n"
         "@@@@@@@@@  @@@@@@@@  @@@@@@@  @@@@@@@@  @@@@@@@   \n"
         "!@@        @@!  @@@    @@!    @@!  @@@  !@@       \n"
@@ -104,7 +104,7 @@ void print_test_banner(char* KERNEL_VERSION){
     );
     
     console_set_color(CONSOLE_COLOR_MAGENTA, CONSOLE_COLOR_BLACK);
-    printf("Welcome to the GatOS Kernel %s Test Build!\n\n", KERNEL_VERSION);
+    kprintf("Welcome to the GatOS Kernel %s Test Build!\n\n", KERNEL_VERSION);
 }
 
 /*
@@ -147,8 +147,8 @@ void check_kernel_position() {
     uintptr_t rip = get_rip();
    
     if (rip >= 0xFFFFFFFF80000000) {
-        printf("[KERNEL] Running in higher-half kernel space\n");
+        kprintf("[KERNEL] Running in higher-half kernel space\n");
     } else {
-        printf("[KERNEL] Running in lower memory\n");
+        kprintf("[KERNEL] Running in lower memory\n");
     }
 }

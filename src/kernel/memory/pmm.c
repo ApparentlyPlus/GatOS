@@ -12,7 +12,7 @@
 #include <kernel/memory/pmm.h>
 #include <kernel/sys/spinlock.h>
 #include <kernel/debug.h>
-#include <libc/string.h>
+#include <klibc/string.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
@@ -361,7 +361,7 @@ pmm_status_t pmm_init(uint64_t range_start_phys, uint64_t range_end_phys, uint64
         g_free_heads[i] = EMPTY_SENTINEL;
 
     // Initialize statistics
-    memset(&g_stats, 0, sizeof(pmm_stats_t));
+    kmemset(&g_stats, 0, sizeof(pmm_stats_t));
 
     // Partition the range into blocks
     partition_range_into_blocks(g_range_start, g_range_end);
@@ -388,7 +388,7 @@ void pmm_shutdown(void) {
     // Clear all free block headers in the managed range
     uint8_t *ptr = (uint8_t *)PHYSMAP_P2V(g_range_start);
     uint64_t size = pmm_managed_size();
-    memset(ptr, 0, size);
+    kmemset(ptr, 0, size);
 
     g_inited = false;
     g_range_start = 0;
@@ -400,7 +400,7 @@ void pmm_shutdown(void) {
     for (uint32_t i = 0; i < PMM_MAX_ORDERS; ++i) 
         g_free_heads[i] = EMPTY_SENTINEL;
     
-    memset(&g_stats, 0, sizeof(pmm_stats_t));
+    kmemset(&g_stats, 0, sizeof(pmm_stats_t));
 
     LOGF("[PMM] PMM Shutdown\n");
     spinlock_release(&g_pmm_lock, flags);

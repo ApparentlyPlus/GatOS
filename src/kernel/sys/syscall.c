@@ -13,7 +13,7 @@
 #include <arch/x86_64/cpu/msr.h>
 #include <kernel/sys/scheduler.h>
 #include <kernel/sys/process.h>
-#include <kernel/drivers/stdio.h>
+#include <klibc/stdio.h>
 #include <kernel/memory/vmm.h>
 #include <kernel/debug.h>
 

@@ -12,7 +12,7 @@
 #include <kernel/sys/apic.h>
 #include <kernel/debug.h>
 #include <tests/tests.h>
-#include <libc/string.h>
+#include <klibc/string.h>
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -205,14 +205,14 @@ void test_timers(void) {
 
     #ifdef TEST_BUILD
     #include <kernel/drivers/console.h>
-    #include <kernel/drivers/stdio.h>
+    #include <klibc/stdio.h>
     if (g_tests_passed != g_tests_total) {
         console_set_color(CONSOLE_COLOR_RED, CONSOLE_COLOR_BLACK);
-        printf("[-] Some timer tests failed (%d/%d). Check debug log.\n", g_tests_passed, g_tests_total);
+        kprintf("[-] Some timer tests failed (%d/%d). Check debug klog.\n", g_tests_passed, g_tests_total);
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     } else {
         console_set_color(CONSOLE_COLOR_GREEN, CONSOLE_COLOR_BLACK);
-        printf("[+] All timer tests passed successfully! (%d/%d)\n", g_tests_passed, g_tests_total);
+        kprintf("[+] All timer tests passed successfully! (%d/%d)\n", g_tests_passed, g_tests_total);
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     }
     #endif

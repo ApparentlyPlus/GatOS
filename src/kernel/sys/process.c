@@ -17,7 +17,7 @@
 #include <arch/x86_64/cpu/gdt.h>
 #include <arch/x86_64/memory/paging.h>
 #include <kernel/debug.h>
-#include <libc/string.h>
+#include <klibc/string.h>
 
 static pid_t g_next_pid = 1;
 static tid_t g_next_tid = 1;
@@ -72,9 +72,9 @@ process_t* process_create(const char* name, tty_t* existing_tty) {
     process_t* proc = (process_t*)kmalloc(sizeof(process_t));
     if (!proc) return NULL;
 
-    memset(proc, 0, sizeof(process_t));
+    kmemset(proc, 0, sizeof(process_t));
     proc->pid = g_next_pid++;
-    strncpy(proc->name, name, MAX_PROCESS_NAME - 1);
+    kstrncpy(proc->name, name, MAX_PROCESS_NAME - 1);
 
     // 1. Create a unique address space for the process
     proc->vmm = vmm_create(0x1000, 0x00007FFFFFFFF000);
@@ -126,11 +126,11 @@ thread_t* thread_create(process_t* process, const char* name, void (*entry)(void
     thread_t* thread = (thread_t*)kmalloc(sizeof(thread_t));
     if (!thread) return NULL;
 
-    memset(thread, 0, sizeof(thread_t));
+    kmemset(thread, 0, sizeof(thread_t));
     thread->tid = g_next_tid++;
     thread->process = process;
     thread->state = THREAD_STATE_READY;
-    strncpy(thread->name, name, MAX_THREAD_NAME - 1);
+    kstrncpy(thread->name, name, MAX_THREAD_NAME - 1);
 
     // Allocate kernel stack from kernel heap
     thread->kernel_stack = kmalloc(KERNEL_STACK_SIZE);
@@ -138,11 +138,11 @@ thread_t* thread_create(process_t* process, const char* name, void (*entry)(void
         kfree(thread);
         return NULL;
     }
-    memset(thread->kernel_stack, 0, KERNEL_STACK_SIZE);
+    kmemset(thread->kernel_stack, 0, KERNEL_STACK_SIZE);
 
     uintptr_t stack_top = (uintptr_t)thread->kernel_stack + KERNEL_STACK_SIZE;
     thread->context = (cpu_context_t*)(stack_top - sizeof(cpu_context_t));
-    memset(thread->context, 0, sizeof(cpu_context_t));
+    kmemset(thread->context, 0, sizeof(cpu_context_t));
 
     thread->context->iret_flags = 0x202; // IF enabled
     
@@ -202,11 +202,11 @@ thread_t* thread_create_bootstrap(process_t* process, const char* name) {
     thread_t* thread = (thread_t*)kmalloc(sizeof(thread_t));
     if (!thread) return NULL;
 
-    memset(thread, 0, sizeof(thread_t));
+    kmemset(thread, 0, sizeof(thread_t));
     thread->tid = g_next_tid++;
     thread->process = process;
     thread->state = THREAD_STATE_RUNNING; 
-    strncpy(thread->name, name, MAX_THREAD_NAME - 1);
+    kstrncpy(thread->name, name, MAX_THREAD_NAME - 1);
 
     thread->kernel_stack = NULL; 
     thread->context = NULL; 

@@ -16,7 +16,7 @@
 #include <arch/x86_64/cpu/gdt.h>
 
 #include <kernel/drivers/console.h>
-#include <kernel/drivers/stdio.h>
+#include <klibc/stdio.h>
 #include <kernel/drivers/serial.h>
 #include <kernel/memory/heap.h>
 #include <kernel/memory/slab.h>
@@ -32,7 +32,7 @@
 #include <kernel/debug.h>
 #include <kernel/misc.h>
 #include <tests/tests.h>
-#include <libc/string.h>
+#include <klibc/string.h>
 
 #define TOTAL_DBG 12
 
@@ -119,20 +119,20 @@ void kernel_test(void* mb_info, char* KERNEL_VERSION) {
     print_test_banner(KERNEL_VERSION);
     
     console_set_color(CONSOLE_COLOR_GREEN, CONSOLE_COLOR_BLACK);
-    printf("[+] Kernel initialization succeded! (Console Online)\n\n");
+    kprintf("[+] Kernel initialization succeded! (Console Online)\n\n");
     console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
 
     // NOW run the tests in order
     
-    printf("Running Kernel Physical Memory Manager tests...\n");
+    kprintf("Running Kernel Physical Memory Manager tests...\n");
     test_pmm();
     QEMU_LOG("PMM Test Suite Completed", TOTAL_DBG);
 
-    printf("Running Kernel Slab Allocator tests...\n");
+    kprintf("Running Kernel Slab Allocator tests...\n");
     test_slab();
     QEMU_LOG("Slab Test Suite Completed", TOTAL_DBG);
 
-    printf("Running Kernel Virtual Memory Manager tests...\n");
+    kprintf("Running Kernel Virtual Memory Manager tests...\n");
     test_vmm();
     QEMU_LOG("VMM Test Suite Completed", TOTAL_DBG);
 	
@@ -140,30 +140,30 @@ void kernel_test(void* mb_info, char* KERNEL_VERSION) {
     apic_init();
     timer_init();
 
-    printf("Running Kernel Heap tests...\n");
+    kprintf("Running Kernel Heap tests...\n");
     test_heap();
     QEMU_LOG("Heap Test Suite Completed", TOTAL_DBG);
 
-    printf("Running Kernel Timer tests...\n");
+    kprintf("Running Kernel Timer tests...\n");
     test_timers();
     QEMU_LOG("Timer Test Suite Completed", TOTAL_DBG);
 
-    printf("Running Spinlock Primitive tests...\n");
+    kprintf("Running Spinlock Primitive tests...\n");
     test_spinlock();
     QEMU_LOG("Spinlock Test Suite Completed", TOTAL_DBG);
 
-    printf("Running TTY Abstraction tests...\n");
+    kprintf("Running TTY Abstraction tests...\n");
     test_tty();
     QEMU_LOG("TTY Test Suite Completed", TOTAL_DBG);
 
-    printf("Running Multitasking & Userspace tests...\n");
+    kprintf("Running Multitasking & Userspace tests...\n");
     process_init();
     sched_init();
     test_multitasking();
     QEMU_LOG("Multitasking Test Suite Completed", TOTAL_DBG);
 
     // Finish up
-    printf("\nAll kernel tests completed. Halting system.");
+    kprintf("\nAll kernel tests completed. Halting system.");
     QEMU_LOG("All Kernel Test Suites Completed", TOTAL_DBG);
 }
 

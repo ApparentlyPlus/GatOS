@@ -6,7 +6,7 @@
 #include <kernel/drivers/console.h>
 #include <kernel/debug.h>
 #include <tests/tests.h>
-#include <libc/string.h>
+#include <klibc/string.h>
 
 static int g_tests_total = 0;
 static int g_tests_passed = 0;
@@ -61,7 +61,7 @@ static bool test_tty_canonical_buffering(void) {
     char buf[4];
     size_t n = tty_read(tty, buf, 4);
     TEST_ASSERT(n == 3);
-    TEST_ASSERT(memcmp(buf, "OK\n", 3) == 0);
+    TEST_ASSERT(kmemcmp(buf, "OK\n", 3) == 0);
 
     tty_destroy(tty);
     return true;
@@ -83,7 +83,7 @@ static bool test_tty_backspace_logic(void) {
     char buf[4];
     size_t n = tty_read(tty, buf, 4);
     TEST_ASSERT(n == 3);
-    TEST_ASSERT(memcmp(buf, "AB\n", 3) == 0);
+    TEST_ASSERT(kmemcmp(buf, "AB\n", 3) == 0);
 
     tty_destroy(tty);
     return true;
@@ -153,14 +153,14 @@ void test_tty(void) {
 
     #ifdef TEST_BUILD
     #include <kernel/drivers/console.h>
-    #include <kernel/drivers/stdio.h>
+    #include <klibc/stdio.h>
     if (g_tests_passed != g_tests_total) {
         console_set_color(CONSOLE_COLOR_RED, CONSOLE_COLOR_BLACK);
-        printf("[-] Some TTY tests failed (%d/%d). Check debug log.\n", g_tests_passed, g_tests_total);
+        kprintf("[-] Some TTY tests failed (%d/%d). Check debug klog.\n", g_tests_passed, g_tests_total);
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     } else {
         console_set_color(CONSOLE_COLOR_GREEN, CONSOLE_COLOR_BLACK);
-        printf("[+] All TTY tests passed successfully! (%d/%d)\n", g_tests_passed, g_tests_total);
+        kprintf("[+] All TTY tests passed successfully! (%d/%d)\n", g_tests_passed, g_tests_total);
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     }
     #endif

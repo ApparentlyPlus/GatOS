@@ -15,7 +15,7 @@
 #include <kernel/memory/vmm.h>
 #include <kernel/sys/spinlock.h>
 #include <kernel/debug.h>
-#include <libc/string.h>
+#include <klibc/string.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -159,7 +159,7 @@ uint64_t vmm_alloc_page_table(void) {
     }
 
     uint64_t* table = (uint64_t*)PHYSMAP_P2V(phys);
-    memset(table, 0, PAGE_SIZE);
+    kmemset(table, 0, PAGE_SIZE);
 
     return phys;
 }
@@ -360,7 +360,7 @@ vm_object_internal* vmm_alloc_vm_object(void) {
         return NULL;
     
     vm_object_internal* internal = (vm_object_internal*)obj;
-    memset(internal, 0, sizeof(vm_object_internal));
+    kmemset(internal, 0, sizeof(vm_object_internal));
     
     // Initialize validation fields...
     internal->magic = VM_OBJECT_MAGIC;
@@ -377,7 +377,7 @@ vm_object_internal* vmm_alloc_vm_object(void) {
 void vmm_free_vm_object(vm_object_internal* obj) {
     if (!obj) return;
 
-    // Defensive: validate before freeing so we can log suspected corruption
+    // Defensive: validate before freeing so we can klog suspected corruption
     if (!vm_object_validate(obj)) {
         LOGF("[VMM ERROR] Attempted to free corrupted vm_object at %p\n", obj);
         return;
@@ -867,7 +867,7 @@ vmm_t* vmm_create(uintptr_t alloc_base, uintptr_t alloc_end) {
     }
     
     vmm_internal* vmm = (vmm_internal *)vmm_mem;
-    memset(vmm, 0, sizeof(vmm_internal));
+    kmemset(vmm, 0, sizeof(vmm_internal));
     
     vmm->magic = VMM_MAGIC;
     vmm->is_kernel = false;
@@ -1036,7 +1036,7 @@ vmm_status_t vmm_kernel_init(uintptr_t alloc_base, uintptr_t alloc_end) {
     }
 
     vmm_internal* vmm = (vmm_internal*)PHYSMAP_P2V(vmm_phys);
-    memset(vmm, 0, sizeof(vmm_internal));
+    kmemset(vmm, 0, sizeof(vmm_internal));
 
     vmm->magic = VMM_MAGIC;
     vmm->is_kernel = true;

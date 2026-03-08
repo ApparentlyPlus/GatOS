@@ -9,7 +9,7 @@
 #include <kernel/memory/vmm.h>
 #include <kernel/memory/heap.h>
 #include <kernel/sys/panic.h>
-#include <libc/string.h>
+#include <klibc/string.h>
 
 // Framebuffer Hardware State
 static uint8_t* g_fb_addr = NULL; 
@@ -133,7 +133,7 @@ static void scroll_inst(console_t* con) {
     if (con->cursor_enabled) con_render_cursor(con, false);
 
     size_t size = (con->height - 1) * con->width;
-    memmove(con->buffer, con->buffer + con->width, size * sizeof(console_char_t));
+    kmemmove(con->buffer, con->buffer + con->width, size * sizeof(console_char_t));
     
     for (size_t x = 0; x < con->width; x++) {
         size_t idx = (con->height - 1) * con->width + x;
@@ -357,7 +357,7 @@ void console_init(multiboot_parser_t* parser) {
     g_max_cols = g_fb_width / g_font_width;
     g_max_rows = g_fb_height / (g_font_height + PADDING_Y);
 
-    memset(g_fb_addr, 0, g_fb_size);
+    kmemset(g_fb_addr, 0, g_fb_size);
 }
 
 /*

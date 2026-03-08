@@ -13,7 +13,7 @@
 #include <kernel/memory/pmm.h>
 #include <kernel/sys/spinlock.h>
 #include <kernel/debug.h>
-#include <libc/string.h>
+#include <klibc/string.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -233,7 +233,7 @@ static slab_t* slab_allocate_page(slab_cache_t* cache) {
     slab_t* slab = (slab_t*)PHYSMAP_P2V(phys);
 
     // zero the whole page to start cleanly
-    memset(slab, 0, PAGE_SIZE);
+    kmemset(slab, 0, PAGE_SIZE);
 
     // init metadata
     slab->magic = SLAB_MAGIC;
@@ -322,7 +322,7 @@ static slab_t* get_slab_from_obj(void* obj) {
 
     uintptr_t addr = (uintptr_t)obj;
 
-    // round down to page boundary to recover slab header
+    // kround down to page boundary to recover slab header
     uintptr_t slab_addr = addr & ~(PAGE_SIZE - 1);
     slab_t* slab = (slab_t*)slab_addr;
 
@@ -347,7 +347,7 @@ static slab_cache_t* slab_alloc_cache_struct(void) {
     slab_cache_t* cache = (slab_cache_t*)PHYSMAP_P2V(phys);
 
     // zero initialize
-    memset(cache, 0, sizeof(slab_cache_t));
+    kmemset(cache, 0, sizeof(slab_cache_t));
 
     return cache;
 }
@@ -391,7 +391,7 @@ slab_status_t slab_init(void) {
 
     g_caches = NULL;
     g_next_cache_id = 1;
-    memset(&g_stats, 0, sizeof(slab_stats_t));
+    kmemset(&g_stats, 0, sizeof(slab_stats_t));
 
     g_slab_initialized = true;
 
@@ -425,7 +425,7 @@ void slab_shutdown(void) {
     g_slab_initialized = false;
     g_caches = NULL;
     g_next_cache_id = 1;
-    memset(&g_stats, 0, sizeof(slab_stats_t));
+    kmemset(&g_stats, 0, sizeof(slab_stats_t));
 
     LOGF("[SLAB] Slab (System Wide) Allocator shutdown\n");
     spinlock_release(&g_slab_list_lock, flags);
@@ -492,7 +492,7 @@ slab_cache_t* slab_cache_create(const char* name, size_t obj_size,
     // initialize fields
     cache->magic = SLAB_CACHE_MAGIC;
     cache->cache_id = g_next_cache_id++;
-    strncpy(cache->name, name, SLAB_CACHE_NAME_LEN - 1);
+    kstrncpy(cache->name, name, SLAB_CACHE_NAME_LEN - 1);
     cache->name[SLAB_CACHE_NAME_LEN - 1] = '\0';
 
     cache->user_size = obj_size;
@@ -515,7 +515,7 @@ slab_cache_t* slab_cache_create(const char* name, size_t obj_size,
 
     spinlock_init(&cache->lock, "slab_cache");
 
-    memset(&cache->stats, 0, sizeof(slab_cache_stats_t));
+    kmemset(&cache->stats, 0, sizeof(slab_cache_stats_t));
 
     // insert into global cache list (LIFO)
     cache->next = g_caches;
@@ -576,7 +576,7 @@ static slab_cache_t* slab_cache_find_internal(const char* name) {
     slab_cache_t* cache = g_caches;
     while (cache) {
         if (!cache_validate(cache)) return NULL;
-        if (strncmp(cache->name, name, SLAB_CACHE_NAME_LEN) == 0) {
+        if (kstrncmp(cache->name, name, SLAB_CACHE_NAME_LEN) == 0) {
             return cache;
         }
         cache = cache->next;
@@ -654,7 +654,7 @@ slab_status_t slab_alloc(slab_cache_t* cache, void** out_obj) {
     slab->in_use++;
 
     // clear object memory before giving to user
-    memset(obj, 0, cache->obj_size);
+    kmemset(obj, 0, cache->obj_size);
 
     // write allocation header at the object start
     slab_alloc_header_t* header = (slab_alloc_header_t*)obj;
@@ -810,7 +810,7 @@ void slab_get_stats(slab_stats_t* out_stats) {
 }
 
 /*
- * slab_dump_stats - print global stats to log
+ * slab_dump_stats - print global stats to klog
  */
 void slab_dump_stats(void) {
     bool flags = spinlock_acquire(&g_slab_list_lock);

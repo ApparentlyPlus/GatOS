@@ -19,7 +19,7 @@
 #include <kernel/sys/acpi.h>
 #include <kernel/sys/apic.h>
 #include <kernel/debug.h>
-#include <libc/string.h>
+#include <klibc/string.h>
 
 #pragma region Internal Globals
 

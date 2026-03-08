@@ -11,7 +11,7 @@
 #include <kernel/memory/pmm.h>
 #include <kernel/debug.h>
 #include <tests/tests.h>
-#include <libc/string.h>
+#include <klibc/string.h>
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -488,15 +488,15 @@ void test_pmm(void) {
 
     #ifdef TEST_BUILD
     #include <kernel/drivers/console.h>
-    #include <kernel/drivers/stdio.h>
+    #include <klibc/stdio.h>
     if (g_tests_passed != g_tests_total) {
         console_set_color(CONSOLE_COLOR_RED, CONSOLE_COLOR_BLACK);
-        printf("[-] Some tests failed (%d/%d). Please check the debug log for details.\n", g_tests_passed, g_tests_total);
+        kprintf("[-] Some tests failed (%d/%d). Please check the debug klog for details.\n", g_tests_passed, g_tests_total);
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     }
     else{
         console_set_color(CONSOLE_COLOR_GREEN, CONSOLE_COLOR_BLACK);
-        printf("[+] All tests passed successfully! (%d/%d)\n", g_tests_passed, g_tests_total);
+        kprintf("[+] All tests passed successfully! (%d/%d)\n", g_tests_passed, g_tests_total);
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     }
     #endif

@@ -12,7 +12,7 @@
 #include <kernel/memory/heap.h>
 #include <kernel/sys/scheduler.h>
 #include <kernel/sys/panic.h>
-#include <libc/string.h>
+#include <klibc/string.h>
 
 // TTY Manager State
 static tty_t* g_tty_list = NULL;
@@ -26,7 +26,7 @@ tty_t* g_kernel_tty = NULL; // Protected primary console
  * tty_init - Internal helper to initialize a TTY structure.
  */
 static void tty_init(tty_t* tty, console_t* console) {
-    memset(tty->buffer, 0, TTY_BUFFER_SIZE);
+    kmemset(tty->buffer, 0, TTY_BUFFER_SIZE);
     tty->head = 0;
     tty->tail = 0;
     tty->console = console;

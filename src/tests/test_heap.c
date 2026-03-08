@@ -12,7 +12,7 @@
 #include <kernel/memory/pmm.h>
 #include <kernel/debug.h>
 #include <tests/tests.h>
-#include <libc/string.h>
+#include <klibc/string.h>
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -165,7 +165,7 @@ static bool test_kernel_init_and_basic_alloc(void) {
     TEST_ASSERT(p1 != NULL);
     tracker_add_k(p1);
 
-    memset(p1, 0xAA, 32);
+    kmemset(p1, 0xAA, 32);
     uint8_t* b = (uint8_t*)p1;
     TEST_ASSERT(b[0] == 0xAA && b[31] == 0xAA);
 
@@ -217,7 +217,7 @@ static bool test_realloc_logic(void) {
     void* B = kmalloc(64); tracker_add_k(B);
     void* C = kmalloc(64); tracker_add_k(C);
 
-    memset(A, 0x11, 64);
+    kmemset(A, 0x11, 64);
     
     kfree(B); // Create hole
     g_tracker[1].active = false;
@@ -509,7 +509,7 @@ static bool test_heap_stress_churn(void) {
     #define STRESS_POOL 100
     #define STRESS_ITERS 2000
     void* pool[STRESS_POOL];
-    memset(pool, 0, sizeof(pool));
+    kmemset(pool, 0, sizeof(pool));
 
     uint32_t seed = 999;
     
@@ -523,7 +523,7 @@ static bool test_heap_stress_churn(void) {
             size_t sz = ((seed / 65536) % 512) + 1;
             pool[idx] = kmalloc(sz);
             if (!pool[idx]) return false; 
-            memset(pool[idx], (uint8_t)idx, sz);
+            kmemset(pool[idx], (uint8_t)idx, sz);
         } else {
             volatile uint8_t* b = (uint8_t*)pool[idx];
             if (*b != (uint8_t)idx) {
@@ -605,15 +605,15 @@ void test_heap(void) {
 
     #ifdef TEST_BUILD
     #include <kernel/drivers/console.h>
-    #include <kernel/drivers/stdio.h>
+    #include <klibc/stdio.h>
     if (g_tests_passed != g_tests_total) {
         console_set_color(CONSOLE_COLOR_RED, CONSOLE_COLOR_BLACK);
-        printf("[-] Some tests failed (%d/%d). Please check the debug log for details.\n", g_tests_passed, g_tests_total);
+        kprintf("[-] Some tests failed (%d/%d). Please check the debug klog for details.\n", g_tests_passed, g_tests_total);
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     }
     else{
         console_set_color(CONSOLE_COLOR_GREEN, CONSOLE_COLOR_BLACK);
-        printf("[+] All tests passed successfully! (%d/%d)\n", g_tests_passed, g_tests_total);
+        kprintf("[+] All tests passed successfully! (%d/%d)\n", g_tests_passed, g_tests_total);
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     }
     #endif

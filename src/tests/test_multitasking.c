@@ -12,7 +12,7 @@
 #include <kernel/memory/vmm.h>
 #include <kernel/debug.h>
 #include <tests/tests.h>
-#include <libc/string.h>
+#include <klibc/string.h>
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -60,7 +60,7 @@ static bool test_process_creation(void) {
     process_t* proc = process_create("test_proc", NULL);
     TEST_ASSERT(proc != NULL);
     TEST_ASSERT(proc->pid > 0);
-    TEST_ASSERT(strcmp(proc->name, "test_proc") == 0);
+    TEST_ASSERT(kstrcmp(proc->name, "test_proc") == 0);
     
     // Verify private VMM
     TEST_ASSERT(proc->vmm != NULL);
@@ -120,7 +120,7 @@ static bool test_scheduler_bootstrap(void) {
     
     thread_t* current = sched_current();
     TEST_ASSERT(current != NULL);
-    TEST_ASSERT(strcmp(current->name, "kernel_main") == 0);
+    TEST_ASSERT(kstrcmp(current->name, "kernel_main") == 0);
     TEST_ASSERT(current->kernel_stack != NULL);
     
     return true;
@@ -160,14 +160,14 @@ void test_multitasking(void) {
 
     #ifdef TEST_BUILD
     #include <kernel/drivers/console.h>
-    #include <kernel/drivers/stdio.h>
+    #include <klibc/stdio.h>
     if (g_tests_passed != g_tests_total) {
         console_set_color(CONSOLE_COLOR_RED, CONSOLE_COLOR_BLACK);
-        printf("[-] Multitasking tests failed (%d/%d).\n", g_tests_passed, g_tests_total);
+        kprintf("[-] Multitasking tests failed (%d/%d).\n", g_tests_passed, g_tests_total);
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     } else {
         console_set_color(CONSOLE_COLOR_GREEN, CONSOLE_COLOR_BLACK);
-        printf("[+] Multitasking tests passed! (%d/%d)\n", g_tests_passed, g_tests_total);
+        kprintf("[+] Multitasking tests passed! (%d/%d)\n", g_tests_passed, g_tests_total);
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     }
     #endif

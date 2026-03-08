@@ -14,12 +14,12 @@
 #include <stddef.h>
 
 #include <kernel/drivers/console.h>
-#include <kernel/drivers/stdio.h>
+#include <klibc/stdio.h>
 #include <kernel/drivers/tty.h>
 #include <kernel/sys/panic.h>
 #include <kernel/sys/scheduler.h>
 #include <kernel/sys/process.h>
-#include <libc/string.h>
+#include <klibc/string.h>
 
 
 // define this globally (e.g. gcc -DPRINTF_INCLUDE_CONFIG_H ...) to include the
@@ -171,7 +171,7 @@ static inline void _out_fct(char character, void* buffer, size_t idx, size_t max
 }
 
 
-// internal secure strlen
+// internal secure kstrlen
 // \return The length of the string (excluding the terminating 0) limited by 'maxsize'
 static inline unsigned int _strnlen_s(const char* str, size_t maxsize)
 {
@@ -335,7 +335,7 @@ static size_t _ntoa_long_long(out_fct_type out, char* buffer, size_t idx, size_t
 #if defined(PRINTF_SUPPORT_FLOAT)
 
 #if defined(PRINTF_SUPPORT_EXPONENTIAL)
-// forward declaration so that _ftoa can switch to exp notation for values > PRINTF_MAX_FLOAT
+// forward declaration so that _ftoa can switch to kexp notation for values > PRINTF_MAX_FLOAT
 static size_t _etoa(out_fct_type out, char* buffer, size_t idx, size_t maxlen, double value, unsigned int prec, unsigned int width, unsigned int flags);
 #endif
 
@@ -498,7 +498,7 @@ static size_t _etoa(out_fct_type out, char* buffer, size_t idx, size_t maxlen, d
   const double z  = expval * 2.302585092994046 - exp2 * 0.6931471805599453;
   const double z2 = z * z;
   conv.U = (uint64_t)(exp2 + 1023) << 52U;
-  // compute exp(z) using continued fractions, see https://en.wikipedia.org/wiki/Exponential_function#Continued_fractions_for_ex
+  // compute kexp(z) using continued fractions, see https://en.wikipedia.org/wiki/Exponential_function#Continued_fractions_for_ex
   conv.F *= 1 + 2 * z / (2 - z + (z2 / (6 + (z2 / (10 + z2 / 14)))));
   // correct for rounding errors
   if (value < conv.F) {
@@ -937,10 +937,10 @@ int vscanf_(const char* format, va_list va) {
     int ch;
 
     while (*format) {
-        if (isspace((unsigned char)*format)) {
-            while (isspace((unsigned char)*format)) format++;
+        if (kisspace((unsigned char)*format)) {
+            while (kisspace((unsigned char)*format)) format++;
             ch = _getchar();
-            while (isspace(ch)) ch = _getchar();
+            while (kisspace(ch)) ch = _getchar();
             _ungetchar(ch);
             continue;
         }
@@ -1030,10 +1030,10 @@ int vscanf_(const char* format, va_list va) {
             case 's': {
                 char* p = suppress ? NULL : va_arg(va, char*);
                 ch = _getchar();
-                while (isspace(ch)) ch = _getchar();
+                while (kisspace(ch)) ch = _getchar();
                 
                 int matched = 0;
-                while (ch != 0 && !isspace(ch)) {
+                while (ch != 0 && !kisspace(ch)) {
                     if (!suppress) *p++ = (char)ch;
                     matched++;
                     ch = _getchar();
@@ -1055,7 +1055,7 @@ int vscanf_(const char* format, va_list va) {
                 char buf[64];
                 int i = 0;
                 ch = _getchar();
-                while (isspace(ch)) ch = _getchar();
+                while (kisspace(ch)) ch = _getchar();
                 
                 bool is_hex = (*format == 'x');
                 bool is_oct = (*format == 'o');
@@ -1063,7 +1063,7 @@ int vscanf_(const char* format, va_list va) {
 
                 while (i < 63) {
                     bool valid = false;
-                    if (isdigit(ch)) valid = true;
+                    if (kisdigit(ch)) valid = true;
                     else if ((is_hex || is_any) && ((ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F'))) valid = true;
                     else if ((is_hex || is_any) && (ch == 'x' || ch == 'X')) valid = true;
                     else if (ch == '-' || ch == '+') valid = true;
@@ -1080,16 +1080,16 @@ int vscanf_(const char* format, va_list va) {
                 if (!suppress) {
                     if (*format == 'd' || *format == 'i') {
                         int* p = va_arg(va, int*);
-                        *p = (int)strtol(buf, NULL, (*format == 'i') ? 0 : 10);
+                        *p = (int)kstrtol(buf, NULL, (*format == 'i') ? 0 : 10);
                     } else if (*format == 'o') {
                         unsigned int* p = va_arg(va, unsigned int*);
-                        *p = (unsigned int)strtoul(buf, NULL, 8);
+                        *p = (unsigned int)kstrtoul(buf, NULL, 8);
                     } else if (*format == 'u') {
                         unsigned int* p = va_arg(va, unsigned int*);
-                        *p = (unsigned int)strtoul(buf, NULL, 10);
+                        *p = (unsigned int)kstrtoul(buf, NULL, 10);
                     } else if (*format == 'x') {
                         unsigned int* p = va_arg(va, unsigned int*);
-                        *p = (unsigned int)strtoul(buf, NULL, 16);
+                        *p = (unsigned int)kstrtoul(buf, NULL, 16);
                     }
                     count++;
                 }

@@ -19,7 +19,7 @@
 #include <arch/x86_64/memory/paging.h>
 #include <kernel/memory/pmm.h>
 #include <kernel/debug.h>
-#include <libc/string.h>
+#include <klibc/string.h>
 
 static gdt_t g_gdt;
 static tss_t g_tss;
@@ -54,8 +54,8 @@ static void gdt_set_tss(int index, uint64_t base, uint32_t limit) {
  * gdt_init - Entry point for initializing the GDT and TSS infrastructure
  */
 void gdt_init(void) {
-    memset(&g_gdt, 0, sizeof(g_gdt));
-    memset(&g_tss, 0, sizeof(g_tss));
+    kmemset(&g_gdt, 0, sizeof(g_gdt));
+    kmemset(&g_tss, 0, sizeof(g_tss));
 
     // 0x00: Null Descriptor
     gdt_set_entry(0, 0, 0, 0, 0);

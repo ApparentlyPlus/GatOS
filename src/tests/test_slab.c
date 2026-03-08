@@ -11,7 +11,7 @@
 #include <kernel/memory/pmm.h>
 #include <kernel/debug.h>
 #include <tests/tests.h>
-#include <libc/string.h>
+#include <klibc/string.h>
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -141,7 +141,7 @@ static bool test_cache_create_validate(void) {
     TEST_ASSERT(c1 != NULL);
     tracker_add_cache(c1);
 
-    TEST_ASSERT(strcmp(slab_cache_name(c1), "test_valid") == 0);
+    TEST_ASSERT(kstrcmp(slab_cache_name(c1), "test_valid") == 0);
     TEST_ASSERT(slab_cache_obj_size(c1) == 64);
 
     // Invalid Alignment (Not Power of 2)
@@ -176,7 +176,7 @@ static bool test_alloc_free_basic(void) {
     tracker_add_obj(c, obj);
 
     // Verify memory is writeable
-    memset(obj, 0xAA, 128);
+    kmemset(obj, 0xAA, 128);
     volatile uint8_t* bytes = (volatile uint8_t*)obj;
     TEST_ASSERT(bytes[0] == 0xAA);
     TEST_ASSERT(bytes[127] == 0xAA);
@@ -231,7 +231,7 @@ static bool test_zero_initialization(void) {
     tracker_add_obj(c, obj);
 
     // Dirty it
-    memset(obj, 0xFF, 64);
+    kmemset(obj, 0xFF, 64);
     
     // Free it
     slab_free(c, obj);
@@ -462,7 +462,7 @@ static bool test_churn_stress(void) {
     #define CHURN_ITERS 1000
     #define CHURN_POOL 50
     void* pool[CHURN_POOL];
-    memset(pool, 0, sizeof(pool));
+    kmemset(pool, 0, sizeof(pool));
 
     uint32_t seed = 12345;
 
@@ -590,7 +590,7 @@ static bool test_use_after_free_detection(void) {
     slab_free(c, obj);
 
     // 2. Corrupt it (Use After Free)
-    memset(obj, 0xCC, 64);
+    kmemset(obj, 0xCC, 64);
 
     // 3. Verify Integrity (Expected to fail)
     bool integrity = slab_verify_integrity();
@@ -721,15 +721,15 @@ void test_slab(void) {
 
     #ifdef TEST_BUILD
     #include <kernel/drivers/console.h>
-    #include <kernel/drivers/stdio.h>
+    #include <klibc/stdio.h>
     if (g_tests_passed != g_tests_total) {
         console_set_color(CONSOLE_COLOR_RED, CONSOLE_COLOR_BLACK);
-        printf("[-] Some tests failed (%d/%d). Please check the debug log for details.\n", g_tests_passed, g_tests_total);
+        kprintf("[-] Some tests failed (%d/%d). Please check the debug klog for details.\n", g_tests_passed, g_tests_total);
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     }
     else{
         console_set_color(CONSOLE_COLOR_GREEN, CONSOLE_COLOR_BLACK);
-        printf("[+] All tests passed successfully! (%d/%d)\n", g_tests_passed, g_tests_total);
+        kprintf("[+] All tests passed successfully! (%d/%d)\n", g_tests_passed, g_tests_total);
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     }
     #endif

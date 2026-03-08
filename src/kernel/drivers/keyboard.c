@@ -17,7 +17,7 @@
 #include <kernel/sys/spinlock.h>
 #include <kernel/sys/apic.h>
 #include <kernel/debug.h>
-#include <libc/string.h>
+#include <klibc/string.h>
 #include <arch/x86_64/cpu/io.h>
 
 #define EVENT_BUFFER_SIZE 256
@@ -95,7 +95,7 @@ static void push_event(keycode_t key, bool pressed) {
  * keyboard_init - Initializes the event buffer and controller
  */
 void keyboard_init(void) {
-    memset(&g_key_events, 0, sizeof(g_key_events));
+    kmemset(&g_key_events, 0, sizeof(g_key_events));
     spinlock_init(&g_key_events.lock, "keyboard_events");
     
     if (i8042_init()) {

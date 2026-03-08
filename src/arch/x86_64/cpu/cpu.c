@@ -11,7 +11,7 @@
 #include <arch/x86_64/cpu/cpu.h>
 #include <arch/x86_64/cpu/msr.h>
 #include <kernel/debug.h>
-#include <libc/string.h>
+#include <klibc/string.h>
 
 static CPUInfo g_cpu;
 cpu_local_t g_cpu_local = {0};
@@ -107,7 +107,7 @@ void write_xcr0(uint64_t value)
  */
 void cpu_init(void)
 {
-    memset(&g_cpu, 0, sizeof(g_cpu));
+    kmemset(&g_cpu, 0, sizeof(g_cpu));
 
     uint32_t a, b, c, d;
 

@@ -7,17 +7,17 @@
  */
 
 #include <arch/x86_64/memory/paging.h>
-#include <kernel/drivers/stdio.h>
+#include <klibc/stdio.h>
 #include <kernel/drivers/serial.h>
 #include <kernel/misc.h>
-#include <libc/string.h>
+#include <klibc/string.h>
 #include <stddef.h>
 #include <stdarg.h>
 
 static int dbg_counter = 0;
 
 /*
- * QEMU_LOG - Debug function to log messages to qemu serial with counter
+ * QEMU_LOG - Debug function to klog messages to qemu serial with counter
  */
 void QEMU_LOG(const char* msg, int total) {
     char buf[128];
@@ -30,8 +30,8 @@ void QEMU_LOG(const char* msg, int total) {
     *ptr++ = ']';
     *ptr++ = ' ';
 
-    size_t msg_len = strlen(msg);
-    memcpy(ptr, msg, msg_len);
+    size_t msg_len = kstrlen(msg);
+    kmemcpy(ptr, msg, msg_len);
     ptr += msg_len;
 
     *ptr++ = '\n';
@@ -41,14 +41,14 @@ void QEMU_LOG(const char* msg, int total) {
 }
 
 /*
- * QEMU_GENERIC_LOG - Debug function to log messages to qemu serial without counter
+ * QEMU_GENERIC_LOG - Debug function to klog messages to qemu serial without counter
  */
 void QEMU_GENERIC_LOG(const char* msg) {
     char buf[128];
     char* ptr = buf;
 
-    size_t msg_len = strlen(msg);
-    memcpy(ptr, msg, msg_len);
+    size_t msg_len = kstrlen(msg);
+    kmemcpy(ptr, msg, msg_len);
     ptr += msg_len;
 
     *ptr++ = '\n';
@@ -58,7 +58,7 @@ void QEMU_GENERIC_LOG(const char* msg) {
 }
 
 /*
- * LOGF - Debug function to log messages internally with format specifiers
+ * LOGF - Debug function to klog messages internally with format specifiers
  */
 void LOGF(const char* fmt, ...)
 {
@@ -66,7 +66,7 @@ void LOGF(const char* fmt, ...)
     va_list args;
     
     va_start(args, fmt);
-    vsnprintf(buffer, sizeof(buffer), fmt, args);
+    kvsnprintf(buffer, sizeof(buffer), fmt, args);
     va_end(args);
     
     // Output to COM2 instead of COM1 for internal logging

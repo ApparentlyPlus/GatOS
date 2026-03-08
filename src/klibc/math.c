@@ -3,7 +3,7 @@
  */
 
 #include <stdint.h>
-#include <libc/math.h>
+#include <klibc/math.h>
 
 typedef union { double f; uint64_t u; } dbl_cast;
 
@@ -29,7 +29,7 @@ static const double Lg5 = 1.818357216161805012e-01;
 static const double Lg6 = 1.531383769920937332e-01;
 static const double Lg7 = 1.479819860511658591e-01;
 
-/* exp constants */
+/* kexp constants */
 static const double halF[2] = {0.5, -0.5};
 static const double o_threshold = 7.09782712893383973096e+02;
 static const double u_threshold = -7.45133219101941108420e+02;
@@ -62,7 +62,7 @@ static const double qS2 = 2.02094576023350569471e+00;
 static const double qS3 = -6.88283971605453293030e-01;
 static const double qS4 = 7.70381505559019352791e-02;
 
-/* atan constants */
+/* katan constants */
 static const double atanhi[] = {
   4.63647609000806093515e-01,
   7.85398163397448278999e-01,
@@ -91,7 +91,7 @@ static const double aT[] = {
   1.62858201153657823623e-02,
 };
 
-/* kernel cos/sin/tan constants */
+/* kernel kcos/ksin/ktan constants */
 static const double C1 = 4.16666666666666019037e-02;
 static const double C2 = -1.38888888888741095749e-03;
 static const double C3 = 2.48015872894767294178e-05;
@@ -177,14 +177,14 @@ static int __ieee754_rem_pio2(double x, double *y);
  * Utility Functions
  */
 
-double fabs(double x)
+double kfabs(double x)
 {
     dbl_cast dc = {.f = x};
     dc.u &= 0x7FFFFFFFFFFFFFFFULL;
     return dc.f;
 }
 
-double copysign(double x, double y)
+double kcopysign(double x, double y)
 {
     dbl_cast dcx, dcy;
     dcx.f = x;
@@ -193,7 +193,7 @@ double copysign(double x, double y)
     return dcx.f;
 }
 
-double scalbn(double x, int n)
+double kscalbn(double x, int n)
 {
     int k;
     dbl_cast dc;
@@ -212,21 +212,21 @@ double scalbn(double x, int n)
     }
     if (k == 0x7ff) return x + x;
     k = k + n;
-    if (k > 0x7fe) return huge * copysign(huge, x);
+    if (k > 0x7fe) return huge * kcopysign(huge, x);
     if (k > 0) {
         dc.u = (dc.u & 0x800fffffffffffffULL) | ((uint64_t)k << 52);
         return dc.f;
     }
     if (k <= -54) {
-        if (n > 50000) return huge * copysign(huge, x);
-        else return tiny * copysign(tiny, x);
+        if (n > 50000) return huge * kcopysign(huge, x);
+        else return tiny * kcopysign(tiny, x);
     }
     k += 54;
     dc.u = (dc.u & 0x800fffffffffffffULL) | ((uint64_t)k << 52);
     return dc.f * 5.55111512312578270212e-17;
 }
 
-double floor(double x)
+double kfloor(double x)
 {
     dbl_cast dc;
     dc.f = x;
@@ -273,7 +273,7 @@ double floor(double x)
  * Logarithm and Exponential Functions
  */
 
-double log(double x)
+double klog(double x)
 {
     dbl_cast dc = {.f = x};
     uint64_t bits = dc.u;
@@ -327,7 +327,7 @@ double log(double x)
     }
 }
 
-double exp(double x)
+double kexp(double x)
 {
     dbl_cast dc;
     dc.f = x;
@@ -388,7 +388,7 @@ double exp(double x)
     }
 }
 
-double expm1(double x)
+double kexpm1(double x)
 {
     double y, hi, lo, c, t, e, hfx, hxs, r1;
     int k, xsb;
@@ -506,7 +506,7 @@ double expm1(double x)
     return dc.f;
 }
 
-double log1p(double x)
+double klog1p(double x)
 {
     double hfsq, f, c, s, z, R, u;
     int k, hu, ax;
@@ -592,7 +592,7 @@ double log1p(double x)
  */
 
 
-double sqrt(double number) 
+double ksqrt(double number) 
 {
     if (number < 0) return (number - number) / (number - number);
     if (number == 0) return 0.0;
@@ -659,8 +659,8 @@ recompute:
         z = q[j - 1] + fw;
     }
 
-    z = scalbn(z, q0);
-    z -= 8.0 * floor(z * 0.125);
+    z = kscalbn(z, q0);
+    z -= 8.0 * kfloor(z * 0.125);
     n = (int)z;
     z -= (double)n;
     ih = 0;
@@ -700,7 +700,7 @@ recompute:
         if (ih == 2) {
             z = one - z;
             if (carry != 0)
-                z -= scalbn(one, q0);
+                z -= kscalbn(one, q0);
         }
     }
 
@@ -730,7 +730,7 @@ recompute:
             q0 -= 24;
         }
     } else {
-        z = scalbn(z, -q0);
+        z = kscalbn(z, -q0);
         if (z >= two24) {
             fw = (double)((int)(twon24 * z));
             iq[jz] = (int)(z - two24 * fw);
@@ -741,7 +741,7 @@ recompute:
             iq[jz] = (int)z;
     }
 
-    fw = scalbn(one, q0);
+    fw = kscalbn(one, q0);
     for (i = jz; i >= 0; i--) {
         q[i] = fw * (double)iq[i];
         fw *= twon24;
@@ -838,7 +838,7 @@ static int __ieee754_rem_pio2(double x, double *y)
         }
     }
     if (ix <= 0x413921fb) {
-        t = fabs(x);
+        t = kfabs(x);
         n = (int)(t * invpio2 + 0.5);
         fn = (double)n;
         r = t - fn * pio2_1;
@@ -959,7 +959,7 @@ static double __kernel_tan(double x, double y, int iy)
     if (ix < 0x3e300000) {
         if ((int)x == 0) {
             if (((ix | (uint32_t)dc.u) | (iy + 1)) == 0)
-                return one / fabs(x);
+                return one / kfabs(x);
             else {
                 if (iy == 1)
                     return x;
@@ -1026,7 +1026,7 @@ static double __kernel_tan(double x, double y, int iy)
  * Trigonometric Functions
  */
 
-double sin(double x)
+double ksin(double x)
 {
     double y[2], z = 0.0;
     int n;
@@ -1053,7 +1053,7 @@ double sin(double x)
     }
 }
 
-double cos(double x)
+double kcos(double x)
 {
     double y[2], z = 0.0;
     int n;
@@ -1080,7 +1080,7 @@ double cos(double x)
     }
 }
 
-double tan(double x)
+double ktan(double x)
 {
     double y[2], z = 0.0;
     int n;
@@ -1102,7 +1102,7 @@ double tan(double x)
  * Inverse Trigonometric Functions
  */
 
-double asin(double x)
+double kasin(double x)
 {
     double t, w, p, q, c, r, s;
     dbl_cast dc;
@@ -1127,11 +1127,11 @@ double asin(double x)
             return x + x * w;
         }
     }
-    w = one - fabs(x);
+    w = one - kfabs(x);
     t = w * 0.5;
     p = t * (pS0 + t * (pS1 + t * (pS2 + t * (pS3 + t * (pS4 + t * pS5)))));
     q = one + t * (qS1 + t * (qS2 + t * (qS3 + t * qS4)));
-    s = sqrt(t);
+    s = ksqrt(t);
     if (ix >= 0x3FEF3333) {
         w = p / q;
         t = pio2_hi - (2.0 * (s + s * w) - pio2_lo);
@@ -1152,7 +1152,7 @@ double asin(double x)
         return -t;
 }
 
-double acos(double x)
+double kacos(double x)
 {
     double z, p, q, r, w, s, c, df;
     dbl_cast dc;
@@ -1182,13 +1182,13 @@ double acos(double x)
         z = (one + x) * 0.5;
         p = z * (pS0 + z * (pS1 + z * (pS2 + z * (pS3 + z * (pS4 + z * pS5)))));
         q = one + z * (qS1 + z * (qS2 + z * (qS3 + z * qS4)));
-        s = sqrt(z);
+        s = ksqrt(z);
         r = p / q;
         w = r * s - pio2_lo;
         return pi - 2.0 * (s + w);
     } else {
         z = (one - x) * 0.5;
-        s = sqrt(z);
+        s = ksqrt(z);
         dbl_cast dfs;
         dfs.f = s;
         dfs.u &= 0xFFFFFFFF00000000ULL;
@@ -1202,7 +1202,7 @@ double acos(double x)
     }
 }
 
-double atan(double x)
+double katan(double x)
 {
     double w, s1, s2, z;
     dbl_cast dc;
@@ -1226,7 +1226,7 @@ double atan(double x)
         }
         id = -1;
     } else {
-        x = fabs(x);
+        x = kfabs(x);
         if (ix < 0x3ff30000) {
             if (ix < 0x3fe60000) {
                 id = 0;
@@ -1257,7 +1257,7 @@ double atan(double x)
     }
 }
 
-double atan2(double y, double x)
+double katan2(double y, double x)
 {
     double z;
     int k, m;
@@ -1275,7 +1275,7 @@ double atan2(double y, double x)
         ((iy | ((ly | -ly) >> 31)) > 0x7ff00000))
         return x + y;
     if (((hx - 0x3ff00000) | lx) == 0)
-        return atan(y);
+        return katan(y);
     m = ((hy >> 31) & 1) | ((hx >> 30) & 2);
 
     if ((iy | ly) == 0) {
@@ -1326,7 +1326,7 @@ double atan2(double y, double x)
     else if (hx < 0 && k < -60)
         z = 0.0;
     else
-        z = atan(fabs(y / x));
+        z = katan(kfabs(y / x));
     switch (m) {
     case 0:
         return z;
@@ -1347,7 +1347,7 @@ double atan2(double y, double x)
  * Hyperbolic Functions
  */
 
-double asinh(double x)
+double kasinh(double x)
 {
     double t, w;
     dbl_cast dc;
@@ -1362,13 +1362,13 @@ double asinh(double x)
             return x;
     }
     if (ix > 0x41b00000) {
-        w = log(fabs(x)) + ln2_hi;
+        w = klog(kfabs(x)) + ln2_hi;
     } else if (ix > 0x40000000) {
-        t = fabs(x);
-        w = log(2.0 * t + one / (sqrt(x * x + one) + t));
+        t = kfabs(x);
+        w = klog(2.0 * t + one / (ksqrt(x * x + one) + t));
     } else {
         t = x * x;
-        w = log1p(fabs(x) + t / (one + sqrt(one + t)));
+        w = klog1p(kfabs(x) + t / (one + ksqrt(one + t)));
     }
     if (hx > 0)
         return w;
@@ -1376,7 +1376,7 @@ double asinh(double x)
         return -w;
 }
 
-double acosh(double x)
+double kacosh(double x)
 {
     double t;
     dbl_cast dc;
@@ -1390,19 +1390,19 @@ double acosh(double x)
         if (hx >= 0x7ff00000) {
             return x + x;
         } else
-            return log(x) + ln2_hi;
+            return klog(x) + ln2_hi;
     } else if (((hx - 0x3ff00000) | lx) == 0) {
         return 0.0;
     } else if (hx > 0x40000000) {
         t = x * x;
-        return log(2.0 * x - one / (x + sqrt(t - one)));
+        return klog(2.0 * x - one / (x + ksqrt(t - one)));
     } else {
         t = x - one;
-        return log1p(t + sqrt(2.0 * t + t * t));
+        return klog1p(t + ksqrt(2.0 * t + t * t));
     }
 }
 
-double atanh(double x)
+double katanh(double x)
 {
     double t;
     dbl_cast dc;
@@ -1421,16 +1421,16 @@ double atanh(double x)
     x = dc.f;
     if (ix < 0x3fe00000) {
         t = x + x;
-        t = 0.5 * log1p(t + t * x / (one - x));
+        t = 0.5 * klog1p(t + t * x / (one - x));
     } else
-        t = 0.5 * log1p((x + x) / (one - x));
+        t = 0.5 * klog1p((x + x) / (one - x));
     if (hx >= 0)
         return t;
     else
         return -t;
 }
 
-double sinh(double x)
+double ksinh(double x)
 {
     double t, w, h;
     dbl_cast dc;
@@ -1450,19 +1450,19 @@ double sinh(double x)
         if (ix < 0x3e300000)
             if (huge + x > one)
                 return x;
-        t = expm1(fabs(x));
+        t = kexpm1(kfabs(x));
         if (ix < 0x3ff00000)
             return h * (2.0 * t - t * t / (t + one));
         return h * (t + t / (t + one));
     }
 
-    /* |x| in [22, log(maxdouble)] */
+    /* |x| in [22, klog(maxdouble)] */
     if (ix < 0x40862E42)
-        return h * exp(fabs(x));
+        return h * kexp(kfabs(x));
 
-    /* |x| in [log(maxdouble), overflowthreshold] */
+    /* |x| in [klog(maxdouble), overflowthreshold] */
     if (ix <= 0x408633CE) {
-        w = exp(0.5 * fabs(x));
+        w = kexp(0.5 * kfabs(x));
         t = h * w;
         return t * w;
     }
@@ -1470,7 +1470,7 @@ double sinh(double x)
     return x * huge * huge;
 }
 
-double cosh(double x)
+double kcosh(double x)
 {
     double t, w;
     dbl_cast dc;
@@ -1482,7 +1482,7 @@ double cosh(double x)
 
     /* |x| in [0, 0.5*ln2] */
     if (ix < 0x3fd62e43) {
-        t = expm1(fabs(x));
+        t = kexpm1(kfabs(x));
         w = one + t;
         if (ix < 0x3c800000)
             return w;
@@ -1491,24 +1491,24 @@ double cosh(double x)
 
     /* |x| in [0.5*ln2, 22] */
     if (ix < 0x40360000) {
-        t = exp(fabs(x));
+        t = kexp(kfabs(x));
         return 0.5 * t + 0.5 / t;
     }
 
-    /* |x| in [22, log(maxdouble)] */
+    /* |x| in [22, klog(maxdouble)] */
     if (ix < 0x40862E42)
-        return 0.5 * exp(fabs(x));
+        return 0.5 * kexp(kfabs(x));
 
-    /* |x| in [log(maxdouble), overflowthreshold] */
+    /* |x| in [klog(maxdouble), overflowthreshold] */
     if (ix <= 0x408633CE) {
-        w = exp(0.5 * fabs(x));
+        w = kexp(0.5 * kfabs(x));
         return w * w * 0.5;
     }
 
     return huge * huge;
 }
 
-double tanh(double x)
+double ktanh(double x)
 {
     double t, z;
     dbl_cast dc;
@@ -1528,10 +1528,10 @@ double tanh(double x)
         if (ix < 0x3c800000)
             return x;
         if (ix >= 0x3ff00000) {
-            t = expm1(2.0 * fabs(x));
+            t = kexpm1(2.0 * kfabs(x));
             z = one - 2.0 / (t + 2.0);
         } else {
-            t = expm1(-2.0 * fabs(x));
+            t = kexpm1(-2.0 * kfabs(x));
             z = -t / (t + 2.0);
         }
     } else {
@@ -1544,7 +1544,7 @@ double tanh(double x)
  * Power and Related Functions
  */
 
-double pow(double x, double y)
+double kpow(double x, double y)
 {
     double z, ax, z_h, z_l, p_h, p_l;
     double y1, t1, t2, r, s, t, u, v, w;
@@ -1631,11 +1631,11 @@ double pow(double x, double y)
             return x * x;
         if (hy == 0x3fe00000) {
             if (hx >= 0)
-                return sqrt(x);
+                return ksqrt(x);
         }
     }
 
-    ax = fabs(x);
+    ax = kfabs(x);
     if (lx == 0) {
         if (ix == 0x7ff00000 || ix == 0 || ix == 0x3ff00000) {
             z = ax;
@@ -1800,7 +1800,7 @@ double pow(double x, double y)
     j = (int)(dcx.u >> 32);
     j += (n << 20);
     if ((j >> 20) <= 0)
-        z = scalbn(z, n);
+        z = kscalbn(z, n);
     else {
         dcx.u = ((uint64_t)j << 32) | (dcx.u & 0xFFFFFFFF);
         z = dcx.f;
@@ -1808,7 +1808,7 @@ double pow(double x, double y)
     return s * z;
 }
 
-double fmod(double x, double y)
+double kfmod(double x, double y)
 {
     int n, hx, hy, hz, ix, iy, sx, i;
     unsigned lx, ly, lz;
@@ -1941,7 +1941,7 @@ double fmod(double x, double y)
  * Rounding and Remainder Functions
  */
 
-double ceil(double x)
+double kceil(double x)
 {
     dbl_cast dc;
     dc.f = x;
@@ -1998,7 +1998,7 @@ double ceil(double x)
     return dc.f;
 }
 
-double trunc(double x)
+double ktrunc(double x)
 {
     dbl_cast dc;
     dc.f = x;
@@ -2023,7 +2023,7 @@ double trunc(double x)
     return dc.f;
 }
 
-double round(double x)
+double kround(double x)
 {
     dbl_cast dc;
     dc.f = x;

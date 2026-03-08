@@ -17,7 +17,6 @@
 
 #include <kernel/drivers/console.h>
 #include <kernel/drivers/serial.h>
-#include <kernel/drivers/stdio.h>
 #include <kernel/drivers/keyboard.h>
 #include <kernel/sys/scheduler.h>
 #include <kernel/sys/userspace.h>
@@ -33,7 +32,8 @@
 #include <kernel/sys/acpi.h>
 #include <kernel/debug.h>
 #include <kernel/misc.h>
-#include <libc/string.h>
+#include <klibc/string.h>
+#include <klibc/stdio.h>
 
 #define TOTAL_DBG 24
 
@@ -50,7 +50,7 @@ static uint8_t multiboot_buffer[8 * 1024];
 void tA(void* arg) {
     (void)arg;
     for (int i = 1; i < 6; i++) {
-		printf("Hello from Thread A (iteration %d)\n", i);
+		kprintf("Hello from Thread A (iteration %d)\n", i);
 		sleep_ms(500);
 	}
 }
@@ -61,10 +61,10 @@ void tA(void* arg) {
 void tB(void* arg) {
 	(void)arg;
 	for (int i = 1; i < 6; i++) {
-		printf("Greetings from Thread B (iteration %d)\n", i);
+		kprintf("Greetings from Thread B (iteration %d)\n", i);
 		sleep_ms(1000);
 	}
-	printf("You can press ALT+F4 to terminate this tty session and see how the kernel handles it!\n");
+	kprintf("You can press ALT+F4 to terminate this tty session and see how the kernel handles it!\n");
 }
 
 /*
@@ -99,7 +99,7 @@ void kernel_main(void* mb_info) {
 	multiboot_init(&multiboot, mb_info, multiboot_buffer, sizeof(multiboot_buffer));
 
 	if (!multiboot.initialized) {
-		// printf won't work here yet, use serial
+		// kprintf won't work here yet, use serial
 		QEMU_LOG("[KERNEL] Failed to initialize multiboot2 parser!", TOTAL_DBG);
 		return;
 	}
@@ -167,7 +167,7 @@ void kernel_main(void* mb_info) {
 	heap_status_t heap_status = heap_kernel_init();
 
 	if(heap_status != HEAP_OK) {
-		// Serial log as console isn't up
+		// Serial klog as console isn't up
 		QEMU_LOG("[HEAP] Failed to initialize kernel heap", TOTAL_DBG);
 		return;
 	}
@@ -176,7 +176,7 @@ void kernel_main(void* mb_info) {
 	// Initialize ACPI
 
 	acpi_init(&multiboot);
-	printf("[ACPI] Revision %u detected (%s supported), manufacturer: %.6s\n",
+	kprintf("[ACPI] Revision %u detected (%s supported), manufacturer: %.6s\n",
 	       acpi_get_rsdp()->Revision,
 	       acpi_is_xsdt_supported() ? "XSDT" : "RSDT",
 	       acpi_get_rsdp()->OEMID);
@@ -187,7 +187,7 @@ void kernel_main(void* mb_info) {
 
 	apic_init();
 	QEMU_LOG("Initialized APIC subsystem", TOTAL_DBG);
-	printf("[APIC] Local APIC and I/O APIC initialized successfully\n");
+	kprintf("[APIC] Local APIC and I/O APIC initialized successfully\n");
 
 	// Initialize timers
 
@@ -218,21 +218,21 @@ void kernel_main(void* mb_info) {
 	QEMU_LOG("Initialized input handling subsystem", TOTAL_DBG);
 
 	print_banner(KERNEL_VERSION);
-	printf("[KERNEL] CPU initialization complete (x86_64, long mode).\n");
-	printf("[KERNEL] ACPI revision %u detected (%s supported).\n", 
+	kprintf("[KERNEL] CPU initialization complete (x86_64, long mode).\n");
+	kprintf("[KERNEL] ACPI revision %u detected (%s supported).\n", 
            acpi_get_rsdp()->Revision, 
            acpi_is_xsdt_supported() ? "XSDT" : "RSDT");
-	printf("[KERNEL] Advanced Programmable Interrupt Controller (APIC) routed.\n");
-	printf("[KERNEL] Physical Memory Manager (PMM) configured (RAM mapped via Physmap).\n");
-	printf("[KERNEL] Virtual Memory Manager (VMM) active (Higher Half).\n");
-	printf("[KERNEL] Heap and Slab allocators initialized.\n");
-	printf("[KERNEL] Syscall Interface (MSRs) enabled.\n");
-	printf("[KERNEL] Framebuffer resolution %dx%dx%d initialized.\n", 
+	kprintf("[KERNEL] Advanced Programmable Interrupt Controller (APIC) routed.\n");
+	kprintf("[KERNEL] Physical Memory Manager (PMM) configured (RAM mapped via Physmap).\n");
+	kprintf("[KERNEL] Virtual Memory Manager (VMM) active (Higher Half).\n");
+	kprintf("[KERNEL] Heap and Slab allocators initialized.\n");
+	kprintf("[KERNEL] Syscall Interface (MSRs) enabled.\n");
+	kprintf("[KERNEL] Framebuffer resolution %dx%dx%d initialized.\n", 
            multiboot_get_framebuffer(&multiboot)->width, 
            multiboot_get_framebuffer(&multiboot)->height,
            multiboot_get_framebuffer(&multiboot)->bpp);
-	printf("[KERNEL] Dynamic TTY subsystem online.\n");
-	printf("[KERNEL] Use ALT+Tab to cycle between available consoles.\n");
+	kprintf("[KERNEL] Dynamic TTY subsystem online.\n");
+	kprintf("[KERNEL] Use ALT+Tab to cycle between available consoles.\n");
 
 	// Initialize Keyboard
 
@@ -241,7 +241,7 @@ void kernel_main(void* mb_info) {
 	ioapic_redirect(1, INT_FIRST_INTERRUPT + 1, lapic_get_id(), 0);
 	ioapic_unmask(1);
 	QEMU_LOG("Initialized Keyboard and routed IRQ 1", TOTAL_DBG);
-	printf("[KBD] Keyboard IRQ 1 routed and unmasked.\n");
+	kprintf("[KBD] Keyboard IRQ 1 routed and unmasked.\n");
 
 	// Initialize Multitasking
     process_init();
@@ -262,16 +262,16 @@ void kernel_main(void* mb_info) {
 
 	// All subsystems initialized successfully
 	QEMU_LOG("Reached kernel end", TOTAL_DBG);
-	printf("[KERNEL] Kernel initialization complete, entering interactive test loop...\n");
+	kprintf("[KERNEL] Kernel initialization complete, entering interactive test loop...\n");
 	
 	while (1) {
 	    char tt[128] = {0};
 
-	    printf("\nType anything you want: ");
+	    kprintf("\nType anything you want: ");
 
 	    // Use scanset to read until newline
-	    if (scanf(" %[^\n]", tt) > 0) {
-	        printf("You typed: %s\n", tt);
+	    if (kscanf(" %[^\n]", tt) > 0) {
+	        kprintf("You typed: %s\n", tt);
 	    }
 	}
 	

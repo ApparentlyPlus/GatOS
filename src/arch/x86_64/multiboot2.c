@@ -10,7 +10,7 @@
 #include <arch/x86_64/memory/paging.h>
 #include <arch/x86_64/multiboot2.h>
 #include <kernel/debug.h>
-#include <libc/string.h>
+#include <klibc/string.h>
 #include <stdbool.h>
 #include <stddef.h>
 
@@ -129,13 +129,13 @@ static size_t calculate_required_size(void* mb_info) {
             case MULTIBOOT_TAG_TYPE_BOOT_LOADER_NAME:
             case MULTIBOOT_TAG_TYPE_CMDLINE: {
                 multiboot_string_tag_t* str_tag = (multiboot_string_tag_t*)tag;
-                total_size += strlen(str_tag->string) + 1;
+                total_size += kstrlen(str_tag->string) + 1;
                 break;
             }
             case MULTIBOOT_TAG_TYPE_MODULE: {
                 multiboot_module_tag_t* mod_tag = (multiboot_module_tag_t*)tag;
                 if (mod_tag->module.string) {
-                    total_size += strlen((char*)(uintptr_t)mod_tag->module.string) + 1;
+                    total_size += kstrlen((char*)(uintptr_t)mod_tag->module.string) + 1;
                 }
                 break;
             }
@@ -154,7 +154,7 @@ static void copy_multiboot_data(multiboot_parser_t* parser, void* mb_info) {
     
     // Copy main structure
     size_t struct_size = src_info->total_size;
-    memcpy(parser->data_buffer, src_info, struct_size);
+    kmemcpy(parser->data_buffer, src_info, struct_size);
     parser->buffer_used = align_up(struct_size, 8);
     
     // Update parser to point to copied structure
@@ -167,10 +167,10 @@ static void copy_multiboot_data(multiboot_parser_t* parser, void* mb_info) {
         switch (tag->type) {
             case MULTIBOOT_TAG_TYPE_BOOT_LOADER_NAME: {
                 multiboot_string_tag_t* str_tag = (multiboot_string_tag_t*)tag;
-                size_t str_len = strlen(str_tag->string) + 1;
+                size_t str_len = kstrlen(str_tag->string) + 1;
                 
                 char* new_str = (char*)(parser->data_buffer + parser->buffer_used);
-                memcpy(new_str, str_tag->string, str_len);
+                kmemcpy(new_str, str_tag->string, str_len);
                 parser->buffer_used += align_up(str_len, 8);
                 
                 parser->bootloader_name = new_str;
@@ -179,13 +179,13 @@ static void copy_multiboot_data(multiboot_parser_t* parser, void* mb_info) {
             
             case MULTIBOOT_TAG_TYPE_CMDLINE: {
                 multiboot_string_tag_t* str_tag = (multiboot_string_tag_t*)tag;
-                size_t str_len = strlen(str_tag->string) + 1;
+                size_t str_len = kstrlen(str_tag->string) + 1;
                 
                 char* new_str = (char*)(parser->data_buffer + parser->buffer_used);
-                memcpy(new_str, str_tag->string, str_len);
+                kmemcpy(new_str, str_tag->string, str_len);
                 parser->buffer_used += align_up(str_len, 8);
                 
-                parser->command_line = strcmp(new_str, "") == 0 ? "Unknown/None" : new_str;
+                parser->command_line = kstrcmp(new_str, "") == 0 ? "Unknown/None" : new_str;
                 break;
             }
             
@@ -199,10 +199,10 @@ static void copy_multiboot_data(multiboot_parser_t* parser, void* mb_info) {
                 multiboot_module_tag_t* mod_tag = (multiboot_module_tag_t*)tag;
                 if (mod_tag->module.string) {
                     char* orig_str = (char*)(uintptr_t)mod_tag->module.string;
-                    size_t str_len = strlen(orig_str) + 1;
+                    size_t str_len = kstrlen(orig_str) + 1;
                     
                     char* new_str = (char*)(parser->data_buffer + parser->buffer_used);
-                    memcpy(new_str, orig_str, str_len);
+                    kmemcpy(new_str, orig_str, str_len);
                     parser->buffer_used += align_up(str_len, 8);
                     
                     mod_tag->module.string = (uintptr_t)new_str;
@@ -219,7 +219,7 @@ static void copy_multiboot_data(multiboot_parser_t* parser, void* mb_info) {
  */
 void multiboot_init(multiboot_parser_t* parser, void* mb_info, uint8_t* buffer, size_t buffer_size) {
     // Initialize parser
-    memset(parser, 0, sizeof(multiboot_parser_t));
+    kmemset(parser, 0, sizeof(multiboot_parser_t));
     parser->data_buffer = buffer;
     parser->buffer_size = buffer_size;
 

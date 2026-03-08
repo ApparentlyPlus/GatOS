@@ -16,7 +16,7 @@
 #include <arch/x86_64/cpu/msr.h>
 #include <kernel/memory/heap.h>
 #include <kernel/debug.h>
-#include <libc/string.h>
+#include <klibc/string.h>
 
 static thread_t* g_current_thread = NULL;
 static thread_t* g_ready_queue_head = NULL;
@@ -65,7 +65,7 @@ void sched_init(void) {
     // when switched back from userspace threads. This also ensures the idle thread can have its own stack.
     g_current_thread->kernel_stack = kmalloc(KERNEL_STACK_SIZE);
     if (!g_current_thread->kernel_stack) panic("Failed to allocate kernel stack for kernel_main!");
-    memset(g_current_thread->kernel_stack, 0, KERNEL_STACK_SIZE);
+    kmemset(g_current_thread->kernel_stack, 0, KERNEL_STACK_SIZE);
 
     g_scheduler_enabled = true;
     LOGF("[SCHED] Scheduler initialized and enabled.\n");
