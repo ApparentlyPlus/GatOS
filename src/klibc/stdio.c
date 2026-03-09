@@ -1,5 +1,5 @@
 /*
- * vga_stdio.c - VGA text mode printing and input implementation
+ * stdio.c - Kernel printing and input implementation
  *
  * Tiny printf, sprintf and snprintf implementation, optimized for speed on
  * embedded systems with a very limited resources.

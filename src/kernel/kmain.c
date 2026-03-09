@@ -31,9 +31,11 @@
 #include <kernel/sys/acpi.h>
 #include <kernel/debug.h>
 #include <klibc/string.h>
-#include <kernel/umain.h>
 #include <kernel/misc.h>
 #include <klibc/stdio.h>
+
+// Forward declaration of userspace app launcher
+extern void uapps(void);
 
 #define TOTAL_DBG 24
 

@@ -1,7 +1,7 @@
 #pragma GCC section text=".user_text" rodata=".user_rodata" data=".user_data" bss=".user_bss"
 
 /*
- * vga_stdio.c - VGA text mode printing and input implementation
+ * stdio.c - Printing and input implementation
  *
  * Tiny printf, sprintf and snprintf implementation, optimized for speed on
  * embedded systems with a very limited resources.

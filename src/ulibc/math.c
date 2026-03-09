@@ -1,5 +1,3 @@
-#pragma GCC section text=".user_text" rodata=".user_rodata" data=".user_data" bss=".user_bss"
-
 /*
  * math.c - Implementation of math functions based on fdlibm
  */

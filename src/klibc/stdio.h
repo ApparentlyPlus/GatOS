@@ -1,5 +1,5 @@
 /*
- * vga_stdio.h - VGA text mode printing and input interface
+ * stdio.h - Kernel printing and input interface
  *
  * Tiny printf, sprintf and snprintf implementation, optimized for speed on
  * embedded systems with a very limited resources.

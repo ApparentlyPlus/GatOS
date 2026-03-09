@@ -26,6 +26,7 @@ SECTIONS
         USER_TEXT_START = .;
         *(.user_text .user_text.*)
         *ulibc*(.text .text.*)
+        *uproc*(.text .text.*)
         USER_TEXT_END = .;
     }
 
@@ -35,6 +36,7 @@ SECTIONS
         USER_RODATA_START = .;
         *(.user_rodata .user_rodata.*)
         *ulibc*(.rodata .rodata.*)
+        *uproc*(.rodata .rodata.*)
         USER_RODATA_END = .;
     }
 
@@ -44,6 +46,7 @@ SECTIONS
         USER_DATA_START = .;
         *(.user_data .user_data.*)
         *ulibc*(.data .data.*)
+        *uproc*(.data .data.*)
         USER_DATA_END = .;
     }
 
@@ -53,6 +56,7 @@ SECTIONS
         USER_BSS_START = .;
         *(.user_bss .user_bss.*)
         *ulibc*(.bss .bss.* COMMON)
+        *uproc*(.bss .bss.* COMMON)
         USER_BSS_END = .;
     }
 

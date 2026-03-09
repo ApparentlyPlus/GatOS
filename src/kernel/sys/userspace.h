@@ -13,20 +13,16 @@
 
 #include <arch/x86_64/memory/layout.h>
 
-// Attributes to place code and data in Ring 3 mappings
-#define userspace      __attribute__((section(".user_text")))
-#define userspace_data __attribute__((section(".user_data")))
-#define userspace_bss  __attribute__((section(".user_bss")))
 
-/*
- * ustr - Embed a string literal in .user_rodata at the call site.
- */
-#define ustr(s) \
-    (__extension__ ({ \
-        static const char _ustr[] \
-            __attribute__((section(".user_rodata"), used)) = (s); \
-        _ustr; \
-    }))
+// Per-symbol section attributes
+
+// Use these only when a single symbol in an otherwise
+// kernel-linked file must live in a userspace section (eg. userspace_start in process.c).
+// For normal userspace code, put it in uproc.c and initialize it in umain.c
+#define userspace        __attribute__((section(".user_text")))
+#define userspace_rodata __attribute__((section(".user_rodata")))
+#define userspace_data   __attribute__((section(".user_data")))
+#define userspace_bss    __attribute__((section(".user_bss")))
 
 // Linker symbols for the userspace regions
 extern uint8_t USER_TEXT_START;
