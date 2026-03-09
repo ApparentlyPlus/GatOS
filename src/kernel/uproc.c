@@ -13,42 +13,84 @@
 #include <ulibc/stdlib.h>
 #include <ulibc/stdio.h>
 #include <ulibc/math.h>
-#include <stdbool.h>
+#include <ulibc/string.h>
+#include <stdint.h>
 
 /*
- * SieveOfEratosthenes - Implements the Sieve of Eratosthenes algorithm to find all prime numbers up to n
+ * SieveOfEratosthenes - Segmented bit-packed odd-only Sieve of Eratosthenes
  */
 void SieveOfEratosthenes(int n)
 {
-    // Allocate memory for prime array and initialize all
-    // elements as true
-    bool* prime = malloc((n + 1) * sizeof(bool));
-    for (int i = 0; i <= n; i++)
-        prime[i] = true;
+    #define SEG_BYTES (32u * 1024u)
+    #define SEG_BITS (SEG_BYTES * 8u)
+    #define BIT_SET(arr, i) ((arr)[(unsigned)(i) >> 3] |= (uint8_t)(1u << ((unsigned)(i) & 7u)))
+    #define BIT_GET(arr, i) ((arr)[(unsigned)(i) >> 3] & (uint8_t)(1u << ((unsigned)(i) & 7u)))
 
-    // 0 and 1 are not prime numbers
-    prime[0] = prime[1] = false;
+    if (n < 2) return;
+    printf("Prime numbers up to %d:\n", n);
+    if (n >= 2) printf("2 ");
+    if (n < 3) { printf("\n"); return; }
+    int sqrtn = (int)sqrt((double)n);
+    while ((long long)(sqrtn + 1) * (sqrtn + 1) <= (long long)n) sqrtn++;
+    while ((long long)sqrtn * sqrtn > (long long)n) sqrtn--;
 
-    // For each number from 2 to sqrt(n)
-    for (int p = 2; p <= sqrt(n); p++) {
-        // If p is prime
-        if (prime[p]) {
-            // Mark all multiples of p as non-prime
-            for (int i = p * p; i <= n; i += p)
-                prime[i] = false;
+    unsigned small_count = (unsigned)(sqrtn >= 3 ? (sqrtn - 3) / 2 + 1 : 0);
+    unsigned small_bytes  = (small_count + 7) / 8;
+
+    uint8_t* small = (uint8_t*)calloc(small_bytes + 1, 1);
+    if (!small) { printf("(out of memory)\n"); return; }
+
+    for (unsigned pi = 0; pi < small_count; pi++) {
+        if (BIT_GET(small, pi)) continue;
+        int p = 2 * (int)pi + 3;
+        long long pp = (long long)p * p;
+        if (pp > sqrtn) break;
+        for (long long m = pp; m <= sqrtn; m += 2 * p) {
+            unsigned mi = (unsigned)(m - 3) / 2;
+            BIT_SET(small, mi);
+        }
+    }
+    unsigned sp_cap = small_count + 8;
+    int* sp = (int*)malloc(sp_cap * sizeof(int));
+    if (!sp) { free(small); printf("(out of memory)\n"); return; }
+    unsigned sp_cnt = 0;
+    for (unsigned pi = 0; pi < small_count; pi++) {
+        if (!BIT_GET(small, pi))
+            sp[sp_cnt++] = 2 * (int)pi + 3;
+    }
+    free(small);
+
+    uint8_t* seg = (uint8_t*)malloc(SEG_BYTES);
+    if (!seg) { free(sp); printf("(out of memory)\n"); return; }
+
+    for (long long seg_low = 3; seg_low <= (long long)n; seg_low += 2 * SEG_BITS) {
+        long long seg_high = seg_low + 2 * SEG_BITS - 2;
+        if (seg_high > (long long)n) seg_high = (long long)n | 1;
+        unsigned seg_cnt = (unsigned)((seg_high - seg_low) / 2) + 1;
+        memset(seg, 0, (seg_cnt + 7) / 8);
+        for (unsigned si = 0; si < sp_cnt; si++) {
+            long long p = sp[si];
+            long long start = ((seg_low + p - 1) / p) * p;
+            if (start == p) start = p * p;
+            if ((start & 1) == 0) start += p;
+
+            for (long long m = start; m <= seg_high; m += 2 * p) {
+                unsigned bit = (unsigned)((m - seg_low) / 2);
+                BIT_SET(seg, bit);
+            }
+        }
+        for (unsigned bi = 0; bi < seg_cnt; bi++) {
+            if (!BIT_GET(seg, bi)) {
+                long long prime = seg_low + 2LL * bi;
+                if (prime <= (long long)n)
+                    printf("%lld ", prime);
+            }
         }
     }
 
-    // Print all prime numbers up to n
-    printf("Prime numbers up to %d:\n", n);
-    for (int p = 2; p <= n; p++) {
-        if (prime[p])
-            printf("%d ", p);
-    }
+    free(seg);
+    free(sp);
     printf("\n");
-
-    // Free allocated memory
-    free(prime);
 }
 
 /*
@@ -76,7 +118,7 @@ void demo_threadB(void* arg) {
     printf("What's your name?\n> ");
     char name[100];
     scanf("%s", name);
-    printf("Nice to meet you, %s!\n", name);
+    printf("> Nice to meet you, %s!\n\n", name);
     printf("Press ALT+F4 to terminate this TTY session.\n");
 }
 

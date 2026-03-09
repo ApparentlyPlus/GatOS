@@ -1178,45 +1178,53 @@ bool vmm_check_flags(vmm_t* vmm_pub, void* addr, size_t required_flags) {
 }
 
 /*
- * vmm_check_buffer - Checks if a contiguous virtual buffer is fully mapped with the required flags
+ * vmm_walk_pte - Walk the page table hierarchy rooted at pt_root and return
+ * the leaf PTE entry for the given virtual address.
+ */
+static uint64_t vmm_walk_pte(uint64_t pt_root, void* virt) {
+    uint64_t* pml4 = (uint64_t*)PHYSMAP_P2V(pt_root);
+
+    uint64_t* pdpt = vmm_get_or_create_table(pml4, PML4_INDEX(virt), false, false);
+    if (!pdpt) return 0;
+
+    uint64_t* pd = vmm_get_or_create_table(pdpt, PDPT_INDEX(virt), false, false);
+    if (!pd) return 0;
+
+    uint64_t* pt = vmm_get_or_create_table(pd, PD_INDEX(virt), false, false);
+    if (!pt) return 0;
+
+    return pt[PT_INDEX(virt)];
+}
+
+/*
+ * vmm_check_buffer - Check that every page of [ptr, ptr+size) is mapped in
+ * the hardware page tables with the requested VM_FLAG_* permissions.
  */
 bool vmm_check_buffer(vmm_t* vmm_pub, const void* ptr, size_t size, size_t required_flags) {
     vmm_internal* vmm = vmm_get_instance(vmm_pub);
     if (!vmm || !ptr || size == 0) return false;
 
+    // Pre-compute the PTE bits that must be set (and whether NX must be clear).
+    uint64_t required_pte = PAGE_PRESENT;
+    if (required_flags & VM_FLAG_WRITE) required_pte |= PAGE_WRITABLE;
+    if (required_flags & VM_FLAG_USER)  required_pte |= PAGE_USER;
+    bool require_exec = (required_flags & VM_FLAG_EXEC) != 0;
+
     bool lock_flags = spinlock_acquire(&vmm->lock);
 
-    uintptr_t start = (uintptr_t)ptr;
-    uintptr_t end = start + size;
-    uintptr_t current = start;
+    // Walk every page in the buffer.
+    uintptr_t start = (uintptr_t)ptr & ~(uintptr_t)(PAGE_SIZE - 1); // align down
+    uintptr_t end   = (uintptr_t)ptr + size;
 
-    while (current < end) {
-        vm_object_internal* cur_obj = vmm->objects_internal;
-        bool found = false;
+    for (uintptr_t page = start; page < end; page += PAGE_SIZE) {
+        uint64_t pte = vmm_walk_pte(vmm->public.pt_root, (void*)page);
 
-        while (cur_obj) {
-            if (!vm_object_validate(cur_obj)) {
-                spinlock_release(&vmm->lock, lock_flags);
-                return false;
-            }
-
-            uintptr_t obj_start = cur_obj->public.base;
-            uintptr_t obj_end = obj_start + cur_obj->public.length;
-
-            if (current >= obj_start && current < obj_end) {
-                if ((cur_obj->public.flags & required_flags) != required_flags) {
-                    spinlock_release(&vmm->lock, lock_flags);
-                    return false;
-                }
-                
-                current = (end < obj_end) ? end : obj_end;
-                found = true;
-                break;
-            }
-            cur_obj = cur_obj->next_internal;
+        if ((pte & required_pte) != required_pte) {
+            spinlock_release(&vmm->lock, lock_flags);
+            return false;
         }
 
-        if (!found) {
+        if (require_exec && (pte & PAGE_NO_EXECUTE)) {
             spinlock_release(&vmm->lock, lock_flags);
             return false;
         }
