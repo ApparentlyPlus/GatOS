@@ -117,7 +117,7 @@ void demo_threadB(void* arg) {
 
     printf("What's your name?\n> ");
     char name[100];
-    scanf("%s", name);
+    scanf("%[^\n]", name);
     printf("> Nice to meet you, %s!\n\n", name);
     printf("Press ALT+F4 to terminate this TTY session.\n");
 }
@@ -127,5 +127,5 @@ void demo_threadB(void* arg) {
  */
 void demo2_threadA(void* arg) {
     (void)arg;
-    SieveOfEratosthenes(1000);
+    SieveOfEratosthenes(10000);
 }   

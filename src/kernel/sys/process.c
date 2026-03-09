@@ -67,29 +67,28 @@ void process_init(void) {
 }
 
 /*
- * process_header_update - (Re)writes the sticky info bar for a process
+ * process_header_update - Rewrites the sticky info bar for a process
  */
 void process_header_update(process_t* proc) {
     if (!proc || !proc->tty) return;
 
-    // Count threads and determine aggregate state.
+    // Count all threads ever added
     size_t total = 0;
-    bool any_alive = false;
+    size_t alive = 0;
     thread_t* t = proc->threads;
     while (t) {
         total++;
-        if (t->state != THREAD_STATE_DEAD) any_alive = true;
+        if (t->state != THREAD_STATE_DEAD) alive++;
         t = t->next;
     }
 
-    // total = 0 means the process was just created, threads are added next
-    const char* state = (total == 0 || any_alive) ? "Running" : "Terminated";
+    const char* state = (total == 0 || alive > 0) ? "Running" : "Terminated";
 
     char hdr[128];
     ksnprintf(
         hdr, sizeof(hdr),
         "Process: %s  |  PID: %u  |  Threads: %zu  |  State: %s",
-        proc->name, proc->pid, total, state
+        proc->name, proc->pid, alive, state
     );
 
     tty_header_write(proc->tty, 1, hdr, CONSOLE_COLOR_CYAN, CONSOLE_COLOR_BLACK);
