@@ -138,6 +138,7 @@ process_t* process_create(const char* name, tty_t* existing_tty) {
     } else {
         proc->tty = tty_create();
         if (!proc->tty) goto map_fail;
+        tty_write_header(proc->tty, proc->name);
     }
 
     // Add to global process list

@@ -232,3 +232,42 @@ void tty_write(tty_t* tty, const char* buf, size_t count) {
         con_putc(tty->console, buf[i]);
     }
 }
+
+/*
+ * tty_write_header - Writes a process name header at the top of a freshly
+ * created TTY so the user knows which terminal belongs to which process
+ */
+void tty_write_header(tty_t* tty, const char* str) {
+    if (!tty || !tty->console || !str) return;
+
+    size_t width = tty->console->width;
+    if (width == 0) return;
+
+    size_t ll = kstrlen(str);
+
+    // Row 1
+    con_putc(tty->console, '\n');
+
+    // Row 2
+    con_set_color(tty->console, CONSOLE_COLOR_CYAN, CONSOLE_COLOR_BLACK);
+    size_t pad = (ll < width) ? (width - ll) / 2 : 0;
+
+    for (size_t i = 0; i < pad; i++)
+        con_putc(tty->console, ' ');
+    for (size_t i = 0; i < ll; i++)
+        con_putc(tty->console, str[i]);
+
+    con_putc(tty->console, '\n');
+
+    // Row 3
+    con_set_color(tty->console, CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
+    con_putc(tty->console, '\n');
+
+    // Row 4
+    for (size_t i = 0; i < width; i++) {
+        con_putc(tty->console, (char)0xE2);
+        con_putc(tty->console, (char)0x94);
+        con_putc(tty->console, (char)0x80);
+    }
+    con_putc(tty->console, '\n');
+}

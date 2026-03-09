@@ -48,6 +48,7 @@ void tty_push_char_raw(tty_t* tty, char c);
 char tty_read_char(tty_t* tty);
 size_t tty_read(tty_t* tty, char* buf, size_t count);
 void tty_write(tty_t* tty, const char* buf, size_t count);
+void tty_write_header(tty_t* tty, const char* name);
 void tty_switch(tty_t* tty);
 void tty_cycle(void);
 
