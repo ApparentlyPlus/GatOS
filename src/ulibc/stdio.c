@@ -114,7 +114,7 @@ typedef struct {
 
 
 void u_putchar(char character){
-    sys_write(&character, 1);
+    syscall_write(&character, 1);
 }
 
 
@@ -851,7 +851,7 @@ int uprintf_(const char* format, ...)
   va_end(va);
   if (ret > 0) {
       size_t to_write = ((size_t)ret < sizeof(buffer)) ? (size_t)ret : (sizeof(buffer) - 1);
-      sys_write(buffer, to_write);
+      syscall_write(buffer, to_write);
   }
   return ret;
 }
@@ -883,7 +883,7 @@ int uvprintf_(const char* format, va_list va)
   const int ret = _vsnprintf(_out_buffer, buffer, sizeof(buffer), format, va);
   if (ret > 0) {
       size_t to_write = ((size_t)ret < sizeof(buffer)) ? (size_t)ret : (sizeof(buffer) - 1);
-      sys_write(buffer, to_write);
+      syscall_write(buffer, to_write);
   }
   return ret;
 }

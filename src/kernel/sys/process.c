@@ -76,8 +76,12 @@ process_t* process_create(const char* name, tty_t* existing_tty) {
     proc->pid = g_next_pid++;
     kstrncpy(proc->name, name, MAX_PROCESS_NAME - 1);
 
-    // 1. Create a unique address space for the process
-    proc->vmm = vmm_create(0x1000, 0x00007FFFFFFFF000);
+    // Create a unique address space for the process
+    // alloc_base is set past the end of the pre-mapped user sections so that
+    // vmm_alloc never collides with pages installed by vmm_map_range (which
+    // does not register vm_objects and is therefore invisible to the gap finder)
+    uintptr_t heap_base = align_up((uintptr_t)&USER_BSS_END, PAGE_SIZE);
+    proc->vmm = vmm_create(heap_base, 0x00007FFFFFFFF000);
     if (!proc->vmm) {
         kfree(proc);
         return NULL;
