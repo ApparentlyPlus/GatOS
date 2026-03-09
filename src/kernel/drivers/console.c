@@ -34,7 +34,7 @@ static const uint32_t VGA_PALETTE[16] = {
     0xFFFF5555, 0xFFFF55FF, 0xFFFFFF55, 0xFFFFFFFF
 };
 
-/* --- Hardware Drawing --- */
+/* Hardware Drawing */
 
 /*
  * put_pixel - Draws a single pixel to the framebuffer.
@@ -74,7 +74,7 @@ static uint8_t* get_glyph_ptr(uint32_t codepoint) {
     return (uint8_t*)font->glyph_buffer + (index * font->header->charsize);
 }
 
-/* --- Cursor Rendering --- */
+/* Cursor Rendering */
 
 /*
  * con_render_cursor - Draws or erases the console cursor.
@@ -102,7 +102,7 @@ static void con_render_cursor(console_t* con, bool on) {
     }
 }
 
-/* --- Internal Logic (Assumes Lock Held) --- */
+/* Internal Logic (Assumes Lock Held) */
 
 /*
  * console_refresh_locked - Redraws the entire console content to the framebuffer.
@@ -127,21 +127,33 @@ static void console_refresh_locked(console_t* con) {
 }
 
 /*
- * scroll_inst - Scrolls the console content up by one line.
+ * scroll_inst - Scrolls the content area (below header) up by one line
+ * Rows [0, header_rows) are never touched.
  */
 static void scroll_inst(console_t* con) {
     if (con->cursor_enabled) con_render_cursor(con, false);
 
-    size_t size = (con->height - 1) * con->width;
-    kmemmove(con->buffer, con->buffer + con->width, size * sizeof(console_char_t));
-    
+    size_t first = con->header_rows;
+    size_t scroll_rows = con->height - first;
+    if (scroll_rows == 0) return;
+
+    if (scroll_rows > 1) {
+        kmemmove(
+            con->buffer + first * con->width,
+            con->buffer + (first + 1) * con->width,
+            (scroll_rows - 1) * con->width * sizeof(console_char_t)
+        );
+    }
+
     for (size_t x = 0; x < con->width; x++) {
         size_t idx = (con->height - 1) * con->width + x;
         con->buffer[idx].codepoint = ' ';
         con->buffer[idx].fg = con->fg_color;
         con->buffer[idx].bg = con->bg_color;
     }
+
     con->cursor_y--;
+    if (con->cursor_y < first) con->cursor_y = first;
 
     console_refresh_locked(con);
 }
@@ -202,7 +214,7 @@ static void handle_cp_inst(console_t* con, uint32_t cp) {
     }
 }
 
-/* --- Instance Logic --- */
+/* Instance Logic  */
 
 /*
  * con_init - Initializes a console instance.
@@ -219,7 +231,8 @@ void con_init(console_t* con) {
     con->reentrancy_count = 0;
     
     con->cursor_enabled = true;
-    
+    con->header_rows = 0;
+
     spinlock_init(&con->lock, "console_lock");
 
     con->buffer = (console_char_t*)kmalloc(con->width * con->height * sizeof(console_char_t));
@@ -229,43 +242,45 @@ void con_init(console_t* con) {
 }
 
 /*
- * con_clear - Clears the console and fills the framebuffer with the specified background color.
+ * con_clear - Clears the content area (below any sticky header) and resets
+ * the cursor to the first content row. Header rows are left untouched.
  */
 void con_clear(console_t* con, uint8_t background) {
     bool flags = spinlock_acquire(&con->lock);
-    
+
     con->bg_color = background & 0xF;
-    for (size_t i = 0; i < con->width * con->height; i++) {
-        con->buffer[i].codepoint = ' ';
-        con->buffer[i].fg = con->fg_color;
-        con->buffer[i].bg = con->bg_color;
+
+    // Only clear rows in the scrollable content area.
+    for (size_t y = con->header_rows; y < con->height; y++) {
+        for (size_t x = 0; x < con->width; x++) {
+            size_t i = y * con->width + x;
+            con->buffer[i].codepoint = ' ';
+            con->buffer[i].fg = con->fg_color;
+            con->buffer[i].bg = con->bg_color;
+        }
     }
     con->cursor_x = 0;
-    con->cursor_y = 0;
+    con->cursor_y = con->header_rows;
 
     extern tty_t* g_active_tty;
     if (g_active_tty && g_active_tty->console == con) {
         uint32_t bg_color = VGA_PALETTE[con->bg_color];
+        size_t start_py = con->header_rows * (g_font_height + PADDING_Y);
+
         if (g_fb_bpp == 32) {
-            uint32_t* fb32 = (uint32_t*)g_fb_addr;
-            size_t num_pixels = g_fb_size / 4;
-            for (size_t i = 0; i < num_pixels; i++) {
-                fb32[i] = bg_color;
-            }
+            size_t start_off = start_py * g_fb_pitch / 4;
+            uint32_t* fb32   = (uint32_t*)g_fb_addr + start_off;
+            size_t    npix   = (g_fb_size / 4) - start_off;
+            for (size_t i = 0; i < npix; i++) fb32[i] = bg_color;
         } else {
-            // Manual slow clear for other bit depths
-            for (uint32_t y = 0; y < g_fb_height; y++) {
-                for (uint32_t x = 0; x < g_fb_width; x++) {
+            for (uint32_t y = (uint32_t)start_py; y < g_fb_height; y++)
+                for (uint32_t x = 0; x < g_fb_width; x++)
                     put_pixel(x, y, bg_color);
-                }
-            }
         }
 
-        if (con->cursor_enabled) {
-            con_render_cursor(con, true);
-        }
+        if (con->cursor_enabled) con_render_cursor(con, true);
     }
-    
+
     spinlock_release(&con->lock, flags);
 }
 
@@ -332,7 +347,7 @@ void con_set_cursor_enabled(console_t* con, bool enabled) {
     spinlock_release(&con->lock, flags);
 }
 
-/* --- Global Compatibility --- */
+/* Global Compatibility */
 
 /*
  * console_init - Probes Multiboot information and initializes global framebuffer state.
@@ -409,3 +424,71 @@ size_t console_get_width() { return g_max_cols; }
  * console_get_height - Returns the console height in rows.
  */
 size_t console_get_height() { return g_max_rows; }
+
+/*
+ * con_set_header_rows - Reserves the top N rows as a sticky header.
+ * Those rows are never touched by normal output or scrolling.
+ * Must be called before any content is written to the console.
+ */
+void con_header_init(console_t* con, size_t rows) {
+    if (!con || rows >= con->height) return;
+
+    bool flags = spinlock_acquire(&con->lock);
+
+    con->header_rows = rows;
+
+    // Initialise header rows to blank (white on black).
+    for (size_t y = 0; y < rows; y++) {
+        for (size_t x = 0; x < con->width; x++) {
+            size_t i = y * con->width + x;
+            con->buffer[i].codepoint = ' ';
+            con->buffer[i].fg = CONSOLE_COLOR_WHITE;
+            con->buffer[i].bg = CONSOLE_COLOR_BLACK;
+        }
+    }
+
+    // Ensure the content cursor is below the header.
+    if (con->cursor_y < rows) {
+        con->cursor_y = rows;
+        con->cursor_x = 0;
+    }
+
+    spinlock_release(&con->lock, flags);
+}
+
+/*
+ * con_header_write - Writes a text string centred into header row
+ * and immediately redraws that row on the framebuffer (if the TTY is active)
+ */
+void con_header_write(console_t* con, size_t row, const char* text, uint8_t fg, uint8_t bg) {
+    if (!con || row >= con->header_rows || !text) return;
+
+    bool flags = spinlock_acquire(&con->lock);
+
+    size_t len = kstrlen(text);
+    size_t pad = (len < con->width) ? (con->width - len) / 2 : 0;
+
+    // Fill the entire row with the background colour first.
+    for (size_t x = 0; x < con->width; x++) {
+        con->buffer[row * con->width + x] = (console_char_t){ ' ', fg, bg };
+    }
+
+    // Write the centred text (ASCII; header content is always ASCII).
+    for (size_t c = 0; c < len && (pad + c) < con->width; c++) {
+        con->buffer[row * con->width + pad + c] = (console_char_t){ (uint8_t)text[c], fg, bg };
+    }
+
+    // Redraw just this row if the console is currently visible.
+    extern tty_t* g_active_tty;
+    if (g_active_tty && g_active_tty->console == con) {
+        size_t py = row * (g_font_height + PADDING_Y);
+        for (size_t x = 0; x < con->width; x++) {
+            console_char_t ch = con->buffer[row * con->width + x];
+            draw_glyph(get_glyph_ptr(ch.codepoint),
+                       x * g_font_width, py,
+                       VGA_PALETTE[ch.fg], VGA_PALETTE[ch.bg]);
+        }
+    }
+
+    spinlock_release(&con->lock, flags);
+}

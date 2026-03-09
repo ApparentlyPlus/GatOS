@@ -73,3 +73,4 @@ void thread_destroy(thread_t* thread);
 void process_destroy(process_t* process);
 process_t* process_get_all(void);
 void process_terminate_by_tty(tty_t* tty);
+void process_header_update(process_t* proc);

@@ -296,7 +296,9 @@ void sched_exit(void) {
 
     g_current_thread->state = THREAD_STATE_DEAD;
     LOGF("[SCHED] Thread '%s' (TID: %u) exited.\n", g_current_thread->name, g_current_thread->tid);
-    
+
+    process_header_update(g_current_thread->process);
+
     sched_yield();
     while(1);
 }

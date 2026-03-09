@@ -40,7 +40,7 @@ typedef struct {
     uint8_t bg_color;
 
     // Cursor State (Static Block)
-    bool cursor_enabled;     
+    bool cursor_enabled;
 
     // UTF-8 State
     uint32_t utf8_codepoint;
@@ -48,9 +48,12 @@ typedef struct {
 
     // Backbuffer
     console_char_t* buffer;
-    size_t width;  
-    size_t height; 
-    
+    size_t width;
+    size_t height;
+
+    // Sticky header: rows [0, header_rows) are reserved and never scrolled
+    size_t header_rows;
+
     spinlock_t lock;
     int reentrancy_count;
 } console_t;
@@ -64,6 +67,10 @@ void con_putc(console_t* con, char character);
 void con_set_color(console_t* con, uint8_t foreground, uint8_t background);
 void con_clear(console_t* con, uint8_t background);
 void con_refresh(console_t* con);
+
+// Sticky header
+void con_header_init(console_t* con, size_t rows);
+void con_header_write(console_t* con, size_t row, const char* text, uint8_t fg, uint8_t bg);
 
 // Cursor Control
 void con_set_cursor_enabled(console_t* con, bool enabled);

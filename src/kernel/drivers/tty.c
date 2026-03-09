@@ -234,40 +234,19 @@ void tty_write(tty_t* tty, const char* buf, size_t count) {
 }
 
 /*
- * tty_write_header - Writes a process name header at the top of a freshly
- * created TTY so the user knows which terminal belongs to which process
+ * tty_header_init - Reserves the top N rows of this TTY as a sticky
+ * header that is never scrolled or overwritten by normal output
  */
-void tty_write_header(tty_t* tty, const char* str) {
-    if (!tty || !tty->console || !str) return;
+void tty_header_init(tty_t* tty, size_t rows) {
+    if (!tty || !tty->console) return;
+    con_header_init(tty->console, rows);
+}
 
-    size_t width = tty->console->width;
-    if (width == 0) return;
-
-    size_t ll = kstrlen(str);
-
-    // Row 1
-    con_putc(tty->console, '\n');
-
-    // Row 2
-    con_set_color(tty->console, CONSOLE_COLOR_CYAN, CONSOLE_COLOR_BLACK);
-    size_t pad = (ll < width) ? (width - ll) / 2 : 0;
-
-    for (size_t i = 0; i < pad; i++)
-        con_putc(tty->console, ' ');
-    for (size_t i = 0; i < ll; i++)
-        con_putc(tty->console, str[i]);
-
-    con_putc(tty->console, '\n');
-
-    // Row 3
-    con_set_color(tty->console, CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
-    con_putc(tty->console, '\n');
-
-    // Row 4
-    for (size_t i = 0; i < width; i++) {
-        con_putc(tty->console, (char)0xE2);
-        con_putc(tty->console, (char)0x94);
-        con_putc(tty->console, (char)0x80);
-    }
-    con_putc(tty->console, '\n');
+/*
+ * tty_header_write - Writes centred text into sticky header row
+ * and redraws it immediately. Safe to call at any time to update the header.
+ */
+void tty_header_write(tty_t* tty, size_t row, const char* text, uint8_t fg, uint8_t bg) {
+    if (!tty || !tty->console) return;
+    con_header_write(tty->console, row, text, fg, bg);
 }

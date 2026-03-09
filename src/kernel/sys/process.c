@@ -18,6 +18,7 @@
 #include <arch/x86_64/memory/paging.h>
 #include <kernel/debug.h>
 #include <klibc/string.h>
+#include <klibc/stdio.h>
 
 static pid_t g_next_pid = 1;
 static tid_t g_next_tid = 1;
@@ -63,6 +64,35 @@ void process_init(void) {
     g_next_tid = 1;
     g_processes = NULL;
     LOGF("[PROC] Process subsystem initialized.\n");
+}
+
+/*
+ * process_header_update - (Re)writes the sticky info bar for a process
+ */
+void process_header_update(process_t* proc) {
+    if (!proc || !proc->tty) return;
+
+    // Count threads and determine aggregate state.
+    size_t total = 0;
+    bool any_alive = false;
+    thread_t* t = proc->threads;
+    while (t) {
+        total++;
+        if (t->state != THREAD_STATE_DEAD) any_alive = true;
+        t = t->next;
+    }
+
+    // total = 0 means the process was just created, threads are added next
+    const char* state = (total == 0 || any_alive) ? "Running" : "Terminated";
+
+    char hdr[128];
+    ksnprintf(
+        hdr, sizeof(hdr),
+        "Process: %s  |  PID: %u  |  Threads: %zu  |  State: %s",
+        proc->name, proc->pid, total, state
+    );
+
+    tty_header_write(proc->tty, 1, hdr, CONSOLE_COLOR_CYAN, CONSOLE_COLOR_BLACK);
 }
 
 /*
@@ -138,7 +168,8 @@ process_t* process_create(const char* name, tty_t* existing_tty) {
     } else {
         proc->tty = tty_create();
         if (!proc->tty) goto map_fail;
-        tty_write_header(proc->tty, proc->name);
+        tty_header_init(proc->tty, 3);
+        process_header_update(proc);
     }
 
     // Add to global process list
@@ -243,8 +274,9 @@ thread_t* thread_create(process_t* process, const char* name, void (*entry)(void
 
     thread->next = process->threads;
     process->threads = thread;
+    process_header_update(process);
 
-    LOGF("[PROC] Created %s thread '%s' (TID: %u) in PID %u\n", 
+    LOGF("[PROC] Created %s thread '%s' (TID: %u) in PID %u\n",
          is_user ? "USER" : "KERNEL", thread->name, thread->tid, process->pid);
     return thread;
 }
@@ -273,6 +305,7 @@ thread_t* thread_create_bootstrap(process_t* process, const char* name) {
 
     thread->next = process->threads;
     process->threads = thread;
+    process_header_update(process);
 
     LOGF("[PROC] Bootstrapped current context as thread '%s' (TID: %u)\n", thread->name, thread->tid);
     return thread;
