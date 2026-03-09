@@ -9,6 +9,7 @@
 #include <ulibc/stdlib.h>
 #include <ulibc/syscalls.h>
 #include <ulibc/string.h>
+#include <ulibc/spinlock.h>
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -79,6 +80,7 @@ typedef struct {
 } heap_t;
 
 static heap_t g_heap;
+static ulock_t g_heap_lock; // zero-initialized in .user_bss (unlocked)
 
 #pragma region Utility
 
@@ -426,26 +428,40 @@ static void heap_free(void *ptr) {
 
 void *malloc(size_t size) {
     if (!size) return NULL;
-    return heap_alloc(size, false);
+    ulock_acquire(&g_heap_lock);
+    void *p = heap_alloc(size, false);
+    ulock_release(&g_heap_lock);
+    return p;
 }
 
 void free(void *ptr) {
+    if (!ptr) return;
+    ulock_acquire(&g_heap_lock);
     heap_free(ptr);
+    ulock_release(&g_heap_lock);
 }
 
 void *calloc(size_t nmemb, size_t size) {
     if (!nmemb || !size) return NULL;
     size_t total = nmemb * size;
     if (total / nmemb != size) return NULL;  // overflow
-    return heap_alloc(total, true);
+    ulock_acquire(&g_heap_lock);
+    void *p = heap_alloc(total, true);
+    ulock_release(&g_heap_lock);
+    return p;
 }
 
 void *realloc(void *ptr, size_t size) {
     if (!ptr) return malloc(size);
     if (!size) { free(ptr); return NULL; }
 
+    ulock_acquire(&g_heap_lock);
+
     block_t *b = get_header(ptr);
-    if (!block_valid(b) || b->magic != BLOCK_MAGIC_USED) return NULL;
+    if (!block_valid(b) || b->magic != BLOCK_MAGIC_USED) {
+        ulock_release(&g_heap_lock);
+        return NULL;
+    }
 
     size_t aligned = align_up(size, BLOCK_ALIGN);
     if (aligned < MIN_BLOCK_SIZE) aligned = MIN_BLOCK_SIZE;
@@ -455,6 +471,7 @@ void *realloc(void *ptr, size_t size) {
         size_t oh = sizeof(block_t) + sizeof(bfooter_t);
         if (b->size - aligned >= MIN_BLOCK_SIZE + oh)
             split_block(b, aligned);
+        ulock_release(&g_heap_lock);
         return ptr;
     }
 
@@ -477,15 +494,21 @@ void *realloc(void *ptr, size_t size) {
             f->header = b; f->magic = BLOCK_MAGIC_USED;
             f->rz_pre = f->rz_post = BLOCK_RED_ZONE;
             split_block(b, aligned);
+            ulock_release(&g_heap_lock);
             return ptr;
         }
     }
 
-    // Fallback: allocate elsewhere, copy, free old
-    void *new_ptr = heap_alloc(size, false);
+    // Fallback: allocate elsewhere, copy, free old.
+    // Save copy_size before releasing the lock (b->size must not be read after).
+    size_t copy_size = b->size < size ? b->size : size;
+    void *new_ptr = heap_alloc(size, false); // called while lock is held — fine
+    ulock_release(&g_heap_lock);
     if (!new_ptr) return NULL;
-    memcpy(new_ptr, ptr, b->size < size ? b->size : size);
+    memcpy(new_ptr, ptr, copy_size);
+    ulock_acquire(&g_heap_lock);
     heap_free(ptr);
+    ulock_release(&g_heap_lock);
     return new_ptr;
 }
 

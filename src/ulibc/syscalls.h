@@ -6,6 +6,7 @@
  * 
  * Author: u/ApparentlyPlus
  */
+
 #pragma once
 
 #include <stdint.h>

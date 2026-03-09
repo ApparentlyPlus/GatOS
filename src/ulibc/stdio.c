@@ -1,5 +1,3 @@
-#pragma GCC section text=".user_text" rodata=".user_rodata" data=".user_data" bss=".user_bss"
-
 /*
  * stdio.c - Printing and input implementation
  *
@@ -18,6 +16,7 @@
 #include <ulibc/stdio.h>
 #include <ulibc/syscalls.h>
 #include <ulibc/string.h>
+#include <ulibc/spinlock.h>
 
 
 // define this globally (e.g. gcc -DPRINTF_INCLUDE_CONFIG_H ...) to include the
@@ -917,23 +916,51 @@ static size_t g_read_tail = 0;
 // Single-character unget buffer (-1 = empty).
 static int g_next_char = -1;
 
+// Protects g_read_buf, g_read_head, g_read_tail, g_next_char.
+// Zero-initialized in .user_bss == unlocked.
+static ulock_t g_read_lock;
+
 int u_getchar(void) {
+    ulock_acquire(&g_read_lock);
+
+    // Drain single-char unget buffer first.
     if (g_next_char != -1) {
         int ch = g_next_char;
         g_next_char = -1;
+        ulock_release(&g_read_lock);
         return ch;
     }
+
+    // Buffer empty: release the lock before blocking in the kernel, then refill.
     if (g_read_head == g_read_tail) {
+        ulock_release(&g_read_lock);
         int64_t n = syscall_read(g_read_buf, sizeof(g_read_buf));
-        if (n <= 0) return -1;
-        g_read_head = 0;
-        g_read_tail = (size_t)n;
+        ulock_acquire(&g_read_lock);
+        if (n <= 0) {
+            ulock_release(&g_read_lock);
+            return -1;
+        }
+        // Only update indices if another thread hasn't already filled the buffer.
+        if (g_read_head == g_read_tail) {
+            g_read_head = 0;
+            g_read_tail = (size_t)n;
+        }
     }
-    return (unsigned char)g_read_buf[g_read_head++];
+
+    if (g_read_head == g_read_tail) {
+        ulock_release(&g_read_lock);
+        return -1;
+    }
+
+    int ch = (unsigned char)g_read_buf[g_read_head++];
+    ulock_release(&g_read_lock);
+    return ch;
 }
 
 static void _ungetchar(int ch) {
+    ulock_acquire(&g_read_lock);
     g_next_char = ch;
+    ulock_release(&g_read_lock);
 }
 
 int uvscanf_(const char* format, va_list va) {

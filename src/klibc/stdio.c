@@ -924,8 +924,11 @@ int _getchar(void) {
         g_next_char = -1;
         return ch;
     }
-    if (!g_active_tty) return 0;
-    return (int)tty_read_char(g_active_tty);
+    // Always read from the kernel's own fixed TTY, not g_active_tty.
+    // g_active_tty may be switched to a user process TTY; the kernel loop
+    // must not compete with userspace for input.
+    if (!g_kernel_tty) return 0;
+    return (int)tty_read_char(g_kernel_tty);
 }
 
 static void _ungetchar(int ch) {

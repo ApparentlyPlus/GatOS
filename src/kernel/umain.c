@@ -9,6 +9,7 @@
 
 #include <kernel/sys/scheduler.h>
 #include <kernel/sys/process.h>
+#include <kernel/drivers/tty.h>
 #include <kernel/uproc.h>
 
 /*

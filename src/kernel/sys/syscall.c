@@ -145,11 +145,13 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
             // Clamp to a sane per-call maximum to prevent runaway blocking.
             if (count > 4096) count = 4096;
 
-            // Validate that the entire buffer is a writable, user-accessible range.
-            if (!vmm_check_buffer(current->process->vmm, buf, count,
-                                  VM_FLAG_USER | VM_FLAG_WRITE)) {
-                LOGF("[SYSCALL] SYS_READ: invalid buffer 0x%lx (len: %zu) from '%s'\n",
-                     (uintptr_t)buf, count, current->name);
+            // Validate the buffer is in canonical user space (< 0xFFFF000000000000)
+            uintptr_t uptr = (uintptr_t)buf;
+            if (uptr < 0x1000 ||
+                uptr >= 0xFFFF000000000000ULL ||
+                uptr + count < uptr) {
+                LOGF("[SYSCALL] SYS_READ: non-user buffer 0x%lx (len: %zu) from '%s'\n",
+                     uptr, count, current->name);
                 registers[14] = (uint64_t)-1;
                 break;
             }

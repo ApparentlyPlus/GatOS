@@ -60,11 +60,6 @@ void demo_threadA(void* arg) {
         printf("Hello from USERSPACE Thread A (sqrt(%d) = %lf)\n", i, sqrt(i));
         syscall_sleep(500);
     }
-
-    printf("What's your name? ");
-    char name[100];
-    scanf("%99s", name);
-    printf("Nice to meet you, %s!", name);
 }
 
 /*
@@ -78,6 +73,10 @@ void demo_threadB(void* arg) {
         syscall_sleep(1000);
     }
 
+    printf("What's your name?\n> ");
+    char name[100];
+    scanf("%s", name);
+    printf("Nice to meet you, %s!\n", name);
     printf("Press ALT+F4 to terminate this TTY session.\n");
 }
 
@@ -86,5 +85,5 @@ void demo_threadB(void* arg) {
  */
 void demo2_threadA(void* arg) {
     (void)arg;
-    SieveOfEratosthenes(10000000);
+    SieveOfEratosthenes(1000);
 }   
