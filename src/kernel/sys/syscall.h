@@ -17,5 +17,6 @@
 #define SYS_SET_FS_BASE 5
 #define SYS_YIELD 6
 #define SYS_SLEEP_MS 7
+#define SYS_READ 8
 
 void syscall_init(void);

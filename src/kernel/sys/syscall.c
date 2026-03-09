@@ -15,6 +15,7 @@
 #include <kernel/sys/process.h>
 #include <klibc/stdio.h>
 #include <kernel/memory/vmm.h>
+#include <kernel/drivers/tty.h>
 #include <kernel/debug.h>
 
 extern void syscall_entry(void);
@@ -130,7 +131,40 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
             sched_sleep(ms);
             break;
         }
-            
+
+        case SYS_READ: {
+            char*  buf   = (char*)registers[9];
+            size_t count = (size_t)registers[10];
+
+            // Reject zero-length reads and NULL buffers immediately.
+            if (!buf || count == 0) {
+                registers[14] = (uint64_t)-1;
+                break;
+            }
+
+            // Clamp to a sane per-call maximum to prevent runaway blocking.
+            if (count > 4096) count = 4096;
+
+            // Validate that the entire buffer is a writable, user-accessible range.
+            if (!vmm_check_buffer(current->process->vmm, buf, count,
+                                  VM_FLAG_USER | VM_FLAG_WRITE)) {
+                LOGF("[SYSCALL] SYS_READ: invalid buffer 0x%lx (len: %zu) from '%s'\n",
+                     (uintptr_t)buf, count, current->name);
+                registers[14] = (uint64_t)-1;
+                break;
+            }
+
+            tty_t* tty = current->process->tty;
+            if (!tty) {
+                registers[14] = (uint64_t)-1;
+                break;
+            }
+
+            size_t n = tty_read(tty, buf, count);
+            registers[14] = (uint64_t)n;
+            break;
+        }
+
         default:
             LOGF("[SYSCALL] Unknown syscall: %lu from thread '%s' (PID %u)\n", 
                  syscall_num, current->name, current->process ? current->process->pid : 0);

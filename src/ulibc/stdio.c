@@ -909,12 +909,28 @@ int ufctprintf(void (*out)(char character, void* arg), void* arg, const char* fo
 ///////////////////////////////////////////////////////////////////////////////
 // Input Implementation
 
+// Userspace read buffer: one syscall per line, drained char-by-char.
+static char   g_read_buf[256];
+static size_t g_read_head = 0;
+static size_t g_read_tail = 0;
+
+// Single-character unget buffer (-1 = empty).
 static int g_next_char = -1;
 
 int u_getchar(void) {
-    return 0; // Not implemented in userspace yet
+    if (g_next_char != -1) {
+        int ch = g_next_char;
+        g_next_char = -1;
+        return ch;
+    }
+    if (g_read_head == g_read_tail) {
+        int64_t n = syscall_read(g_read_buf, sizeof(g_read_buf));
+        if (n <= 0) return -1;
+        g_read_head = 0;
+        g_read_tail = (size_t)n;
+    }
+    return (unsigned char)g_read_buf[g_read_head++];
 }
-
 
 static void _ungetchar(int ch) {
     g_next_char = ch;

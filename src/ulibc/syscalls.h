@@ -18,6 +18,7 @@
 #define SYS_SET_FS_BASE 5
 #define SYS_YIELD 6
 #define SYS_SLEEP_MS 7
+#define SYS_READ 8
 
 #define userspace __attribute__((section(".user_text")))
 
@@ -92,4 +93,8 @@ userspace static inline void syscall_yield(void) {
 
 userspace static inline void syscall_sleep(uint64_t ms) {
     sc1(SYS_SLEEP_MS, ms);
+}
+
+userspace static inline int64_t syscall_read(char* buf, size_t len) {
+    return (int64_t)sc2(SYS_READ, (uint64_t)buf, (uint64_t)len);
 }

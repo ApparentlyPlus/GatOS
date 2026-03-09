@@ -60,6 +60,11 @@ void demo_threadA(void* arg) {
         printf("Hello from USERSPACE Thread A (sqrt(%d) = %lf)\n", i, sqrt(i));
         syscall_sleep(500);
     }
+
+    printf("What's your name? ");
+    char name[100];
+    scanf("%99s", name);
+    printf("Nice to meet you, %s!", name);
 }
 
 /*
