@@ -162,12 +162,20 @@ thread_t* thread_create(process_t* process, const char* name, void (*entry)(void
     thread->state = THREAD_STATE_READY;
     kstrncpy(thread->name, name, MAX_THREAD_NAME - 1);
 
-    // Initialize FPU state
-    __asm__ volatile (
-        "fninit \n"
-        "fxsave %0 \n"
-        : "=m"(thread->fpu_state)
-    );
+    /*
+     * Initialize FPU state to a clean architectural default.
+     * The thread struct is already fully zeroed by kmemset above, so all
+     * x87/MMX/XMM registers are zero. We only need to write the two control
+     * words that have non-zero reset values:
+     *
+     *   FCW  (offset  0) = 0x037F — x87: all exceptions masked, 64-bit precision
+     *   MXCSR(offset 24) = 0x1F80 — SSE: all exceptions masked
+     *
+     * This avoids fninit + fxsave, which would capture the calling context's
+     * live XMM registers and potentially leak kernel FPU state into the thread.
+     */
+    *(uint16_t *)(&thread->fpu_state[0])  = 0x037F;
+    *(uint32_t *)(&thread->fpu_state[24]) = 0x1F80;
 
     // Allocate kernel stack from kernel heap
     thread->kernel_stack = kmalloc(KERNEL_STACK_SIZE);
