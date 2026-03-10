@@ -123,9 +123,9 @@ void demo_threadB(void* arg) {
 }
 
 /*
- * demo2_threadA - Demonstrates the Sieve of Eratosthenes algorithm
+ * donut_sim - Donut
  */
-void demo2_threadA(void* arg) {
+void donut_sim(void* arg) {
     (void)arg;
     donut();
 }   

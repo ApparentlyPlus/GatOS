@@ -6,4 +6,4 @@
 
 void demo_threadA(void* arg);
 void demo_threadB(void* arg);
-void demo2_threadA(void* arg);
+void donut_sim(void* arg);
