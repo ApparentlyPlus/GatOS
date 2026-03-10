@@ -173,6 +173,16 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
             break;
         }
 
+        case SYS_TTY_CURSOR: {
+            tty_t* tty = current->process->tty;
+            if (tty && tty->console) {
+                uint8_t enabled = registers[9] & 0xFF;
+                con_enable_cursor(tty->console, enabled);
+            }
+            registers[14] = 0;
+            break;
+        }
+
         default:
             LOGF("[SYSCALL] Unknown syscall: %lu from thread '%s' (PID %u)\n", 
                  syscall_num, current->name, current->process ? current->process->pid : 0);

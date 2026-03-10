@@ -20,6 +20,7 @@
  * donut - Renders a spinning ASCII donut in the console using only syscalls.
  */
 void donut(void) {
+    syscall_tty_cursor(false); // Hide cursor for better aesthetics
     float A = 0, B = 0, i, j, z[1760];
     char b[1760];
     char out_buf[1764];

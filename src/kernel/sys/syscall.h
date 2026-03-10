@@ -19,5 +19,6 @@
 #define SYS_SLEEP_MS 7
 #define SYS_READ 8
 #define SYS_TTY_CLEAR 9
+#define SYS_TTY_CURSOR 10
 
 void syscall_init(void);

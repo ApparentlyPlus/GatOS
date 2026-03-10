@@ -11,6 +11,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdbool.h>
 
 #define SYS_EXIT 1
 #define SYS_WRITE 2
@@ -21,6 +22,7 @@
 #define SYS_SLEEP_MS 7
 #define SYS_READ 8
 #define SYS_TTY_CLEAR 9
+#define SYS_TTY_CURSOR 10
 
 #define userspace __attribute__((section(".user_text")))
 
@@ -103,4 +105,8 @@ userspace static inline int64_t syscall_read(char* buf, size_t len) {
 
 userspace static inline void syscall_tty_clear(void) {
     sc0(SYS_TTY_CLEAR);
+}
+
+userspace static inline void syscall_tty_cursor(bool enabled) {
+    sc1(SYS_TTY_CURSOR, enabled ? 1 : 0);
 }
