@@ -48,4 +48,3 @@ double tanh(double x);
 double asinh(double x);
 double acosh(double x);
 double atanh(double x);
-

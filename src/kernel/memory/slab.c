@@ -13,7 +13,7 @@
 #include <kernel/memory/pmm.h>
 #include <kernel/sys/spinlock.h>
 #include <kernel/debug.h>
-#include <libc/string.h>
+#include <klibc/string.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -31,6 +31,12 @@
 // Minimum object size must fit the freelist header we use when free.
 #define SLAB_MIN_OBJ_SIZE (sizeof(slab_free_obj_t))
 
+// Which list a slab is currently on
+#define SLAB_LIST_NONE    0
+#define SLAB_LIST_EMPTY   1
+#define SLAB_LIST_PARTIAL 2
+#define SLAB_LIST_FULL    3
+
 // Slab metadata structures
 typedef struct slab {
     uint32_t magic;
@@ -42,6 +48,7 @@ typedef struct slab {
     struct slab* prev;
     slab_cache_t* cache;
     uint64_t slab_phys;
+    uint8_t  list_id;   // tracks which list this slab is on
 } slab_t;
 
 // free object header embedded inside the object when it's free
@@ -186,19 +193,21 @@ static void slab_remove_from_list(slab_t** list_head, slab_t* slab) {
         slab->next->prev = slab->prev;
     }
 
-    // clear links to avoid accidental reuse footguns
-    slab->next = NULL;
-    slab->prev = NULL;
+    // clear links and list membership
+    slab->next    = NULL;
+    slab->prev    = NULL;
+    slab->list_id = SLAB_LIST_NONE;
 }
 
 /*
- * slab_add_to_list - add slab to head of list (LIFO style)
+ * slab_add_to_list - add slab to head of list (LIFO style); records list_id
  */
-static void slab_add_to_list(slab_t** list_head, slab_t* slab) {
+static void slab_add_to_list(slab_t** list_head, slab_t* slab, uint8_t list_id) {
     if (!slab) return;
 
-    slab->next = *list_head;
-    slab->prev = NULL;
+    slab->list_id = list_id;
+    slab->next    = *list_head;
+    slab->prev    = NULL;
 
     if (*list_head) {
         (*list_head)->prev = slab;
@@ -208,12 +217,11 @@ static void slab_add_to_list(slab_t** list_head, slab_t* slab) {
 }
 
 /*
- * slab_move_to_list - convenience wrapper (remove then add)
+ * slab_move_to_list - convenience wrapper (remove then add); records list_id
  */
-static void slab_move_to_list(slab_t** from_list, slab_t** to_list, slab_t* slab) {
-    // simple wrapper to make callers shorter and intention clearer
+static void slab_move_to_list(slab_t** from_list, slab_t** to_list, slab_t* slab, uint8_t to_id) {
     slab_remove_from_list(from_list, slab);
-    slab_add_to_list(to_list, slab);
+    slab_add_to_list(to_list, slab, to_id);
 }
 
 /*
@@ -233,7 +241,7 @@ static slab_t* slab_allocate_page(slab_cache_t* cache) {
     slab_t* slab = (slab_t*)PHYSMAP_P2V(phys);
 
     // zero the whole page to start cleanly
-    memset(slab, 0, PAGE_SIZE);
+    kmemset(slab, 0, PAGE_SIZE);
 
     // init metadata
     slab->magic = SLAB_MAGIC;
@@ -322,7 +330,7 @@ static slab_t* get_slab_from_obj(void* obj) {
 
     uintptr_t addr = (uintptr_t)obj;
 
-    // round down to page boundary to recover slab header
+    // kround down to page boundary to recover slab header
     uintptr_t slab_addr = addr & ~(PAGE_SIZE - 1);
     slab_t* slab = (slab_t*)slab_addr;
 
@@ -347,7 +355,7 @@ static slab_cache_t* slab_alloc_cache_struct(void) {
     slab_cache_t* cache = (slab_cache_t*)PHYSMAP_P2V(phys);
 
     // zero initialize
-    memset(cache, 0, sizeof(slab_cache_t));
+    kmemset(cache, 0, sizeof(slab_cache_t));
 
     return cache;
 }
@@ -391,7 +399,7 @@ slab_status_t slab_init(void) {
 
     g_caches = NULL;
     g_next_cache_id = 1;
-    memset(&g_stats, 0, sizeof(slab_stats_t));
+    kmemset(&g_stats, 0, sizeof(slab_stats_t));
 
     g_slab_initialized = true;
 
@@ -425,7 +433,7 @@ void slab_shutdown(void) {
     g_slab_initialized = false;
     g_caches = NULL;
     g_next_cache_id = 1;
-    memset(&g_stats, 0, sizeof(slab_stats_t));
+    kmemset(&g_stats, 0, sizeof(slab_stats_t));
 
     LOGF("[SLAB] Slab (System Wide) Allocator shutdown\n");
     spinlock_release(&g_slab_list_lock, flags);
@@ -492,7 +500,7 @@ slab_cache_t* slab_cache_create(const char* name, size_t obj_size,
     // initialize fields
     cache->magic = SLAB_CACHE_MAGIC;
     cache->cache_id = g_next_cache_id++;
-    strncpy(cache->name, name, SLAB_CACHE_NAME_LEN - 1);
+    kstrncpy(cache->name, name, SLAB_CACHE_NAME_LEN - 1);
     cache->name[SLAB_CACHE_NAME_LEN - 1] = '\0';
 
     cache->user_size = obj_size;
@@ -515,7 +523,7 @@ slab_cache_t* slab_cache_create(const char* name, size_t obj_size,
 
     spinlock_init(&cache->lock, "slab_cache");
 
-    memset(&cache->stats, 0, sizeof(slab_cache_stats_t));
+    kmemset(&cache->stats, 0, sizeof(slab_cache_stats_t));
 
     // insert into global cache list (LIFO)
     cache->next = g_caches;
@@ -576,7 +584,7 @@ static slab_cache_t* slab_cache_find_internal(const char* name) {
     slab_cache_t* cache = g_caches;
     while (cache) {
         if (!cache_validate(cache)) return NULL;
-        if (strncmp(cache->name, name, SLAB_CACHE_NAME_LEN) == 0) {
+        if (kstrncmp(cache->name, name, SLAB_CACHE_NAME_LEN) == 0) {
             return cache;
         }
         cache = cache->next;
@@ -626,7 +634,7 @@ slab_status_t slab_alloc(slab_cache_t* cache, void** out_obj) {
             spinlock_release(&cache->lock, flags);
             return SLAB_ERR_NO_MEMORY;
         }
-        slab_add_to_list(&cache->slabs_empty, slab);
+        slab_add_to_list(&cache->slabs_empty, slab, SLAB_LIST_EMPTY);
     }
 
     if (!slab_validate(slab)) {
@@ -654,7 +662,7 @@ slab_status_t slab_alloc(slab_cache_t* cache, void** out_obj) {
     slab->in_use++;
 
     // clear object memory before giving to user
-    memset(obj, 0, cache->obj_size);
+    kmemset(obj, 0, cache->obj_size);
 
     // write allocation header at the object start
     slab_alloc_header_t* header = (slab_alloc_header_t*)obj;
@@ -669,19 +677,19 @@ slab_status_t slab_alloc(slab_cache_t* cache, void** out_obj) {
     // move slab between lists if its fullness changed
     if (slab->in_use == slab->capacity) {
         // slab became full
-        if (slab == cache->slabs_partial) {
-            slab_move_to_list(&cache->slabs_partial, &cache->slabs_full, slab);
+        if (slab->list_id == SLAB_LIST_PARTIAL) {
+            slab_move_to_list(&cache->slabs_partial, &cache->slabs_full, slab, SLAB_LIST_FULL);
             cache->stats.partial_slabs--;
             cache->stats.full_slabs++;
-        } else if (slab == cache->slabs_empty) {
-            slab_move_to_list(&cache->slabs_empty, &cache->slabs_full, slab);
+        } else if (slab->list_id == SLAB_LIST_EMPTY) {
+            slab_move_to_list(&cache->slabs_empty, &cache->slabs_full, slab, SLAB_LIST_FULL);
             cache->stats.empty_slabs--;
             cache->stats.full_slabs++;
         }
     } else if (slab->in_use == 1) {
         // slab transitioned from empty -> partial
-        if (slab == cache->slabs_empty) {
-            slab_move_to_list(&cache->slabs_empty, &cache->slabs_partial, slab);
+        if (slab->list_id == SLAB_LIST_EMPTY) {
+            slab_move_to_list(&cache->slabs_empty, &cache->slabs_partial, slab, SLAB_LIST_PARTIAL);
             cache->stats.empty_slabs--;
             cache->stats.partial_slabs++;
         }
@@ -755,12 +763,12 @@ slab_status_t slab_free(slab_cache_t* cache, void* obj) {
     // move slab to correct list depending on new in_use
     if (slab->in_use == 0) {
         // slab became empty
-        if (slab == cache->slabs_partial) {
-            slab_move_to_list(&cache->slabs_partial, &cache->slabs_empty, slab);
+        if (slab->list_id == SLAB_LIST_PARTIAL) {
+            slab_move_to_list(&cache->slabs_partial, &cache->slabs_empty, slab, SLAB_LIST_EMPTY);
             cache->stats.partial_slabs--;
             cache->stats.empty_slabs++;
-        } else if (slab == cache->slabs_full) {
-            slab_move_to_list(&cache->slabs_full, &cache->slabs_empty, slab);
+        } else if (slab->list_id == SLAB_LIST_FULL) {
+            slab_move_to_list(&cache->slabs_full, &cache->slabs_empty, slab, SLAB_LIST_EMPTY);
             cache->stats.full_slabs--;
             cache->stats.empty_slabs++;
         }
@@ -774,8 +782,8 @@ slab_status_t slab_free(slab_cache_t* cache, void* obj) {
 
     } else if (slab->in_use == slab->capacity - 1) {
         // slab went from full -> partial
-        if (slab == cache->slabs_full) { 
-            slab_move_to_list(&cache->slabs_full, &cache->slabs_partial, slab);
+        if (slab->list_id == SLAB_LIST_FULL) {
+            slab_move_to_list(&cache->slabs_full, &cache->slabs_partial, slab, SLAB_LIST_PARTIAL);
             cache->stats.full_slabs--;
             cache->stats.partial_slabs++;
         }
@@ -810,7 +818,7 @@ void slab_get_stats(slab_stats_t* out_stats) {
 }
 
 /*
- * slab_dump_stats - print global stats to log
+ * slab_dump_stats - print global stats to klog
  */
 void slab_dump_stats(void) {
     bool flags = spinlock_acquire(&g_slab_list_lock);

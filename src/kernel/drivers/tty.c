@@ -12,7 +12,7 @@
 #include <kernel/memory/heap.h>
 #include <kernel/sys/scheduler.h>
 #include <kernel/sys/panic.h>
-#include <libc/string.h>
+#include <klibc/string.h>
 
 // TTY Manager State
 static tty_t* g_tty_list = NULL;
@@ -26,7 +26,7 @@ tty_t* g_kernel_tty = NULL; // Protected primary console
  * tty_init - Internal helper to initialize a TTY structure.
  */
 static void tty_init(tty_t* tty, console_t* console) {
-    memset(tty->buffer, 0, TTY_BUFFER_SIZE);
+    kmemset(tty->buffer, 0, TTY_BUFFER_SIZE);
     tty->head = 0;
     tty->tail = 0;
     tty->console = console;
@@ -111,13 +111,9 @@ void tty_destroy(tty_t* tty) {
     }
 
     if (g_active_tty == tty) {
-        // Hide cursor before switching away
-        if (tty->console) con_set_cursor_enabled(tty->console, false);
-        
         g_active_tty = g_tty_list;
         if (g_active_tty) {
             con_refresh(g_active_tty->console);
-            con_set_cursor_enabled(g_active_tty->console, true);
         }
     }
 
@@ -137,17 +133,10 @@ void tty_destroy(tty_t* tty) {
 void tty_switch(tty_t* tty) {
     if (!tty || g_active_tty == tty) return;
 
-    // Hide cursor on the outgoing terminal
-    if (g_active_tty && g_active_tty->console) {
-        con_set_cursor_enabled(g_active_tty->console, false);
-    }
-
     g_active_tty = tty;
 
-    // Show cursor on the incoming terminal
     if (tty->console) {
         con_refresh(tty->console);
-        con_set_cursor_enabled(tty->console, true);
     }
 }
 
@@ -231,4 +220,22 @@ void tty_write(tty_t* tty, const char* buf, size_t count) {
     for (size_t i = 0; i < count; i++) {
         con_putc(tty->console, buf[i]);
     }
+}
+
+/*
+ * tty_header_init - Reserves the top N rows of this TTY as a sticky
+ * header that is never scrolled or overwritten by normal output
+ */
+void tty_header_init(tty_t* tty, size_t rows) {
+    if (!tty || !tty->console) return;
+    con_header_init(tty->console, rows);
+}
+
+/*
+ * tty_header_write - Writes centred text into sticky header row
+ * and redraws it immediately. Safe to call at any time to update the header.
+ */
+void tty_header_write(tty_t* tty, size_t row, const char* text, uint8_t fg, uint8_t bg) {
+    if (!tty || !tty->console) return;
+    con_header_write(tty->console, row, text, fg, bg);
 }

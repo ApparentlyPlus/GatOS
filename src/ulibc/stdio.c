@@ -1,5 +1,5 @@
 /*
- * vga_stdio.c - VGA text mode printing and input implementation
+ * stdio.c - Printing and input implementation
  *
  * Tiny printf, sprintf and snprintf implementation, optimized for speed on
  * embedded systems with a very limited resources.
@@ -13,13 +13,10 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#include <kernel/drivers/console.h>
-#include <kernel/drivers/stdio.h>
-#include <kernel/drivers/tty.h>
-#include <kernel/sys/panic.h>
-#include <kernel/sys/scheduler.h>
-#include <kernel/sys/process.h>
-#include <libc/string.h>
+#include <ulibc/stdio.h>
+#include <ulibc/syscalls.h>
+#include <ulibc/string.h>
+#include <ulibc/spinlock.h>
 
 
 // define this globally (e.g. gcc -DPRINTF_INCLUDE_CONFIG_H ...) to include the
@@ -115,24 +112,10 @@ typedef struct {
 } out_fct_wrap_type;
 
 
-void _putchar(char character){
-    tty_t* target_tty = g_active_tty;
-
-    // Route to the calling thread's own TTY if the scheduler is running
-    if (sched_active()) {
-        thread_t* current = sched_current();
-        if (current && current->process && current->process->tty) {
-            target_tty = current->process->tty;
-        }
-    }
-
-    // If the TTY is NULL (closed via ALT+F4), discard the output
-    if (!target_tty) {
-        return;
-    }
-
-    tty_write(target_tty, &character, 1);
+void u_putchar(char character){
+    syscall_write(&character, 1);
 }
+
 
 // internal buffer output
 static inline void _out_buffer(char character, void* buffer, size_t idx, size_t maxlen)
@@ -155,7 +138,7 @@ static inline void _out_char(char character, void* buffer, size_t idx, size_t ma
 {
   (void)buffer; (void)idx; (void)maxlen;
   if (character) {
-    _putchar(character);
+    u_putchar(character);
   }
 }
 
@@ -335,7 +318,7 @@ static size_t _ntoa_long_long(out_fct_type out, char* buffer, size_t idx, size_t
 #if defined(PRINTF_SUPPORT_FLOAT)
 
 #if defined(PRINTF_SUPPORT_EXPONENTIAL)
-// forward declaration so that _ftoa can switch to exp notation for values > PRINTF_MAX_FLOAT
+// forward declaration so that _ftoa can switch to kexp notation for values > PRINTF_MAX_FLOAT
 static size_t _etoa(out_fct_type out, char* buffer, size_t idx, size_t maxlen, double value, unsigned int prec, unsigned int width, unsigned int flags);
 #endif
 
@@ -498,7 +481,7 @@ static size_t _etoa(out_fct_type out, char* buffer, size_t idx, size_t maxlen, d
   const double z  = expval * 2.302585092994046 - exp2 * 0.6931471805599453;
   const double z2 = z * z;
   conv.U = (uint64_t)(exp2 + 1023) << 52U;
-  // compute exp(z) using continued fractions, see https://en.wikipedia.org/wiki/Exponential_function#Continued_fractions_for_ex
+  // compute kexp(z) using continued fractions, see https://en.wikipedia.org/wiki/Exponential_function#Continued_fractions_for_ex
   conv.F *= 1 + 2 * z / (2 - z + (z2 / (6 + (z2 / (10 + z2 / 14)))));
   // correct for rounding errors
   if (value < conv.F) {
@@ -858,18 +841,22 @@ static int _vsnprintf(out_fct_type out, char* buffer, const size_t maxlen, const
 
 ///////////////////////////////////////////////////////////////////////////////
 
-int printf_(const char* format, ...)
+int uprintf_(const char* format, ...)
 {
   va_list va;
   va_start(va, format);
-  char buffer[1];
-  const int ret = _vsnprintf(_out_char, buffer, (size_t)-1, format, va);
+  char buffer[1024];
+  const int ret = _vsnprintf(_out_buffer, buffer, sizeof(buffer), format, va);
   va_end(va);
+  if (ret > 0) {
+      size_t to_write = ((size_t)ret < sizeof(buffer)) ? (size_t)ret : (sizeof(buffer) - 1);
+      syscall_write(buffer, to_write);
+  }
   return ret;
 }
 
 
-int sprintf_(char* buffer, const char* format, ...)
+int usprintf_(char* buffer, const char* format, ...)
 {
   va_list va;
   va_start(va, format);
@@ -879,7 +866,7 @@ int sprintf_(char* buffer, const char* format, ...)
 }
 
 
-int snprintf_(char* buffer, size_t count, const char* format, ...)
+int usnprintf_(char* buffer, size_t count, const char* format, ...)
 {
   va_list va;
   va_start(va, format);
@@ -889,20 +876,25 @@ int snprintf_(char* buffer, size_t count, const char* format, ...)
 }
 
 
-int vprintf_(const char* format, va_list va)
+int uvprintf_(const char* format, va_list va)
 {
-  char buffer[1];
-  return _vsnprintf(_out_char, buffer, (size_t)-1, format, va);
+  char buffer[1024];
+  const int ret = _vsnprintf(_out_buffer, buffer, sizeof(buffer), format, va);
+  if (ret > 0) {
+      size_t to_write = ((size_t)ret < sizeof(buffer)) ? (size_t)ret : (sizeof(buffer) - 1);
+      syscall_write(buffer, to_write);
+  }
+  return ret;
 }
 
 
-int vsnprintf_(char* buffer, size_t count, const char* format, va_list va)
+int uvsnprintf_(char* buffer, size_t count, const char* format, va_list va)
 {
   return _vsnprintf(_out_buffer, buffer, count, format, va);
 }
 
 
-int fctprintf(void (*out)(char character, void* arg), void* arg, const char* format, ...)
+int ufctprintf(void (*out)(char character, void* arg), void* arg, const char* format, ...)
 {
   va_list va;
   va_start(va, format);
@@ -916,37 +908,76 @@ int fctprintf(void (*out)(char character, void* arg), void* arg, const char* for
 ///////////////////////////////////////////////////////////////////////////////
 // Input Implementation
 
+// Userspace read buffer: one syscall per line, drained char-by-char.
+static char   g_read_buf[256];
+static size_t g_read_head = 0;
+static size_t g_read_tail = 0;
+
+// Single-character unget buffer (-1 = empty).
 static int g_next_char = -1;
 
-int _getchar(void) {
+// Protects g_read_buf, g_read_head, g_read_tail, g_next_char.
+// Zero-initialized in .user_bss == unlocked.
+static ulock_t g_read_lock;
+
+int u_getchar(void) {
+    ulock_acquire(&g_read_lock);
+
+    // Drain single-char unget buffer first.
     if (g_next_char != -1) {
         int ch = g_next_char;
         g_next_char = -1;
+        ulock_release(&g_read_lock);
         return ch;
     }
-    if (!g_active_tty) return 0;
-    return (int)tty_read_char(g_active_tty);
+
+    // Buffer empty: release the lock before blocking in the kernel, then refill.
+    if (g_read_head == g_read_tail) {
+        ulock_release(&g_read_lock);
+        int64_t n = syscall_read(g_read_buf, sizeof(g_read_buf));
+        ulock_acquire(&g_read_lock);
+        if (n <= 0) {
+            ulock_release(&g_read_lock);
+            return -1;
+        }
+        // Only update indices if another thread hasn't already filled the buffer.
+        if (g_read_head == g_read_tail) {
+            g_read_head = 0;
+            g_read_tail = (size_t)n;
+        }
+    }
+
+    if (g_read_head == g_read_tail) {
+        ulock_release(&g_read_lock);
+        return -1;
+    }
+
+    int ch = (unsigned char)g_read_buf[g_read_head++];
+    ulock_release(&g_read_lock);
+    return ch;
 }
 
 static void _ungetchar(int ch) {
+    ulock_acquire(&g_read_lock);
     g_next_char = ch;
+    ulock_release(&g_read_lock);
 }
 
-int vscanf_(const char* format, va_list va) {
+int uvscanf_(const char* format, va_list va) {
     int count = 0;
     int ch;
 
     while (*format) {
         if (isspace((unsigned char)*format)) {
             while (isspace((unsigned char)*format)) format++;
-            ch = _getchar();
-            while (isspace(ch)) ch = _getchar();
+            ch = u_getchar();
+            while (isspace(ch)) ch = u_getchar();
             _ungetchar(ch);
             continue;
         }
 
         if (*format != '%') {
-            ch = _getchar();
+            ch = u_getchar();
             if (ch != *format) {
                 _ungetchar(ch);
                 return count;
@@ -985,7 +1016,7 @@ int vscanf_(const char* format, va_list va) {
             char* p = suppress ? NULL : va_arg(va, char*);
             int matched = 0;
             
-            while ((ch = _getchar()) != 0) {
+            while ((ch = u_getchar()) != 0) {
                 bool in_set = set[(unsigned char)ch];
                 if (invert) in_set = !in_set;
                 
@@ -1008,7 +1039,7 @@ int vscanf_(const char* format, va_list va) {
 
         // Handle %%
         if (*format == '%') {
-            ch = _getchar();
+            ch = u_getchar();
             if (ch != '%') {
                 _ungetchar(ch);
                 return count;
@@ -1020,7 +1051,7 @@ int vscanf_(const char* format, va_list va) {
         switch (*format) {
             case 'c': {
                 char* p = suppress ? NULL : va_arg(va, char*);
-                ch = _getchar();
+                ch = u_getchar();
                 if (!suppress) {
                     *p = (char)ch;
                     count++;
@@ -1029,14 +1060,14 @@ int vscanf_(const char* format, va_list va) {
             }
             case 's': {
                 char* p = suppress ? NULL : va_arg(va, char*);
-                ch = _getchar();
-                while (isspace(ch)) ch = _getchar();
+                ch = u_getchar();
+                while (isspace(ch)) ch = u_getchar();
                 
                 int matched = 0;
                 while (ch != 0 && !isspace(ch)) {
                     if (!suppress) *p++ = (char)ch;
                     matched++;
-                    ch = _getchar();
+                    ch = u_getchar();
                 }
                 _ungetchar(ch);
                 if (matched > 0) {
@@ -1054,8 +1085,8 @@ int vscanf_(const char* format, va_list va) {
             case 'x': {
                 char buf[64];
                 int i = 0;
-                ch = _getchar();
-                while (isspace(ch)) ch = _getchar();
+                ch = u_getchar();
+                while (isspace(ch)) ch = u_getchar();
                 
                 bool is_hex = (*format == 'x');
                 bool is_oct = (*format == 'o');
@@ -1070,7 +1101,7 @@ int vscanf_(const char* format, va_list va) {
                     
                     if (!valid) break;
                     buf[i++] = (char)ch;
-                    ch = _getchar();
+                    ch = u_getchar();
                 }
                 buf[i] = '\0';
                 _ungetchar(ch);
@@ -1102,10 +1133,10 @@ int vscanf_(const char* format, va_list va) {
     return count;
 }
 
-int scanf_(const char* format, ...) {
+int uscanf_(const char* format, ...) {
     va_list va;
     va_start(va, format);
-    int ret = vscanf_(format, va);
+    int ret = uvscanf_(format, va);
     va_end(va);
     return ret;
 }

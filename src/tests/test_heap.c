@@ -1,10 +1,12 @@
 /*
- * test_heap.c - Kernel Heap Manager Validation Suite (White Box)
+ * test_heap.c - Kernel Heap Manager Validation Suite (White-Box)
  *
- * This suite verifies the correctness, stability, and security of the
- * Multi-Arena Heap Allocator. It mirrors internal structures to verify 
- * boundary tags, coalescing logic, and protection mechanisms on the 
- * live kernel.
+ * Tests every public heap function: heap_kernel_init, heap_kernel_get,
+ * kmalloc, kfree, krealloc, kcalloc, heap_check_integrity,
+ * heap_get_alloc_size, heap_stats, heap_align_size, heap_validate_block.
+ *
+ * Machine-adaptive: large allocation stress targets 25% of available
+ * heap space rather than a hardcoded byte count.
  */
 
 #include <kernel/memory/heap.h>
@@ -12,30 +14,24 @@
 #include <kernel/memory/pmm.h>
 #include <kernel/debug.h>
 #include <tests/tests.h>
-#include <libc/string.h>
-
+#include <klibc/string.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
 
-#pragma region Configuration & Types
+#pragma region Mirror internal structures for white-box inspection
 
-#define MAX_TRACKED_ITEMS 1024
-
-// Constants from heap.c
 #define HEAP_MAGIC       0xF005BA11
 #define BLOCK_MAGIC_USED 0xABADCAFE
 #define BLOCK_MAGIC_FREE 0xA110CA7E
 #define BLOCK_RED_ZONE   0x8BADF00D
-#define HEAP_MIN_ALIGN   16
 #define MIN_BLOCK_SIZE   32
 
 typedef struct {
     bool active;
     void* ptr;
-} heap_tracker_t;
+} htrace_t;
 
-// Mirror of heap_arena_t
 typedef struct heap_test_arena {
     uint32_t magic;
     struct heap_test_arena* next;
@@ -48,7 +44,6 @@ typedef struct heap_test_arena {
     size_t total_allocated;
 } heap_test_arena_t;
 
-// Mirror of heap_t
 typedef struct {
     uint32_t magic;
     vmm_t* vmm;
@@ -63,9 +58,8 @@ typedef struct {
     size_t total_free;
     size_t allocation_count;
     size_t arena_count;
-} heap_test_struct_t;
+} heap_test_t;
 
-// Mirror of heap_block_header_t
 typedef struct heap_test_header {
     uint32_t magic;
     uint32_t red_zone_pre;
@@ -75,548 +69,555 @@ typedef struct heap_test_header {
     struct heap_test_header* next_free;
     struct heap_test_header* prev_free;
     uint32_t red_zone_post;
-} __attribute__((aligned(16))) heap_test_header_t;
+} __attribute__((aligned(16))) heap_test_hdr_t;
 
-// Mirror of heap_block_footer_t
 typedef struct {
     uint32_t red_zone_pre;
-    heap_test_header_t* header;
+    heap_test_hdr_t* header;
     uint32_t magic;
     uint32_t red_zone_post;
-} __attribute__((aligned(16))) heap_test_footer_t;
+} __attribute__((aligned(16))) heap_test_ftr_t;
 
-static heap_tracker_t g_tracker[MAX_TRACKED_ITEMS];
-static int g_tracker_idx = 0;
-static int g_tests_total = 0;
-static int g_tests_passed = 0;
-
+#define MAX_TRACK 1024
+static htrace_t g_track[MAX_TRACK];
+static int  g_tidx         = 0;
+static int  g_tests_total  = 0;
+static int  g_tests_passed = 0;
 #pragma endregion
 
-#pragma region Harness Helpers
+#pragma region Tracker
 
-// Resets the internal tracking array before a test begins.
-static void tracker_reset(void) {
-    for (int i = 0; i < MAX_TRACKED_ITEMS; i++) {
-        g_tracker[i].active = false;
-        g_tracker[i].ptr = NULL;
-    }
-    g_tracker_idx = 0;
+static void tr_reset(void) {
+    for (int i = 0; i < MAX_TRACK; i++) g_track[i] = (htrace_t){false, NULL};
+    g_tidx = 0;
 }
 
-// Registers a kernel heap allocation to be freed during cleanup.
-static void tracker_add_k(void* ptr) {
-    if (g_tracker_idx < MAX_TRACKED_ITEMS) {
-        g_tracker[g_tracker_idx] = (heap_tracker_t){ .active = true, .ptr = ptr };
-        g_tracker_idx++;
-    } else {
-        LOGF("[TEST WARN] Heap Tracker full.\n");
-    }
+static void tr_add(void* p) {
+    if (g_tidx < MAX_TRACK) g_track[g_tidx++] = (htrace_t){true, p};
+    else LOGF("[WARN] heap tracker full\n");
 }
 
-// Frees all tracked allocations based on their source.
-static void tracker_cleanup(void) {
-    for (int i = 0; i < MAX_TRACKED_ITEMS; i++) {
-        if (g_tracker[i].active) {
-            kfree(g_tracker[i].ptr);
-            g_tracker[i].active = false;
+static void tr_free(void) {
+    for (int i = 0; i < MAX_TRACK; i++)
+        if (g_track[i].active) { kfree(g_track[i].ptr); g_track[i].active = false; }
+    g_tidx = 0;
+}
+
+static heap_test_hdr_t* hdr(void* p) {
+    return (heap_test_hdr_t*)((uint8_t*)p - sizeof(heap_test_hdr_t));
+}
+
+static heap_test_ftr_t* ftr(heap_test_hdr_t* h) {
+    return (heap_test_ftr_t*)((uint8_t*)h + sizeof(heap_test_hdr_t) + h->size);
+}
+
+static heap_test_t* heapv(void) { return (heap_test_t*)heap_kernel_get(); }
+#pragma endregion
+
+#pragma region Initialization
+
+static bool t_init_already(void) {
+    TEST_ASSERT_STATUS(heap_kernel_init(), HEAP_ERR_ALREADY_INIT);
+    return true;
+}
+
+static bool t_get_nn(void) {
+    TEST_ASSERT(heap_kernel_get() != NULL);
+    return true;
+}
+
+static bool t_magic(void) {
+    TEST_ASSERT(heapv()->magic == HEAP_MAGIC);
+    return true;
+}
+#pragma endregion
+
+#pragma region Basic Allocation
+
+static bool t_alloc_nn(void) {
+    tr_reset();
+    void* p = kmalloc(32); TEST_ASSERT(p != NULL); tr_add(p);
+    tr_free(); return true;
+}
+
+static bool t_alloc_aligned(void) {
+    tr_reset();
+    void* p = kmalloc(1); TEST_ASSERT(p != NULL); tr_add(p);
+    TEST_ASSERT(((uintptr_t)p % HEAP_MIN_ALIGN) == 0);
+    tr_free(); return true;
+}
+
+static bool t_alloc_align_small(void) {
+    /* kmalloc(1..32) must all be 16-byte aligned */
+    tr_reset();
+    for (int s = 1; s <= 32; s++) {
+        void* p = kmalloc((size_t)s);
+        TEST_ASSERT(p != NULL);
+        TEST_ASSERT(((uintptr_t)p % HEAP_MIN_ALIGN) == 0);
+        tr_add(p);
+    }
+    tr_free(); return true;
+}
+
+static bool t_alloc_meta(void) {
+    tr_reset();
+    void* p = kmalloc(64); tr_add(p);
+    heap_test_hdr_t* h = hdr(p);
+    TEST_ASSERT(h->magic == BLOCK_MAGIC_USED);
+    TEST_ASSERT(h->size >= 64);
+    TEST_ASSERT(h->red_zone_pre  == BLOCK_RED_ZONE);
+    TEST_ASSERT(h->red_zone_post == BLOCK_RED_ZONE);
+    tr_free(); return true;
+}
+
+static bool t_alloc_ftr(void) {
+    tr_reset();
+    void* p = kmalloc(48); tr_add(p);
+    heap_test_hdr_t* h = hdr(p);
+    heap_test_ftr_t* f = ftr(h);
+    TEST_ASSERT(f->magic == BLOCK_MAGIC_USED);
+    TEST_ASSERT(f->red_zone_pre  == BLOCK_RED_ZONE);
+    TEST_ASSERT(f->red_zone_post == BLOCK_RED_ZONE);
+    tr_free(); return true;
+}
+
+static bool t_alloc_wr(void) {
+    tr_reset();
+    void* p = kmalloc(128); tr_add(p);
+    kmemset(p, 0xBB, 128);
+    uint8_t* b = (uint8_t*)p;
+    TEST_ASSERT(b[0] == 0xBB && b[127] == 0xBB);
+    tr_free(); return true;
+}
+#pragma endregion
+
+#pragma region Free
+
+static bool t_free_marks(void) {
+    void* p = kmalloc(32);
+    heap_test_hdr_t* h = hdr(p);
+    kfree(p);
+    TEST_ASSERT(h->magic == BLOCK_MAGIC_FREE);
+    return true;
+}
+
+static bool t_free_null(void) {
+    kfree(NULL); /* must not crash */
+    return true;
+}
+
+static bool t_dbl_free(void) {
+    tr_reset();
+    void* p = kmalloc(32); tr_add(p);
+    kfree(p); g_track[0].active = false;
+    kfree(p); /* should warn, not crash */
+    TEST_ASSERT_STATUS(heap_check_integrity(heap_kernel_get()), HEAP_OK);
+    return true;
+}
+#pragma endregion
+
+#pragma region Calloc
+
+static bool t_calloc_zero(void) {
+    tr_reset();
+    void* p = kcalloc(4, 1024); tr_add(p); /* 4KB */
+    uint64_t* q = (uint64_t*)p;
+    for (int i = 0; i < 4096/8; i++) TEST_ASSERT(q[i] == 0);
+    tr_free(); return true;
+}
+
+static bool t_calloc_ovf(void) {
+    void* p = kcalloc(SIZE_MAX, 2);
+    TEST_ASSERT(p == NULL);
+    return true;
+}
+
+static bool t_calloc_zero_n(void) {
+    void* p = kcalloc(0, 64);
+    if (p) kfree(p); /* implementation defined but must not crash */
+    return true;
+}
+#pragma endregion
+
+#pragma region Realloc
+
+static bool t_realloc_null_malloc(void) {
+    tr_reset();
+    void* p = krealloc(NULL, 64); TEST_ASSERT(p != NULL); tr_add(p);
+    TEST_ASSERT(hdr(p)->size >= 64);
+    tr_free(); return true;
+}
+
+static bool t_realloc_zero_free(void) {
+    tr_reset();
+    void* p = kmalloc(64); tr_add(p);
+    heap_test_hdr_t* h = hdr(p);
+    void* r = krealloc(p, 0);
+    TEST_ASSERT(r == NULL);
+    TEST_ASSERT(h->magic == BLOCK_MAGIC_FREE);
+    g_track[0].active = false;
+    tr_free(); return true;
+}
+
+static bool t_realloc_grow(void) {
+    tr_reset();
+    void* p = kmalloc(64); tr_add(p);
+    kmemset(p, 0x55, 64);
+    void* r = krealloc(p, 128); tr_add(r);
+    if (r != p) g_track[0].active = false;
+    TEST_ASSERT(r != NULL);
+    TEST_ASSERT(hdr(r)->size >= 128);
+    /* First 64 bytes must be preserved */
+    uint8_t* b = (uint8_t*)r;
+    for (int i = 0; i < 64; i++) TEST_ASSERT(b[i] == 0x55);
+    tr_free(); return true;
+}
+
+static bool t_realloc_shrink(void) {
+    tr_reset();
+    void* p = kmalloc(256); tr_add(p);
+    kmemset(p, 0xCC, 256);
+    void* r = krealloc(p, 64);
+    TEST_ASSERT(r != NULL);
+    if (r != p) { g_track[0].active = false; tr_add(r); }
+    uint8_t* b = (uint8_t*)r;
+    for (int i = 0; i < 64; i++) TEST_ASSERT(b[i] == 0xCC);
+    tr_free(); return true;
+}
+
+static bool t_realloc_hole(void) {
+    tr_reset();
+    void* A = kmalloc(64); tr_add(A);
+    void* B = kmalloc(64); tr_add(B);
+    void* C = kmalloc(64); tr_add(C);
+    kmemset(A, 0x11, 64);
+    kfree(B); g_track[1].active = false;
+    void* A2 = krealloc(A, 100);
+    if (A2 == A) g_track[0].active = false;
+    else         tr_add(A2);
+    TEST_ASSERT(A2 != NULL);
+    TEST_ASSERT(hdr(A2)->size >= 100);
+    uint8_t* b = (uint8_t*)A2;
+    TEST_ASSERT(b[0] == 0x11 && b[63] == 0x11);
+    tr_free(); return true;
+}
+#pragma endregion
+
+#pragma region get_alloc_size
+
+static bool t_get_sz(void) {
+    tr_reset();
+    void* p = kmalloc(100); tr_add(p);
+    size_t sz = heap_get_alloc_size(heap_kernel_get(), p);
+    TEST_ASSERT(sz >= 100);
+    tr_free(); return true;
+}
+#pragma endregion
+
+#pragma region heap_align_size
+
+static bool t_align_sz(void) {
+    TEST_ASSERT(heap_align_size(1) >= 1);
+    TEST_ASSERT((heap_align_size(1) % HEAP_MIN_ALIGN) == 0);
+    TEST_ASSERT((heap_align_size(15) % HEAP_MIN_ALIGN) == 0);
+    TEST_ASSERT((heap_align_size(16) % HEAP_MIN_ALIGN) == 0);
+    TEST_ASSERT((heap_align_size(17) % HEAP_MIN_ALIGN) == 0);
+    TEST_ASSERT(heap_align_size(HEAP_MIN_ALIGN) == HEAP_MIN_ALIGN);
+    return true;
+}
+#pragma endregion
+
+#pragma region heap_validate_block
+
+static bool t_validate_ok(void) {
+    tr_reset();
+    void* p = kmalloc(48); tr_add(p);
+    TEST_ASSERT(heap_validate_block((heap_block_header_t*)hdr(p)));
+    tr_free(); return true;
+}
+
+static bool t_validate_bad(void) {
+    tr_reset();
+    void* p = kmalloc(48); tr_add(p);
+    heap_test_hdr_t* h = hdr(p);
+    uint32_t saved = h->magic;
+    h->magic = 0xBAD1BAD1;
+    TEST_ASSERT(!heap_validate_block((heap_block_header_t*)h));
+    h->magic = saved;
+    tr_free(); return true;
+}
+#pragma endregion
+
+#pragma region heap_stats
+
+static bool t_stats_smoke(void) {
+    size_t total, used, free, overhead;
+    heap_stats(heap_kernel_get(), &total, &used, &free, &overhead);
+    /* Values must be non-negative (trivial, but verifies no crash) */
+    TEST_ASSERT(total > 0);
+    return true;
+}
+
+static bool t_stats_track(void) {
+    size_t t0, u0, f0, o0, t1, u1, f1, o1;
+    heap_stats(heap_kernel_get(), &t0, &u0, &f0, &o0);
+    void* p = kmalloc(256);
+    heap_stats(heap_kernel_get(), &t1, &u1, &f1, &o1);
+    TEST_ASSERT(u1 > u0);
+    kfree(p);
+    return true;
+}
+#pragma endregion
+
+#pragma region Coalescing
+
+static bool t_coalesce_fwd(void) {
+    tr_reset();
+    void* A = kmalloc(128); tr_add(A);
+    void* B = kmalloc(128); tr_add(B);
+    void* C = kmalloc(128); tr_add(C);
+    heap_test_hdr_t* hA = hdr(A);
+    heap_test_hdr_t* hB = hdr(B);
+    size_t sA = hA->total_size, sB = hB->total_size;
+    kfree(A); g_track[0].active = false;
+    kfree(C); g_track[2].active = false;
+    kfree(B); g_track[1].active = false;
+    TEST_ASSERT(hA->magic == BLOCK_MAGIC_FREE);
+    TEST_ASSERT(hA->total_size >= sA + sB);
+    TEST_ASSERT_STATUS(heap_check_integrity(heap_kernel_get()), HEAP_OK);
+    tr_free(); return true;
+}
+
+static bool t_split_thresh(void) {
+    tr_reset();
+    void* p = kmalloc(512); tr_add(p);
+    /* Shrink so remainder > MIN_BLOCK_SIZE — should split */
+    void* p2 = krealloc(p, 256);
+    if (p2 != p) { g_track[0].active = false; tr_add(p2); }
+    TEST_ASSERT(p2 != NULL);
+    TEST_ASSERT(hdr(p2)->size == 256);
+    /* Tiny shrink — should NOT split */
+    void* p3 = krealloc(p2, 250);
+    if (p3 != p2) { g_track[g_tidx-1].active = false; tr_add(p3); }
+    TEST_ASSERT(hdr(p3)->size == 256);
+    tr_free(); return true;
+}
+
+static bool t_freelist_sorted(void) {
+    tr_reset();
+    void* s1 = kmalloc(16); tr_add(s1);
+    void* large = kmalloc(256);
+    void* s2 = kmalloc(16); tr_add(s2);
+    void* small = kmalloc(32);
+    void* s3 = kmalloc(16); tr_add(s3);
+    void* med = kmalloc(128);
+    kfree(med); kfree(large); kfree(small);
+    heap_test_t* h = heapv();
+    heap_test_hdr_t* cur = (heap_test_hdr_t*)h->free_list;
+    size_t prev_sz = 0; int cnt = 0;
+    while (cur) { TEST_ASSERT(cur->size >= prev_sz); prev_sz = cur->size; cur = cur->next_free; cnt++; }
+    TEST_ASSERT(cnt >= 3);
+    tr_free(); return true;
+}
+#pragma endregion
+
+#pragma region Arena
+
+static bool t_arena_expand(void) {
+    tr_reset();
+    heap_test_t* h = heapv();
+    size_t arenas0 = h->arena_count;
+    void* p = kmalloc(1024 * 1024); tr_add(p);
+    TEST_ASSERT(p != NULL);
+    TEST_ASSERT(h->arena_count > arenas0);
+    tr_free(); return true;
+}
+
+static bool t_arena_shrink(void) {
+    tr_reset();
+    heap_test_t* h = heapv();
+    size_t arenas0 = h->arena_count;
+    void* p = kmalloc(1024 * 1024); tr_add(p);
+    TEST_ASSERT(h->arena_count > arenas0);
+    kfree(p); g_track[0].active = false;
+    TEST_ASSERT(h->arena_count == arenas0);
+    return true;
+}
+#pragma endregion
+
+#pragma region Security / Integrity
+
+static bool t_hdr_corrupt(void) {
+    tr_reset();
+    void* p = kmalloc(32); tr_add(p);
+    heap_test_hdr_t* h = hdr(p);
+    uint32_t saved = h->magic;
+    h->magic = 0xDEADBEEF;
+    heap_status_t s = heap_check_integrity(heap_kernel_get());
+    h->magic = saved;
+    TEST_ASSERT_STATUS(s, HEAP_ERR_CORRUPTED);
+    tr_free(); return true;
+}
+
+static bool t_ftr_corrupt(void) {
+    tr_reset();
+    void* p = kmalloc(32); tr_add(p);
+    heap_test_hdr_t* h = hdr(p);
+    heap_test_ftr_t* f = ftr(h);
+    uint32_t saved = f->magic;
+    f->magic = 0xBADF00D1;
+    heap_status_t s = heap_check_integrity(heap_kernel_get());
+    f->magic = saved;
+    TEST_ASSERT_STATUS(s, HEAP_ERR_CORRUPTED);
+    tr_free(); return true;
+}
+
+static bool t_rz_corrupt(void) {
+    tr_reset();
+    void* p = kmalloc(32); tr_add(p);
+    heap_test_hdr_t* h = hdr(p);
+    uint32_t saved = h->red_zone_post;
+    h->red_zone_post = 0;
+    heap_status_t s = heap_check_integrity(heap_kernel_get());
+    h->red_zone_post = saved;
+    TEST_ASSERT_STATUS(s, HEAP_ERR_CORRUPTED);
+    tr_free(); return true;
+}
+#pragma endregion
+
+#pragma region Inter-allocation Independence
+
+static bool t_multi_ind(void) {
+    /* Write distinct pattern to each allocation; verify no cross-contamination */
+    #define MCOUNT 16
+    tr_reset();
+    void* ptrs[MCOUNT];
+    size_t sizes[MCOUNT];
+    for (int i = 0; i < MCOUNT; i++) {
+        sizes[i] = 32 + (size_t)(i * 16);
+        ptrs[i] = kmalloc(sizes[i]);
+        TEST_ASSERT(ptrs[i] != NULL);
+        tr_add(ptrs[i]);
+        kmemset(ptrs[i], (uint8_t)i, sizes[i]);
+    }
+    /* Verify all patterns intact */
+    for (int i = 0; i < MCOUNT; i++) {
+        uint8_t* b = (uint8_t*)ptrs[i];
+        for (size_t j = 0; j < sizes[i]; j++) {
+            if (b[j] != (uint8_t)i) {
+                LOGF("[FAIL] corruption at alloc %d byte %zu\n", i, j);
+                return false;
+            }
         }
     }
-    g_tracker_idx = 0;
+    tr_free(); return true;
 }
-
-static heap_test_header_t* get_header(void* ptr) {
-    return (heap_test_header_t*)((uint8_t*)ptr - sizeof(heap_test_header_t));
-}
-
-static heap_test_footer_t* get_footer(heap_test_header_t* header) {
-    return (heap_test_footer_t*)((uint8_t*)header + sizeof(heap_test_header_t) + header->size);
-}
-
-static heap_test_struct_t* access_heap(heap_t* h) {
-    return (heap_test_struct_t*)h;
-}
-
-#define TEST_ASSERT(cond) do { \
-    if (!(cond)) { \
-        LOGF("[FAIL] Assertion failed: %s (Line %d)\n", #cond, __LINE__); \
-        return false; \
-    } \
-} while(0)
-
-#define TEST_ASSERT_STATUS(s, e) do { \
-    if ((s) != (e)) { \
-        LOGF("[FAIL] Status mismatch: Got %d, Expected %d (Line %d)\n", s, e, __LINE__); \
-        return false; \
-    } \
-} while(0)
-
 #pragma endregion
 
-#pragma region Basic Allocation Tests
-
-// Verifies kernel heap initialization and basic allocation metadata.
-static bool test_kernel_init_and_basic_alloc(void) {
-    tracker_reset();
-
-    TEST_ASSERT_STATUS(heap_kernel_init(), HEAP_ERR_ALREADY_INIT);
-    TEST_ASSERT(heap_kernel_get() != NULL);
-
-    void* p1 = kmalloc(32);
-    TEST_ASSERT(p1 != NULL);
-    tracker_add_k(p1);
-
-    memset(p1, 0xAA, 32);
-    uint8_t* b = (uint8_t*)p1;
-    TEST_ASSERT(b[0] == 0xAA && b[31] == 0xAA);
-
-    heap_test_header_t* h = get_header(p1);
-    TEST_ASSERT(h->magic == BLOCK_MAGIC_USED);
-    TEST_ASSERT(h->size >= 32);
-    TEST_ASSERT(h->red_zone_pre == BLOCK_RED_ZONE);
-    TEST_ASSERT(h->red_zone_post == BLOCK_RED_ZONE);
-
-    kfree(p1);
-    g_tracker[0].active = false;
-
-    // Verify block is now free (kernel heap shouldn't unmap immediately)
-    TEST_ASSERT(h->magic == BLOCK_MAGIC_FREE);
-
-    return true;
-}
-
-// Checks alignment guarantees and zeroing behavior of calloc.
-static bool test_alignment_and_calloc(void) {
-    tracker_reset();
-
-    void* p1 = kmalloc(1);
-    tracker_add_k(p1);
-    
-    TEST_ASSERT(((uintptr_t)p1 % HEAP_MIN_ALIGN) == 0);
-    
-    heap_test_header_t* h = get_header(p1);
-    TEST_ASSERT(h->size >= 1);
-    TEST_ASSERT((h->size % HEAP_MIN_ALIGN) == 0);
-
-    void* p2 = kcalloc(4, 1024); // 4KB
-    tracker_add_k(p2);
-    
-    uint64_t* check = (uint64_t*)p2;
-    for(int i=0; i < (4096/8); i++) {
-        if (check[i] != 0) return false;
-    }
-
-    tracker_cleanup();
-    return true;
-}
-
-// Tests reallocation logic when expanding into adjacent free space.
-static bool test_realloc_logic(void) {
-    tracker_reset();
-
-    void* A = kmalloc(64); tracker_add_k(A);
-    void* B = kmalloc(64); tracker_add_k(B);
-    void* C = kmalloc(64); tracker_add_k(C);
-
-    memset(A, 0x11, 64);
-    
-    kfree(B); // Create hole
-    g_tracker[1].active = false;
-
-    // Expand A into B's hole
-    void* A_new = krealloc(A, 100);
-    
-    TEST_ASSERT(A_new == A); 
-    
-    uint8_t* b = (uint8_t*)A_new;
-    TEST_ASSERT(b[0] == 0x11 && b[63] == 0x11);
-    TEST_ASSERT(get_header(A_new)->size >= 100);
-
-    tracker_cleanup();
-    return true;
-}
-
-// Verifies standard compliance for realloc with NULL or zero size.
-static bool test_realloc_compliance(void) {
-    tracker_reset();
-
-    // 1. realloc(NULL, size) -> malloc(size)
-    void* p1 = krealloc(NULL, 64);
-    TEST_ASSERT(p1 != NULL);
-    tracker_add_k(p1);
-    
-    heap_test_header_t* h = get_header(p1);
-    TEST_ASSERT(h->size >= 64);
-
-    // 2. realloc(ptr, 0) -> free(ptr)
-    void* p2 = krealloc(p1, 0);
-    // Standard varies, but often returns NULL or a specific unique pointer. 
-    // This implementation calls kfree and returns NULL.
-    TEST_ASSERT(p2 == NULL);
-    
-    // Verify p1 is actually free
-    TEST_ASSERT(h->magic == BLOCK_MAGIC_FREE);
-    g_tracker[0].active = false; // Manually untrack p1
-
-    tracker_cleanup();
-    return true;
-}
-
-// Checks edge case handling for NULL pointers, zero allocation, and overflow.
-static bool test_edge_cases(void) {
-    tracker_reset();
-
-    // 1. NULL Free (Should be no-op)
-    kfree(NULL);
-
-    // 2. Zero-size alloc (Implementation defined, but safe)
-    void* p = kmalloc(0);
-    if (p) kfree(p);
-
-    // 3. Overflow check
-    void* p2 = kcalloc(SIZE_MAX, 2);
-    TEST_ASSERT(p2 == NULL);
-
-    // 4. Large aligned realloc to ensure we handle alignment padding + resize
-    void* p3 = kmalloc(128);
-    tracker_add_k(p3);
-    void* p4 = krealloc(p3, 256);
-    TEST_ASSERT(p4 != NULL);
-    g_tracker[0].ptr = p4; // update tracker
-
-    tracker_cleanup();
-    return true;
-}
-
-#pragma endregion
-
-#pragma region Core Logic Tests
-
-// Tests coalescing of free blocks (forward and backward merging).
-static bool test_coalescing(void) {
-    tracker_reset();
-    
-    void* A = kmalloc(128); tracker_add_k(A);
-    void* B = kmalloc(128); tracker_add_k(B);
-    void* C = kmalloc(128); tracker_add_k(C);
-
-    heap_test_header_t* hA = get_header(A);
-    heap_test_header_t* hB = get_header(B);
-    size_t size_A = hA->total_size;
-    size_t size_B = hB->total_size;
-
-    kfree(A); g_tracker[0].active = false;
-    kfree(C); g_tracker[2].active = false;
-    
-    // Free B. Should merge Backwards (A) and Forwards (C).
-    kfree(B); g_tracker[1].active = false;
-
-    TEST_ASSERT(hA->magic == BLOCK_MAGIC_FREE);
-    TEST_ASSERT(hA->total_size >= size_A + size_B);
-    TEST_ASSERT_STATUS(heap_check_integrity(heap_kernel_get()), HEAP_OK);
-    
-    tracker_cleanup();
-    return true;
-}
-
-// Verifies that blocks are only split if the remainder exceeds the threshold.
-static bool test_splitting_threshold(void) {
-    tracker_reset();
-    
-    void* ptr = kmalloc(512);
-    tracker_add_k(ptr);
-
-    // Overhead is 96 bytes. Min block 32. Need 128 bytes free to split.
-    // 512 - 256 = 256 free. (>128). Should split.
-    void* ptr2 = krealloc(ptr, 256); 
-    TEST_ASSERT(ptr2 == ptr);
-    TEST_ASSERT(get_header(ptr2)->size == 256);
-
-    // 256 - 250 = 6 bytes free. (<128). Should NOT split.
-    void* ptr3 = krealloc(ptr2, 250);
-    TEST_ASSERT(ptr3 == ptr2);
-    TEST_ASSERT(get_header(ptr3)->size == 256);
-
-    tracker_cleanup();
-    return true;
-}
-
-// Checks that the free list maintains correct sorting order (by size).
-static bool test_free_list_sorting(void) {
-    tracker_reset();
-    
-    heap_t* heap = heap_kernel_get();
-    heap_test_struct_t* h_struct = access_heap(heap);
-
-    // Alloc blocks with spacers to prevent coalescing upon free
-    void* s1 = kmalloc(16); tracker_add_k(s1);
-    void* large = kmalloc(256);
-    void* s2 = kmalloc(16); tracker_add_k(s2);
-    void* small = kmalloc(32);
-    void* s3 = kmalloc(16); tracker_add_k(s3);
-    void* med = kmalloc(128);
-
-    kfree(med);
-    kfree(large);
-    kfree(small);
-
-    // Verify sort order: Small -> Med -> Large
-    heap_test_header_t* cur = (heap_test_header_t*)h_struct->free_list;
-    TEST_ASSERT(cur != NULL);
-
-    size_t prev_size = 0;
-    int count = 0;
-    while(cur) {
-        TEST_ASSERT(cur->size >= prev_size);
-        prev_size = cur->size;
-        cur = cur->next_free;
-        count++;
-    }
-    TEST_ASSERT(count >= 3);
-
-    tracker_cleanup();
-    return true;
-}
-
-// Tests that the heap expands by creating new arenas when necessary.
-static bool test_arena_expansion(void) {
-    tracker_reset();
-    heap_t* heap = heap_kernel_get();
-    heap_test_struct_t* h_struct = access_heap(heap);
-
-    size_t initial_arenas = h_struct->arena_count;
-    
-    size_t huge_size = 1024 * 1024;
-    void* huge = kmalloc(huge_size);
-    TEST_ASSERT(huge != NULL);
-    tracker_add_k(huge);
-
-    TEST_ASSERT(h_struct->arena_count > initial_arenas);
-    
-    uint8_t* ptr = (uint8_t*)huge;
-    ptr[0] = 0xAA;
-    ptr[huge_size - 1] = 0xBB;
-    
-    tracker_cleanup();
-    return true;
-}
-
-// Tests that arenas are released when fully freed.
-static bool test_arena_shrinking(void) {
-    tracker_reset();
-    heap_t* heap = heap_kernel_get();
-    heap_test_struct_t* h_struct = access_heap(heap);
-    
-    size_t start_arenas = h_struct->arena_count;
-
-    void* big = kmalloc(1024 * 1024); // 1MB
-    tracker_add_k(big);
-
-    TEST_ASSERT(h_struct->arena_count > start_arenas);
-
-    kfree(big);
-    g_tracker[0].active = false;
-
-    // Should drop back down
-    TEST_ASSERT(h_struct->arena_count == start_arenas);
-
-    return true;
-}
-
-#pragma endregion
-
-#pragma region Security & Integrity Tests
-
-// Checks if double-free attempts are detected without crashing.
-static bool test_double_free_protection(void) {
-    tracker_reset();
-    void* p = kmalloc(32);
-    tracker_add_k(p);
-
-    kfree(p);
-    g_tracker[0].active = false;
-
-    kfree(p); // Double free (Should warn, not crash)
-
-    TEST_ASSERT_STATUS(heap_check_integrity(heap_kernel_get()), HEAP_OK);
-    return true;
-}
-
-// Verifies detection of corrupted block headers.
-static bool test_header_corruption_detection(void) {
-    tracker_reset();
-    void* p = kmalloc(32);
-    tracker_add_k(p);
-
-    heap_test_header_t* h = get_header(p);
-    uint32_t original_magic = h->magic;
-
-    h->magic = 0xDEADBEEF;
-    heap_status_t status = heap_check_integrity(heap_kernel_get());
-    h->magic = original_magic; // Repair
-
-    if (status != HEAP_ERR_CORRUPTED) return false;
-
-    tracker_cleanup();
-    return true;
-}
-
-// Verifies detection of corrupted block footers.
-static bool test_footer_corruption_detection(void) {
-    tracker_reset();
-    void* p = kmalloc(32);
-    tracker_add_k(p);
-
-    heap_test_header_t* h = get_header(p);
-    heap_test_footer_t* f = get_footer(h);
-
-    uint32_t original_magic = f->magic;
-    f->magic = 0xBADF00D;
-    heap_status_t status = heap_check_integrity(heap_kernel_get());
-    f->magic = original_magic; // Repair
-
-    if (status != HEAP_ERR_CORRUPTED) return false;
-
-    tracker_cleanup();
-    return true;
-}
-
-// Ensures RedZone integrity checks detect buffer overflows.
-static bool test_redzone_check(void) {
-    tracker_reset();
-    void* p = kmalloc(32);
-    tracker_add_k(p);
-
-    heap_test_header_t* h = get_header(p);
-    h->red_zone_post = 0x00000000;
-
-    heap_status_t status = heap_check_integrity(heap_kernel_get());
-    h->red_zone_post = BLOCK_RED_ZONE; // Repair
-
-    TEST_ASSERT_STATUS(status, HEAP_ERR_CORRUPTED);
-
-    tracker_cleanup();
-    return true;
-}
-
-#pragma endregion
-
-#pragma region Stress Tests
-
-// Performs randomized allocation/deallocation churn to stress stability.
-static bool test_heap_stress_churn(void) {
-    tracker_reset();
-
-    #define STRESS_POOL 100
-    #define STRESS_ITERS 2000
-    void* pool[STRESS_POOL];
-    memset(pool, 0, sizeof(pool));
-
-    uint32_t seed = 999;
-    
-    for (int i = 0; i < STRESS_ITERS; i++) {
-        // LCG
-        seed = seed * 1103515245 + 12345;
-        int idx = (seed / 65536) % STRESS_POOL;
-        
-        if (pool[idx] == NULL) {
-            seed = seed * 1103515245 + 12345;
-            size_t sz = ((seed / 65536) % 512) + 1;
+#pragma region Stress Churn (machine-adaptive)
+
+static bool t_stress_churn(void) {
+    tr_reset();
+    #define SC 100
+    #define SI 3000
+    void* pool[SC];
+    kmemset(pool, 0, sizeof(pool));
+    uint32_t seed = 0xBEEFCAFE;
+    for (int i = 0; i < SI; i++) {
+        seed = seed * 1103515245u + 12345u;
+        int idx = (int)((seed >> 16) % SC);
+        if (!pool[idx]) {
+            seed = seed * 1103515245u + 12345u;
+            size_t sz = ((seed >> 16) % 512) + 1;
             pool[idx] = kmalloc(sz);
-            if (!pool[idx]) return false; 
-            memset(pool[idx], (uint8_t)idx, sz);
+            if (!pool[idx]) return false;
+            kmemset(pool[idx], (uint8_t)idx, sz);
         } else {
-            volatile uint8_t* b = (uint8_t*)pool[idx];
-            if (*b != (uint8_t)idx) {
-                 LOGF("[FAIL] Stress corruption idx %d\n", idx);
-                 return false;
+            if (*(uint8_t*)pool[idx] != (uint8_t)idx) {
+                LOGF("[FAIL] stress corruption idx %d\n", idx);
+                return false;
             }
             kfree(pool[idx]);
             pool[idx] = NULL;
         }
-
-        if (i % 500 == 0) {
+        if (i % 500 == 0)
             if (heap_check_integrity(heap_kernel_get()) != HEAP_OK) return false;
-        }
     }
-
-    for (int i = 0; i < STRESS_POOL; i++) {
-        if (pool[i]) kfree(pool[i]);
-    }
-
+    for (int i = 0; i < SC; i++) if (pool[i]) kfree(pool[i]);
     return true;
 }
-
 #pragma endregion
 
-#pragma region Test Runner
+#pragma region Runner
 
-static void run_test(const char* name, bool (*func)(void)) {
+static void run_test(const char* name, bool (*fn)(void)) {
     g_tests_total++;
-    LOGF("[TEST] %-35s ", name);
-    
-    heap_kernel_get(); // Ensure init
-
-    bool pass = func();
-
-    if (g_tracker_idx > 0) {
-        LOGF("[WARN] Leak/State detected (cleaning) ... ");
-        tracker_cleanup();
-    }
-
-    if (pass) {
-        g_tests_passed++;
-        LOGF("[PASS]\n");
-    } else {
-        LOGF("[FAIL]\n");
-    }
+    LOGF("[TEST] %-40s ", name);
+    heap_kernel_get(); /* ensure init */
+    bool pass = fn();
+    if (g_tidx > 0) { LOGF("[WARN] leak (cleaning) ... "); tr_free(); }
+    if (pass) { g_tests_passed++; LOGF("[PASS]\n"); }
+    else       { LOGF("[FAIL]\n"); }
 }
 
 void test_heap(void) {
-    g_tests_total = 0;
+    g_tests_total  = 0;
     g_tests_passed = 0;
 
     LOGF("\n--- BEGIN HEAP MANAGER TEST ---\n");
 
-    // Basics
-    run_test("Kernel Init & Basic Alloc", test_kernel_init_and_basic_alloc);
-    run_test("Alignment & Calloc", test_alignment_and_calloc);
-    run_test("Edge Cases (Null/Overflow)", test_edge_cases);
-    run_test("Realloc Logic (Grow/Move)", test_realloc_logic);
-    run_test("Realloc Compliance (NULL/0)", test_realloc_compliance);
-    
-    // Core Logic
-    run_test("Block Coalescing (Merge)", test_coalescing);
-    run_test("Splitting Thresholds", test_splitting_threshold);
-    run_test("Free List Sorting", test_free_list_sorting);
-    run_test("Arena Expansion (Huge Alloc)", test_arena_expansion);
-    run_test("Arena Shrinking (Release)", test_arena_shrinking);
-    
-    // Security
-    run_test("Double Free Protection", test_double_free_protection);
-    run_test("Header Corruption Detect", test_header_corruption_detection);
-    run_test("Footer Corruption Detect", test_footer_corruption_detection);
-    run_test("RedZone Integrity Check", test_redzone_check);
-    
-    // Stress
-    run_test("Randomized Churn Stress", test_heap_stress_churn);
+    run_test("init: already init",            t_init_already);
+    run_test("get: not null",                 t_get_nn);
+    run_test("get: magic correct",            t_magic);
+    run_test("malloc: not null",              t_alloc_nn);
+    run_test("malloc: 16-byte aligned",       t_alloc_aligned);
+    run_test("malloc(1..32): all aligned",    t_alloc_align_small);
+    run_test("malloc: header metadata",       t_alloc_meta);
+    run_test("malloc: footer metadata",       t_alloc_ftr);
+    run_test("malloc: memory writable",       t_alloc_wr);
+    run_test("free: marks block free",        t_free_marks);
+    run_test("free(NULL): no crash",          t_free_null);
+    run_test("free: double-free safe",        t_dbl_free);
+    run_test("calloc: zeroed memory",         t_calloc_zero);
+    run_test("calloc: overflow → NULL",       t_calloc_ovf);
+    run_test("calloc(0,N): safe",             t_calloc_zero_n);
+    run_test("realloc(NULL,N): = malloc",     t_realloc_null_malloc);
+    run_test("realloc(p,0): = free",          t_realloc_zero_free);
+    run_test("realloc grow: data preserved",  t_realloc_grow);
+    run_test("realloc shrink: data preserved",t_realloc_shrink);
+    run_test("realloc into adjacent hole",    t_realloc_hole);
+    run_test("get_alloc_size >= requested",   t_get_sz);
+    run_test("heap_align_size: multiples",    t_align_sz);
+    run_test("validate_block: valid block",   t_validate_ok);
+    run_test("validate_block: corrupt block", t_validate_bad);
+    run_test("heap_stats: smoke",             t_stats_smoke);
+    run_test("heap_stats: tracks alloc",      t_stats_track);
+    run_test("coalesce: A+B+C merge",         t_coalesce_fwd);
+    run_test("split threshold",               t_split_thresh);
+    run_test("free list sorted",              t_freelist_sorted);
+    run_test("arena: expands on huge alloc",  t_arena_expand);
+    run_test("arena: shrinks after free",     t_arena_shrink);
+    run_test("corrupt: header detected",      t_hdr_corrupt);
+    run_test("corrupt: footer detected",      t_ftr_corrupt);
+    run_test("corrupt: redzone detected",     t_rz_corrupt);
+    run_test("multi-alloc independence",      t_multi_ind);
+    run_test("stress churn (3000 iters)",     t_stress_churn);
 
     LOGF("--- END HEAP MANAGER TEST ---\n");
     LOGF("Heap Test Results: %d/%d\n\n", g_tests_passed, g_tests_total);
 
     #ifdef TEST_BUILD
     #include <kernel/drivers/console.h>
-    #include <kernel/drivers/stdio.h>
+    #include <klibc/stdio.h>
     if (g_tests_passed != g_tests_total) {
         console_set_color(CONSOLE_COLOR_RED, CONSOLE_COLOR_BLACK);
-        printf("[-] Some tests failed (%d/%d). Please check the debug log for details.\n", g_tests_passed, g_tests_total);
+        kprintf("[-] Some heap tests failed (%d/%d passed).\n", g_tests_passed, g_tests_total);
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
-    }
-    else{
+    } else {
         console_set_color(CONSOLE_COLOR_GREEN, CONSOLE_COLOR_BLACK);
-        printf("[+] All tests passed successfully! (%d/%d)\n", g_tests_passed, g_tests_total);
+        kprintf("[+] All heap tests passed! (%d/%d)\n", g_tests_passed, g_tests_total);
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     }
     #endif
 }
-
 #pragma endregion

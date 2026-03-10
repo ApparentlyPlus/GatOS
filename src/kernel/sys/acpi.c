@@ -14,7 +14,7 @@
 #include <kernel/sys/acpi.h>
 #include <kernel/memory/vmm.h>
 #include <kernel/debug.h>
-#include <libc/string.h>
+#include <klibc/string.h>
 
 static RSDP2Descriptor* g_rsdp = NULL;
 static uint64_t g_root_sdt_phys = 0; // Physical address of RSDT/XSDT
@@ -90,15 +90,15 @@ RSDP2Descriptor* acpi_find_rsdp(multiboot_parser_t* parser) {
         RSDPDescriptor* rsdp1 = (RSDPDescriptor*)acpi_tag->rsdp;
         static RSDP2Descriptor rsdp2;
 
-        memcpy(rsdp2.Signature, rsdp1->Signature, 8);
+        kmemcpy(rsdp2.Signature, rsdp1->Signature, 8);
         rsdp2.Checksum = rsdp1->Checksum;
-        memcpy(rsdp2.OEMID, rsdp1->OEMID, 6);
+        kmemcpy(rsdp2.OEMID, rsdp1->OEMID, 6);
         rsdp2.Revision = rsdp1->Revision;
         rsdp2.RsdtAddress = rsdp1->RsdtAddress;
         rsdp2.Length = sizeof(RSDP2Descriptor);
         rsdp2.XsdtAddress = 0;
         rsdp2.ExtendedChecksum = 0;
-        memset(rsdp2.Reserved, 0, sizeof(rsdp2.Reserved));
+        kmemset(rsdp2.Reserved, 0, sizeof(rsdp2.Reserved));
 
         return acpi_validate_rsdp((RSDP2Descriptor*)rsdp1) ? &rsdp2 : NULL;
     }
@@ -171,7 +171,7 @@ void* acpi_find_table(const char* signature) {
         ACPISDTHeader* header_virt = (ACPISDTHeader*)acpi_map_phys(table_phys, sizeof(ACPISDTHeader));
         if (!header_virt) continue;
 
-        bool match = (strncmp(header_virt->Signature, signature, 4) == 0);
+        bool match = (kstrncmp(header_virt->Signature, signature, 4) == 0);
         uint32_t length = header_virt->Length;
         acpi_unmap_phys(header_virt);
 

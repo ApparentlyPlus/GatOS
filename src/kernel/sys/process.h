@@ -17,10 +17,10 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include <arch/x86_64/memory/layout.h>
+
 #define MAX_PROCESS_NAME 64
 #define MAX_THREAD_NAME  64
-#define KERNEL_STACK_SIZE 16384 // 16 KiB
-#define USER_STACK_SIZE   65536 // 64 KiB
 
 typedef uint32_t pid_t;
 typedef uint32_t tid_t;
@@ -45,6 +45,8 @@ typedef struct thread {
     void* kernel_stack;     // Base of the kernel stack
     void* user_stack;       // Virtual address of the user stack
     uint64_t fs_base;       // Thread Local Storage base
+    
+    uint8_t fpu_state[512] __attribute__((aligned(16))); // FPU/SSE/AVX state
     
     uint64_t sleep_until;   // Timestamp for waking up
     
@@ -71,3 +73,4 @@ void thread_destroy(thread_t* thread);
 void process_destroy(process_t* process);
 process_t* process_get_all(void);
 void process_terminate_by_tty(tty_t* tty);
+void process_header_update(process_t* proc);

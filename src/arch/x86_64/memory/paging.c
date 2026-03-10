@@ -12,7 +12,7 @@
 #include <kernel/drivers/serial.h>
 #include <kernel/sys/panic.h>
 #include <kernel/debug.h>
-#include <libc/string.h>
+#include <klibc/string.h>
 #include <stdbool.h>
 
 /*
@@ -248,7 +248,7 @@ void build_physmap() {
     page_table_t* PDPTs  = (page_table_t*)pdpt_base;
     page_table_t* PML4   = (page_table_t*)pml4_base;
 
-    memset((void*)physmapStruct.tables_base, 0, 
+    kmemset((void*)physmapStruct.tables_base, 0, 
         (physmapStruct.total_PTs
             +physmapStruct.total_PDs
             +physmapStruct.total_PDPTs
@@ -282,7 +282,7 @@ void build_physmap() {
     }
 
     // Clear the new PML4
-    memset(PML4, 0, PAGE_SIZE);
+    kmemset(PML4, 0, PAGE_SIZE);
 
     // copy kernel pml4 entry at its exact index
     uint64_t *old_pml4 = getPML4();

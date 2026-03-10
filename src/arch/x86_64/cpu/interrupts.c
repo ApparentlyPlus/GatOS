@@ -9,7 +9,7 @@
 
 #include <arch/x86_64/cpu/interrupts.h>
 #include <arch/x86_64/cpu/gdt.h>
-#include <kernel/drivers/stdio.h>
+#include <klibc/stdio.h>
 #include <arch/x86_64/cpu/cpu.h>
 #include <kernel/sys/panic.h>
 #include <kernel/sys/apic.h>
@@ -17,7 +17,7 @@
 #include <kernel/sys/process.h>
 #include <kernel/debug.h>
 #include <kernel/misc.h>
-#include <libc/string.h>
+#include <klibc/string.h>
 #include <kernel/memory/pmm.h>
 #include <arch/x86_64/memory/paging.h>
 

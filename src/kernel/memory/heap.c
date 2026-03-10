@@ -17,7 +17,7 @@
 #include <kernel/sys/spinlock.h>
 #include <kernel/sys/panic.h>
 #include <kernel/debug.h>
-#include <libc/string.h>
+#include <klibc/string.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -469,7 +469,7 @@ static heap_arena_t* create_arena(heap_t* heap, size_t size) {
 
     heap_arena_t* arena = (heap_arena_t*)arena_struct_mem;
     // zero it out - conservative initialization
-    memset(arena, 0, sizeof(heap_arena_t));
+    kmemset(arena, 0, sizeof(heap_arena_t));
 
     // Now allocate the address space for the arena via VMM
     void* arena_region = NULL;
@@ -869,7 +869,7 @@ static void* heap_malloc_internal(heap_t* heap, size_t size, bool zero, bool urg
 
     if (should_zero) {
         // zero user payload on allocation if requested (or heap flag)
-        memset(user_ptr, 0, block->size);
+        kmemset(user_ptr, 0, block->size);
     }
 
     return user_ptr;
@@ -1000,7 +1000,7 @@ heap_status_t heap_kernel_init(void) {
     }
 
     heap_t* heap = (heap_t*)heap_mem;
-    memset(heap, 0, sizeof(heap_t));
+    kmemset(heap, 0, sizeof(heap_t));
 
     // initialize heap metadata
     heap->magic = HEAP_MAGIC;
@@ -1171,7 +1171,7 @@ void* krealloc(void* ptr, size_t size) {
     }
 
     // careful copy: only copy the min of old/new sizes
-    memcpy(new_ptr, ptr, block->size < size ? block->size : size);
+    kmemcpy(new_ptr, ptr, block->size < size ? block->size : size);
     
     // Similarly, use internal free
     heap_free_internal(heap, ptr);
@@ -1260,7 +1260,7 @@ heap_t* heap_create(vmm_t* vmm, size_t min_size, size_t max_size, uint32_t flags
     }
 
     heap_t* hh = (heap_t*)heap_mem;
-    memset(hh, 0, sizeof(heap_t));
+    kmemset(hh, 0, sizeof(heap_t));
 
     hh->magic = HEAP_MAGIC;
     hh->vmm = vmm;
@@ -1440,7 +1440,7 @@ void* heap_realloc(heap_t* heap, void* ptr, size_t size) {
         return NULL;
     }
 
-    memcpy(new_ptr, ptr, block->size < size ? block->size : size);
+    kmemcpy(new_ptr, ptr, block->size < size ? block->size : size);
     
     // internal free
     heap_free_internal(heap, ptr);
@@ -1589,7 +1589,7 @@ void heap_dump(heap_t* heap) {
         uintptr_t current_addr = a->start;
         int block_num = 0;
 
-        // only print first few blocks so the log doesn't explode
+        // only print first few blocks so the klog doesn't explode
         while (current_addr < a->end && block_num < 10) {
             heap_block_header_t* block = (heap_block_header_t*)current_addr;
 

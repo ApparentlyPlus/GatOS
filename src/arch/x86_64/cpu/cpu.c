@@ -11,7 +11,7 @@
 #include <arch/x86_64/cpu/cpu.h>
 #include <arch/x86_64/cpu/msr.h>
 #include <kernel/debug.h>
-#include <libc/string.h>
+#include <klibc/string.h>
 
 static CPUInfo g_cpu;
 cpu_local_t g_cpu_local = {0};
@@ -107,7 +107,7 @@ void write_xcr0(uint64_t value)
  */
 void cpu_init(void)
 {
-    memset(&g_cpu, 0, sizeof(g_cpu));
+    kmemset(&g_cpu, 0, sizeof(g_cpu));
 
     uint32_t a, b, c, d;
 
@@ -168,6 +168,16 @@ void cpu_init(void)
         cpuid(0x04, 0, &a, &b, &c, &d);
         g_cpu.core_count = ((b >> 26) & 0x3F) + 1;
     }
+
+	// Enable SSE
+	if (cpu_has_feature(CPU_FEAT_SSE)) {
+		cpu_enable_feature(CPU_FEAT_SSE);
+	}
+
+	// Enable AVX if supported
+	if (cpu_has_feature(CPU_FEAT_AVX)) {
+		cpu_enable_feature(CPU_FEAT_AVX);
+	}
 
     // Set active GS_BASE to our cpu_local structure for Ring 0.
     // Set KERNEL_GS_BASE to 0 (will be used to store User GS during Ring 0 execution).

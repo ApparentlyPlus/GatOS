@@ -53,14 +53,12 @@ void lapic_timer_stop(void);
 
 // TSC Timer API
 
-void tsc_calibrate(void);
 uint64_t tsc_read(void);
 void tsc_deadline_arm(uint64_t target_tsc);
 
 // HPET API
 
 bool hpet_is_available(void);
-
 uint64_t hpet_read_counter(void);
 
 // PIT API 

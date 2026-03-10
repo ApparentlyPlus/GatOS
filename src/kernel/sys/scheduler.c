@@ -16,7 +16,7 @@
 #include <arch/x86_64/cpu/msr.h>
 #include <kernel/memory/heap.h>
 #include <kernel/debug.h>
-#include <libc/string.h>
+#include <klibc/string.h>
 
 static thread_t* g_current_thread = NULL;
 static thread_t* g_ready_queue_head = NULL;
@@ -65,7 +65,7 @@ void sched_init(void) {
     // when switched back from userspace threads. This also ensures the idle thread can have its own stack.
     g_current_thread->kernel_stack = kmalloc(KERNEL_STACK_SIZE);
     if (!g_current_thread->kernel_stack) panic("Failed to allocate kernel stack for kernel_main!");
-    memset(g_current_thread->kernel_stack, 0, KERNEL_STACK_SIZE);
+    kmemset(g_current_thread->kernel_stack, 0, KERNEL_STACK_SIZE);
 
     g_scheduler_enabled = true;
     LOGF("[SCHED] Scheduler initialized and enabled.\n");
@@ -147,6 +147,9 @@ cpu_context_t* sched_schedule(cpu_context_t* current_context) {
         g_current_thread->context = current_context;
         g_current_thread->fs_base = read_msr(MSR_FS_BASE);
         
+        // Save FPU state
+        __asm__ volatile ("fxsave %0" : "=m"(g_current_thread->fpu_state));
+
         if (g_current_thread->state == THREAD_STATE_RUNNING) {
             g_current_thread->state = THREAD_STATE_READY;
             if (g_current_thread != g_idle_thread) {
@@ -251,6 +254,9 @@ cpu_context_t* sched_schedule(cpu_context_t* current_context) {
     }
     
     write_msr(MSR_FS_BASE, g_current_thread->fs_base);
+    
+    // Restore FPU state
+    __asm__ volatile ("fxrstor %0" :: "m"(g_current_thread->fpu_state));
 
     return g_current_thread->context;
 }
@@ -290,7 +296,9 @@ void sched_exit(void) {
 
     g_current_thread->state = THREAD_STATE_DEAD;
     LOGF("[SCHED] Thread '%s' (TID: %u) exited.\n", g_current_thread->name, g_current_thread->tid);
-    
+
+    process_header_update(g_current_thread->process);
+
     sched_yield();
     while(1);
 }

@@ -3,7 +3,7 @@
  */
 
 #include <stdint.h>
-#include <libc/math.h>
+#include <ulibc/math.h>
 
 typedef union { double f; uint64_t u; } dbl_cast;
 

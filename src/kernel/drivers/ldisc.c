@@ -9,13 +9,13 @@
 
 #include <kernel/drivers/ldisc.h>
 #include <kernel/drivers/tty.h>
-#include <libc/string.h>
+#include <klibc/string.h>
 
 /*
  * ldisc_init - Resets the line discipline state.
  */
 void ldisc_init(ldisc_t* ld) {
-    memset(ld->line_buffer, 0, LDISC_LINE_MAX);
+    kmemset(ld->line_buffer, 0, LDISC_LINE_MAX);
     ld->pos = 0;
     ld->echo = true;
 }

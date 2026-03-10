@@ -15,5 +15,14 @@
 #define SYS_MMAP 3
 #define SYS_MUNMAP 4
 #define SYS_SET_FS_BASE 5
+#define SYS_YIELD 6
+#define SYS_SLEEP_MS 7
+#define SYS_READ 8
+#define SYS_TTY_CTRL 9
+
+// TTY Control Commands
+#define TTY_CTRL_CLEAR    0
+#define TTY_CTRL_CURSOR   1
+#define TTY_CTRL_GET_DIMS 2
 
 void syscall_init(void);
