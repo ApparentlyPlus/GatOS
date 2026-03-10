@@ -164,22 +164,40 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
             break;
         }
 
-        case SYS_TTY_CLEAR: {
+        case SYS_TTY_CTRL: {
+            uint64_t cmd  = registers[9];
+            uint64_t arg2 = registers[10];
+            
             tty_t* tty = current->process->tty;
-            if (tty && tty->console) {
-                con_clear(tty->console, CONSOLE_COLOR_BLACK);
+            if (!tty || !tty->console) {
+                registers[14] = (uint64_t)-1;
+                break;
             }
-            registers[14] = 0;
-            break;
-        }
-
-        case SYS_TTY_CURSOR: {
-            tty_t* tty = current->process->tty;
-            if (tty && tty->console) {
-                uint8_t enabled = registers[9] & 0xFF;
-                con_enable_cursor(tty->console, enabled);
+            
+            switch (cmd) {
+                case TTY_CTRL_CLEAR:
+                    con_clear(tty->console, CONSOLE_COLOR_BLACK);
+                    registers[14] = 0;
+                    break;
+                case TTY_CTRL_CURSOR: {
+                    uint8_t enabled = arg2 & 0xFF;
+                    con_enable_cursor(tty->console, enabled);
+                    registers[14] = 0;
+                    break;
+                }
+                case TTY_CTRL_GET_DIMS: {
+                    // Pack width and height into a single 64-bit return value
+                    // High 32 bits is height (excluding sticky header rows)
+                    // Low 32 bits is width
+                    uint32_t width = (uint32_t)tty->console->width;
+                    uint32_t height = (uint32_t)(tty->console->height - tty->console->header_rows);
+                    registers[14] = ((uint64_t)height << 32) | (uint64_t)width;
+                    break;
+                }
+                default:
+                    registers[14] = (uint64_t)-1;
+                    break;
             }
-            registers[14] = 0;
             break;
         }
 

@@ -21,8 +21,11 @@
 #define SYS_YIELD 6
 #define SYS_SLEEP_MS 7
 #define SYS_READ 8
-#define SYS_TTY_CLEAR 9
-#define SYS_TTY_CURSOR 10
+#define SYS_TTY_CTRL 9
+
+#define TTY_CTRL_CLEAR    0
+#define TTY_CTRL_CURSOR   1
+#define TTY_CTRL_GET_DIMS 2
 
 #define userspace __attribute__((section(".user_text")))
 
@@ -103,10 +106,7 @@ userspace static inline int64_t syscall_read(char* buf, size_t len) {
     return (int64_t)sc2(SYS_READ, (uint64_t)buf, (uint64_t)len);
 }
 
-userspace static inline void syscall_tty_clear(void) {
-    sc0(SYS_TTY_CLEAR);
+userspace static inline uint64_t syscall_tty_ctrl(uint64_t cmd, uint64_t arg) {
+    return sc2(SYS_TTY_CTRL, cmd, arg);
 }
 
-userspace static inline void syscall_tty_cursor(bool enabled) {
-    sc1(SYS_TTY_CURSOR, enabled ? 1 : 0);
-}
