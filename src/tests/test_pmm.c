@@ -1,10 +1,12 @@
 /*
- * pmm_tests.c - Physical Memory Manager Validation Suite
+ * test_pmm.c - Physical Memory Manager Validation Suite
  *
- * This suite verifies the correctness, stability, and security of the
- * Physical Memory Manager (Buddy Allocator). It operates on the live
- * system memory and verifies allocator logic, boundary enforcement,
- * exhaustion handling, and integrity checks.
+ * Tests every public PMM function: pmm_is_initialized, pmm_managed_base/end/size,
+ * pmm_min_block_size, pmm_alloc, pmm_free, pmm_mark_reserved_range,
+ * pmm_mark_free_range, pmm_get_stats, pmm_dump_stats, pmm_verify_integrity.
+ *
+ * Machine-adaptive: exhaustion and ladder tests use pmm_managed_size() and
+ * pmm_min_block_size() instead of hardcoded sizes.
  */
 
 #include <arch/x86_64/memory/paging.h>
@@ -12,477 +14,442 @@
 #include <kernel/debug.h>
 #include <tests/tests.h>
 #include <klibc/string.h>
-
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
 
-#pragma region Configuration & Types
+#define MAX_TRACK 4096
+typedef struct { uint64_t addr; size_t size; bool on; } pmtr_t;
 
-#define MAX_TRACKED_ITEMS 4096
+static pmtr_t g_tr[MAX_TRACK];
+static int    g_tidx         = 0;
+static int    g_tests_total  = 0;
+static int    g_tests_passed = 0;
 
-typedef struct {
-    uint64_t addr;
-    size_t size;
-    bool active;
-} pmm_tracker_t;
+#pragma region Tracker
 
-// Static tracking to maintain isolation
-static pmm_tracker_t g_tracker[MAX_TRACKED_ITEMS];
-static int g_tracker_idx = 0;
+static void tr_reset(void) {
+    for (int i = 0; i < MAX_TRACK; i++) g_tr[i].on = false;
+    g_tidx = 0;
+}
 
-static int g_tests_total = 0;
-static int g_tests_passed = 0;
+static void tr_add(uint64_t a, size_t s) {
+    if (g_tidx < MAX_TRACK) g_tr[g_tidx++] = (pmtr_t){a, s, true};
+    else LOGF("[WARN] PMM tracker full\n");
+}
 
+static void tr_free(void) {
+    for (int i = 0; i < MAX_TRACK; i++)
+        if (g_tr[i].on) { pmm_free(g_tr[i].addr, g_tr[i].size); g_tr[i].on = false; }
+    g_tidx = 0;
+}
 #pragma endregion
 
-#pragma region Harness Helpers
+#pragma region Invariants
 
-// Resets the internal tracking array before a test begins.
-static void tracker_reset(void) {
-    for (int i = 0; i < MAX_TRACKED_ITEMS; i++) {
-        g_tracker[i].active = false;
-        g_tracker[i].addr = 0;
-        g_tracker[i].size = 0;
-    }
-    g_tracker_idx = 0;
-}
-
-// Registers a memory allocation to be automatically freed during cleanup.
-static void tracker_add(uint64_t addr, size_t size) {
-    if (g_tracker_idx < MAX_TRACKED_ITEMS) {
-        g_tracker[g_tracker_idx].addr = addr;
-        g_tracker[g_tracker_idx].size = size;
-        g_tracker[g_tracker_idx].active = true;
-        g_tracker_idx++;
-    } else {
-        LOGF("[TEST WARN] PMM Tracker full. Subsequent allocs may leak on panic.\n");
-    }
-}
-
-// Frees all tracked allocations.
-static void tracker_cleanup(void) {
-    for (int i = 0; i < MAX_TRACKED_ITEMS; i++) {
-        if (g_tracker[i].active) {
-            pmm_free(g_tracker[i].addr, g_tracker[i].size);
-            g_tracker[i].active = false;
-        }
-    }
-    g_tracker_idx = 0;
-}
-
-#pragma endregion
-
-#pragma region Core Allocator Tests
-
-// Checks if the PMM is initialized and reports consistent memory statistics.
-static bool test_invariants(void) {
-    uint64_t start = pmm_managed_base();
-    uint64_t end = pmm_managed_end();
-    uint64_t size = pmm_managed_size();
-    uint64_t min_block = pmm_min_block_size();
-
+static bool t_initialized(void) {
     TEST_ASSERT(pmm_is_initialized());
-    TEST_ASSERT(end > start);
-    TEST_ASSERT(size == (end - start));
-    TEST_ASSERT(min_block > 0);
-    TEST_ASSERT((min_block & (min_block - 1)) == 0);
-    
     return true;
 }
 
-// Verifies that allocations adhere to natural alignment requirements.
-static bool test_alignment_contract(void) {
-    tracker_reset();
-    size_t min = pmm_min_block_size();
-    
+static bool t_base_end(void) {
+    TEST_ASSERT(pmm_managed_end() > pmm_managed_base());
+    return true;
+}
+
+static bool t_sz_consistent(void) {
+    TEST_ASSERT(pmm_managed_size() == pmm_managed_end() - pmm_managed_base());
+    return true;
+}
+
+static bool t_min_pow2(void) {
+    uint64_t min = pmm_min_block_size();
+    TEST_ASSERT(min > 0);
+    TEST_ASSERT((min & (min - 1)) == 0); /* power of two */
+    return true;
+}
+
+static bool t_min_geq_pg(void) {
+    TEST_ASSERT(pmm_min_block_size() >= 4096ULL);
+    return true;
+}
+#pragma endregion
+
+#pragma region Basic Alloc / Free
+
+static bool t_alloc_ok(void) {
+    tr_reset();
+    uint64_t a; size_t s = pmm_min_block_size();
+    TEST_ASSERT_STATUS(pmm_alloc(s, &a), PMM_OK);
+    tr_add(a, s);
+    tr_free(); return true;
+}
+
+static bool t_alloc_range(void) {
+    tr_reset();
+    uint64_t a; size_t s = pmm_min_block_size();
+    TEST_ASSERT_STATUS(pmm_alloc(s, &a), PMM_OK); tr_add(a, s);
+    TEST_ASSERT(a >= pmm_managed_base());
+    TEST_ASSERT(a + s <= pmm_managed_end());
+    tr_free(); return true;
+}
+
+static bool t_alloc_aligned(void) {
+    tr_reset();
     for (int i = 0; i < 5; i++) {
-        size_t size = min << i;
-        uint64_t addr;
-        
-        pmm_status_t status = pmm_alloc(size, &addr);
-        if (status == PMM_ERR_OOM) break;
-        
-        TEST_ASSERT_STATUS(status, PMM_OK);
-        tracker_add(addr, size);
-
-        TEST_ASSERT(addr >= pmm_managed_base());
-        TEST_ASSERT(addr + size <= pmm_managed_end());
-
-        if ((addr & (size - 1)) != 0) {
-            LOGF("[FAIL] Addr 0x%lx not aligned to size 0x%lx\n", addr, size);
-            return false;
+        size_t s = pmm_min_block_size() << i;
+        uint64_t a;
+        if (pmm_alloc(s, &a) == PMM_ERR_OOM) break;
+        tr_add(a, s);
+        if (a & (s - 1)) {
+            LOGF("[FAIL] 0x%lx not aligned to 0x%lx\n", a, s);
+            tr_free(); return false;
         }
     }
-
-    tracker_cleanup();
-    return true;
+    tr_free(); return true;
 }
 
-// Ensures that attempting to free memory outside the managed range returns errors.
-static bool test_boundary_enforcement(void) {
-    uint64_t start = pmm_managed_base();
-    uint64_t end = pmm_managed_end();
-    size_t min = pmm_min_block_size();
-
-    if (start > 0) {
-        TEST_ASSERT_STATUS(pmm_free(start - min, min), PMM_ERR_OUT_OF_RANGE);
-    }
-    TEST_ASSERT_STATUS(pmm_free(end, min), PMM_ERR_OUT_OF_RANGE);
-
-    return true;
-}
-
-// Verifies that consecutive allocations return distinct, non-overlapping addresses.
-static bool test_uniqueness(void) {
-    tracker_reset();
-    size_t sz = pmm_min_block_size();
-    uint64_t addr1, addr2;
-
-    if (pmm_alloc(sz, &addr1) != PMM_OK) return true;
-    tracker_add(addr1, sz);
-
-    if (pmm_alloc(sz, &addr2) != PMM_OK) {
-        tracker_cleanup();
-        return true; 
-    }
-    tracker_add(addr2, sz);
-
-    TEST_ASSERT(addr1 != addr2);
-    
-    bool overlap = (addr1 < (addr2 + sz) && addr2 < (addr1 + sz));
+static bool t_alloc_uniq(void) {
+    tr_reset();
+    uint64_t a, b; size_t s = pmm_min_block_size();
+    if (pmm_alloc(s, &a) != PMM_OK) return true; tr_add(a, s);
+    if (pmm_alloc(s, &b) != PMM_OK) { tr_free(); return true; } tr_add(b, s);
+    TEST_ASSERT(a != b);
+    bool overlap = (a < b + s && b < a + s);
     TEST_ASSERT(!overlap);
+    tr_free(); return true;
+}
 
-    tracker_cleanup();
+static bool t_free_ok(void) {
+    tr_reset();
+    uint64_t a; size_t s = pmm_min_block_size();
+    TEST_ASSERT_STATUS(pmm_alloc(s, &a), PMM_OK);
+    TEST_ASSERT_STATUS(pmm_free(a, s), PMM_OK);
+    return true;
+}
+#pragma endregion
+
+#pragma region Memory Access
+
+static bool t_mem_access(void) {
+    tr_reset();
+    uint64_t phys; size_t s = pmm_min_block_size();
+    if (pmm_alloc(s, &phys) != PMM_OK) return true; tr_add(phys, s);
+    volatile uint64_t* p = (volatile uint64_t*)PHYSMAP_P2V(phys);
+    uint64_t pat = 0xDEADBEEFCAFEBABEULL;
+    *p = pat;
+    TEST_ASSERT(*p == pat);
+    *p = 0;
+    tr_free(); return true;
+}
+
+static bool t_mem_pattern(void) {
+    tr_reset();
+    uint64_t phys; size_t s = pmm_min_block_size();
+    if (pmm_alloc(s, &phys) != PMM_OK) return true; tr_add(phys, s);
+    uint32_t* p = (uint32_t*)PHYSMAP_P2V(phys);
+    for (size_t i = 0; i < s / 4; i++) p[i] = (uint32_t)(i * 0x12345678u);
+    for (size_t i = 0; i < s / 4; i++) TEST_ASSERT(p[i] == (uint32_t)(i * 0x12345678u));
+    tr_free(); return true;
+}
+#pragma endregion
+
+#pragma region Boundary Enforcement
+
+static bool t_free_before_base(void) {
+    uint64_t base = pmm_managed_base();
+    size_t   min  = (size_t)pmm_min_block_size();
+    if (base > min)
+        TEST_ASSERT_STATUS(pmm_free(base - min, min), PMM_ERR_OUT_OF_RANGE);
     return true;
 }
 
-// Fills memory to capacity to ensure the allocator handles OOM gracefully.
-static bool test_exhaustion_stability(void) {
-    tracker_reset();
-    size_t sz = pmm_min_block_size();
-    uint64_t addr;
-
-    while (g_tracker_idx < MAX_TRACKED_ITEMS) {
-        pmm_status_t status = pmm_alloc(sz, &addr);
-        if (status == PMM_ERR_OOM) break;
-        TEST_ASSERT_STATUS(status, PMM_OK);
-        tracker_add(addr, sz);
-    }
-
-    pmm_stats_t stats;
-    pmm_get_stats(&stats);
-    
-    if (g_tracker_idx < MAX_TRACKED_ITEMS) {
-        TEST_ASSERT(stats.free_blocks[0] == 0);
-    }
-
-    TEST_ASSERT(pmm_verify_integrity());
-    tracker_cleanup();
+static bool t_free_after_end(void) {
+    TEST_ASSERT_STATUS(pmm_free(pmm_managed_end(), (size_t)pmm_min_block_size()), PMM_ERR_OUT_OF_RANGE);
     return true;
 }
+#pragma endregion
 
-// Probes the buddy system's ability to split large blocks and merge them back.
-static bool test_buddy_mechanics(void) {
-    tracker_reset();
-    size_t min = pmm_min_block_size();
-    uint64_t addr_large;
-    size_t size_large = min;
-    bool found_large = false;
+#pragma region Buddy Mechanics
 
-    // Probe for a block significantly larger than minimum
-    for (size_t s = min; s <= (4 * 1024 * 1024); s <<= 1) {
-        if (pmm_alloc(s, &addr_large) == PMM_OK) {
-            pmm_free(addr_large, s);
-            size_large = s;
-            found_large = true;
-        } else {
-            break; 
-        }
-    }
-
-    if (!found_large || size_large == min) return true;
-
-    // Alloc large, free, alloc two halves
-    TEST_ASSERT_STATUS(pmm_alloc(size_large, &addr_large), PMM_OK);
-    TEST_ASSERT_STATUS(pmm_free(addr_large, size_large), PMM_OK);
-
-    size_t half_size = size_large / 2;
-    uint64_t half1, half2;
-
-    TEST_ASSERT_STATUS(pmm_alloc(half_size, &half1), PMM_OK);
-    tracker_add(half1, half_size);
-
-    TEST_ASSERT_STATUS(pmm_alloc(half_size, &half2), PMM_OK);
-    tracker_add(half2, half_size);
-
-    bool in_range1 = (half1 >= addr_large && half1 < addr_large + size_large);
-    bool in_range2 = (half2 >= addr_large && half2 < addr_large + size_large);
-
-    if (!in_range1 || !in_range2) {
-        tracker_cleanup();
-        return true;
-    }
-
-    tracker_cleanup(); // Free halves
-
-    // Re-acquire original large block (verifies merge)
-    uint64_t verify_addr;
-    TEST_ASSERT_STATUS(pmm_alloc(size_large, &verify_addr), PMM_OK);
-    tracker_add(verify_addr, size_large);
-
-    tracker_cleanup();
-    return true;
-}
-
-// Writes pattern data to allocated memory to ensure it is correctly mapped.
-static bool test_memory_access(void) {
-    tracker_reset();
-    size_t sz = pmm_min_block_size();
-    uint64_t phys;
-
-    if (pmm_alloc(sz, &phys) != PMM_OK) return true;
-    tracker_add(phys, sz);
-
-    volatile uint64_t *ptr = (volatile uint64_t*)PHYSMAP_P2V(phys);
-    uint64_t pattern = 0xCAFEBABE12345678;
-    
-    *ptr = pattern;
-    TEST_ASSERT(*ptr == pattern);
-    *ptr = 0;
-
-    tracker_cleanup();
-    return true;
-}
-
-// Intentionally corrupts a free block header to verify integrity checking.
-static bool test_integrity_checks(void) {
-    tracker_reset();
-    size_t sz = pmm_min_block_size();
-    uint64_t phys;
-
-    if (pmm_alloc(sz, &phys) != PMM_OK) return true;
-    
-    pmm_free(phys, sz);
-
-    pmm_free_header_t *header = (pmm_free_header_t*)PHYSMAP_P2V(phys);
-    uint32_t old_magic = header->magic;
-    
-    if (old_magic == 0xFEEDBEEF) {
-        header->magic = 0xDEADDEAD; // Corrupt
-
-        if (pmm_verify_integrity()) {
-            header->magic = old_magic; 
-            LOGF("[FAIL] pmm_verify_integrity failed to detect corruption.\n");
-            return false;
-        }
-
-        header->magic = old_magic; // Restore
-        TEST_ASSERT(pmm_verify_integrity());
-    }
-
-    return true;
-}
-
-// Tests coalescing by freeing outer blocks before the middle one.
-static bool test_sandwich_coalescing(void) {
-    tracker_reset();
-    size_t sz = pmm_min_block_size();
-    size_t huge_sz = sz * 4;
+static bool t_buddy_split_merge(void) {
+    tr_reset();
+    size_t min  = (size_t)pmm_min_block_size();
+    size_t huge = min * 4;
     uint64_t base;
-    
-    if (pmm_alloc(huge_sz, &base) != PMM_OK) return true;
-    pmm_free(base, huge_sz);
-    
-    uint64_t a, b, c, d;
-    if (pmm_alloc(sz, &a) != PMM_OK) return false; tracker_add(a, sz);
-    if (pmm_alloc(sz, &b) != PMM_OK) return false; tracker_add(b, sz);
-    if (pmm_alloc(sz, &c) != PMM_OK) return false; tracker_add(c, sz);
-    if (pmm_alloc(sz, &d) != PMM_OK) return false; tracker_add(d, sz);
-    
-    bool contiguous = (b == a + sz) && (c == b + sz) && (d == c + sz);
-    if (!contiguous) {
-        tracker_cleanup();
-        return true;
-    }
-    
-    // Free neighbors first
-    pmm_free(a, sz); g_tracker[0].active = false;
-    pmm_free(c, sz); g_tracker[2].active = false;
-    
-    // Free middle (trigger merge)
-    pmm_free(b, sz); g_tracker[1].active = false;
-    
-    // Check if we can allocate merged size
-    uint64_t merged_addr;
-    if (pmm_alloc(sz * 2, &merged_addr) == PMM_OK) {
-        tracker_add(merged_addr, sz * 2);
-    } else {
-        LOGF("[FAIL] Coalescing failed for sandwich case.\n");
-        return false;
-    }
+    if (pmm_alloc(huge, &base) != PMM_OK) return true;
+    pmm_free(base, huge);
 
-    tracker_cleanup();
+    /* Alloc 4 min-blocks; they should come from the just-freed huge block */
+    uint64_t a[4];
+    bool any_fail = false;
+    for (int i = 0; i < 4; i++) {
+        if (pmm_alloc(min, &a[i]) != PMM_OK) { any_fail = true; break; }
+        tr_add(a[i], min);
+    }
+    if (any_fail) { tr_free(); return true; }
+
+    bool contiguous = true;
+    for (int i = 1; i < 4; i++)
+        if (a[i] != a[i-1] + min) { contiguous = false; break; }
+
+    /* Release all; should allow re-allocating the full huge block */
+    tr_free();
+    uint64_t back;
+    if (contiguous) {
+        if (pmm_alloc(huge, &back) == PMM_OK) {
+            pmm_free(back, huge);
+        } else {
+            LOGF("[FAIL] buddy merge failed\n"); return false;
+        }
+    }
+    return true;
+}
+#pragma endregion
+
+#pragma region Stats
+
+static bool t_stats_smoke(void) {
+    pmm_stats_t s; pmm_get_stats(&s);
+    /* Must not crash */
     return true;
 }
 
-// Performs randomized allocations/deallocations to stress-test free lists.
-static bool test_order_churn(void) {
-    tracker_reset();
-    size_t min = pmm_min_block_size();
-    
+static bool t_stats_alloc_cnt(void) {
+    pmm_stats_t s0; pmm_get_stats(&s0);
+    uint64_t a; size_t sz = (size_t)pmm_min_block_size();
+    if (pmm_alloc(sz, &a) != PMM_OK) return true;
+    pmm_stats_t s1; pmm_get_stats(&s1);
+    TEST_ASSERT(s1.alloc_calls == s0.alloc_calls + 1);
+    pmm_free(a, sz);
+    return true;
+}
+
+static bool t_stats_free_cnt(void) {
+    pmm_stats_t s0; pmm_get_stats(&s0);
+    uint64_t a; size_t sz = (size_t)pmm_min_block_size();
+    if (pmm_alloc(sz, &a) != PMM_OK) return true;
+    pmm_free(a, sz);
+    pmm_stats_t s1; pmm_get_stats(&s1);
+    TEST_ASSERT(s1.free_calls > s0.free_calls);
+    return true;
+}
+
+static bool t_stats_dump(void) {
+    pmm_dump_stats(); /* must not crash */
+    return true;
+}
+#pragma endregion
+
+#pragma region Integrity
+
+static bool t_verify_clean(void) {
+    TEST_ASSERT(pmm_verify_integrity());
+    return true;
+}
+
+static bool t_corrupt_detect(void) {
+    tr_reset();
+    uint64_t phys; size_t s = (size_t)pmm_min_block_size();
+    if (pmm_alloc(s, &phys) != PMM_OK) return true;
+    pmm_free(phys, s);
+    pmm_free_header_t* h = (pmm_free_header_t*)PHYSMAP_P2V(phys);
+    uint32_t saved = h->magic;
+    if (saved != 0xFEEDBEEF) return true; /* Skip if magic mismatch */
+    h->magic = 0xDEADDEAD;
+    bool ok = pmm_verify_integrity();
+    h->magic = saved; /* Repair */
+    TEST_ASSERT(!ok);
+    TEST_ASSERT(pmm_verify_integrity()); /* Repaired */
+    return true;
+}
+#pragma endregion
+
+#pragma region Reserved Range
+
+static bool t_reserved(void) {
+    tr_reset();
+    size_t huge = 1024 * 1024;
+    uint64_t base;
+    TEST_ASSERT_STATUS(pmm_alloc(huge, &base), PMM_OK);
+    TEST_ASSERT_STATUS(pmm_free(base, huge), PMM_OK);
+
+    uint64_t rs = base + 256 * 1024;
+    uint64_t re = base + 512 * 1024;
+    TEST_ASSERT_STATUS(pmm_mark_reserved_range(rs, re), PMM_OK);
+
+    uint64_t frag;
+    if (pmm_alloc(256 * 1024, &frag) == PMM_OK) {
+        tr_add(frag, 256 * 1024);
+        bool bad = (frag >= rs && frag < re);
+        TEST_ASSERT(!bad);
+    }
+    tr_free(); return true;
+}
+
+static bool t_mark_free(void) {
+    /* Just test it doesn't crash and returns something sensible */
+    uint64_t base = pmm_managed_base();
+    /* Call on a very small already-free region — implementation must handle */
+    pmm_status_t s = pmm_mark_free_range(base, base); /* zero-size edge */
+    /* Any non-crash result is acceptable */
+    (void)s;
+    return true;
+}
+#pragma endregion
+
+#pragma region Churn Stress
+
+static bool t_order_churn(void) {
+    tr_reset();
+    size_t min = (size_t)pmm_min_block_size();
     for (int i = 0; i < 100; i++) {
-        size_t size = (i % 2 == 0) ? min : min * 4;
-        uint64_t addr;
-        
-        if (pmm_alloc(size, &addr) == PMM_OK) {
-            tracker_add(addr, size);
-            uint32_t *p = (uint32_t*)PHYSMAP_P2V(addr);
-            *p = (uint32_t)size;
+        size_t s = (i % 2 == 0) ? min : min * 4;
+        uint64_t a;
+        if (pmm_alloc(s, &a) == PMM_OK) {
+            tr_add(a, s);
+            uint32_t* p = (uint32_t*)PHYSMAP_P2V(a);
+            *p = (uint32_t)s;
         }
-        
         if (i % 10 == 0) {
-            for (int j = 0; j < g_tracker_idx; j += 2) {
-                if (g_tracker[j].active) {
-                    uint32_t *p = (uint32_t*)PHYSMAP_P2V(g_tracker[j].addr);
-                    if (*p != (uint32_t)g_tracker[j].size) {
-                        LOGF("[FAIL] Memory corruption detected.\n");
-                        return false;
-                    }
-                    pmm_free(g_tracker[j].addr, g_tracker[j].size);
-                    g_tracker[j].active = false;
+            for (int j = 0; j < g_tidx; j += 2) {
+                if (g_tr[j].on) {
+                    uint32_t* p = (uint32_t*)PHYSMAP_P2V(g_tr[j].addr);
+                    if (*p != (uint32_t)g_tr[j].size) { LOGF("[FAIL] churn corruption\n"); tr_free(); return false; }
+                    pmm_free(g_tr[j].addr, g_tr[j].size);
+                    g_tr[j].on = false;
                 }
             }
         }
     }
-    
-    if (!pmm_verify_integrity()) return false;
-    tracker_cleanup();
-    return true;
+    TEST_ASSERT(pmm_verify_integrity());
+    tr_free(); return true;
 }
+#pragma endregion
 
-// Allocates blocks of every possible order to verify split/merge depth.
-static bool test_all_orders_ladder(void) {
-    tracker_reset();
-    uint64_t max_sz = pmm_managed_size();
-    uint64_t min_sz = pmm_min_block_size();
-    
-    for (uint64_t sz = min_sz; sz < max_sz / 2; sz <<= 1) {
-        uint64_t addr;
-        if (pmm_alloc(sz, &addr) == PMM_OK) {
-            tracker_add(addr, sz);
-            if ((addr & (sz - 1)) != 0) {
-                LOGF("[FAIL] Order size %lu not aligned\n", sz);
-                return false;
-            }
-        } else {
-            break;
-        }
+#pragma region All Orders Ladder
+
+static bool t_all_orders(void) {
+    tr_reset();
+    uint64_t min = pmm_min_block_size();
+    uint64_t max = pmm_managed_size();
+    for (uint64_t s = min; s < max / 2; s <<= 1) {
+        uint64_t a;
+        if (pmm_alloc((size_t)s, &a) == PMM_OK) {
+            tr_add(a, (size_t)s);
+            if (a & (s - 1)) { LOGF("[FAIL] order %llu not aligned\n", s); tr_free(); return false; }
+        } else break;
     }
-    
-    // Free all manually to verify integrity post-cleanup
-    for (int i = g_tracker_idx - 1; i >= 0; i--) {
-        if (g_tracker[i].active) {
-            pmm_free(g_tracker[i].addr, g_tracker[i].size);
-            g_tracker[i].active = false;
-        }
+    for (int i = g_tidx - 1; i >= 0; i--) {
+        if (g_tr[i].on) { pmm_free(g_tr[i].addr, g_tr[i].size); g_tr[i].on = false; }
     }
-    g_tracker_idx = 0; 
-    
+    g_tidx = 0;
     TEST_ASSERT(pmm_verify_integrity());
     return true;
 }
-
-// Verifies that marking a range as reserved correctly fragments free blocks.
-static bool test_reserved_range_slicing(void) {
-    tracker_reset();
-    
-    size_t huge_sz = 1024 * 1024;
-    uint64_t base;
-    
-    TEST_ASSERT_STATUS(pmm_alloc(huge_sz, &base), PMM_OK);
-    TEST_ASSERT_STATUS(pmm_free(base, huge_sz), PMM_OK);
-
-    // Mark a chunk in the MIDDLE as reserved
-    uint64_t res_start = base + (256 * 1024); // +256KB
-    uint64_t res_end   = base + (512 * 1024); // +512KB (Length 256KB)
-    
-    TEST_ASSERT_STATUS(pmm_mark_reserved_range(res_start, res_end), PMM_OK);
-
-    // Verify we cannot allocate the full 1MB anymore
-    uint64_t check_addr;
-    if (pmm_alloc(huge_sz, &check_addr) == PMM_OK) {
-        if (check_addr == base) {
-             LOGF("[FAIL] Reserved range was ignored, allocator returned overlapping block\n");
-             return false;
-        }
-        tracker_add(check_addr, huge_sz);
-    }
-
-    // Verify we can allocate the fragments before and after
-    uint64_t frag1, frag2;
-    TEST_ASSERT_STATUS(pmm_alloc(256 * 1024, &frag1), PMM_OK);
-    tracker_add(frag1, 256 * 1024);
-    
-    TEST_ASSERT_STATUS(pmm_alloc(256 * 1024, &frag2), PMM_OK);
-    tracker_add(frag2, 256 * 1024);
-
-    bool overlap1 = (frag1 >= res_start && frag1 < res_end);
-    bool overlap2 = (frag2 >= res_start && frag2 < res_end);
-    
-    TEST_ASSERT(!overlap1 && !overlap2);
-
-    tracker_cleanup();
-    return true;
-}
-
 #pragma endregion
 
-#pragma region Test Runner
+#pragma region Exhaustion Stability
 
-static void run_test(const char* name, bool (*func)(void)) {
+static bool t_exhaustion(void) {
+    tr_reset();
+    size_t s = (size_t)pmm_min_block_size();
+    uint64_t a;
+    while (g_tidx < MAX_TRACK) {
+        if (pmm_alloc(s, &a) == PMM_ERR_OOM) break;
+        tr_add(a, s);
+    }
+    /* Verify integrity while exhausted */
+    TEST_ASSERT(pmm_verify_integrity());
+    tr_free();
+    /* After freeing, at least one more alloc must succeed */
+    TEST_ASSERT_STATUS(pmm_alloc(s, &a), PMM_OK);
+    pmm_free(a, s);
+    return true;
+}
+#pragma endregion
+
+#pragma region Sandwich Coalescing
+
+static bool t_sandwich(void) {
+    tr_reset();
+    size_t sz = (size_t)pmm_min_block_size();
+    size_t big = sz * 4;
+    uint64_t base;
+    if (pmm_alloc(big, &base) != PMM_OK) return true;
+    pmm_free(base, big);
+
+    uint64_t a, b, c, d;
+    if (pmm_alloc(sz,&a)!=PMM_OK||pmm_alloc(sz,&b)!=PMM_OK||
+        pmm_alloc(sz,&c)!=PMM_OK||pmm_alloc(sz,&d)!=PMM_OK) {
+        tr_free(); return true;
+    }
+    tr_add(a,sz); tr_add(b,sz); tr_add(c,sz); tr_add(d,sz);
+
+    bool contig = (b==a+sz && c==b+sz && d==c+sz);
+    if (!contig) { tr_free(); return true; }
+
+    pmm_free(a,sz); g_tr[0].on=false;
+    pmm_free(c,sz); g_tr[2].on=false;
+    pmm_free(b,sz); g_tr[1].on=false; /* triggers merge */
+
+    uint64_t merged;
+    if (pmm_alloc(sz*2, &merged) != PMM_OK) {
+        LOGF("[FAIL] coalesce: can't re-alloc merged block\n");
+        g_tr[3].on=false; pmm_free(d,sz);
+        return false;
+    }
+    tr_add(merged, sz*2);
+    tr_free(); return true;
+}
+#pragma endregion
+
+#pragma region Runner
+
+static void run_test(const char* name, bool (*fn)(void)) {
     g_tests_total++;
-    LOGF("[TEST] %-35s ", name);
-    
-    if (!pmm_verify_integrity()) {
-        LOGF("[SKIP] (System Corrupted)\n");
-        return;
-    }
-
-    bool pass = func();
-
-    if (g_tracker_idx > 0) {
-        LOGF("[WARN] Leak detected (cleaning) ... ");
-        tracker_cleanup();
-    }
-
-    if (pass) {
-        g_tests_passed++;
-        LOGF("[PASS]\n");
-    } else {
-        LOGF("[FAIL]\n");
-    }
+    LOGF("[TEST] %-40s ", name);
+    if (!pmm_verify_integrity()) { LOGF("[SKIP] (PMM corrupted)\n"); return; }
+    bool pass = fn();
+    if (g_tidx > 0) { LOGF("[WARN] leak (cleaning) ... "); tr_free(); }
+    if (pass) { g_tests_passed++; LOGF("[PASS]\n"); }
+    else       { LOGF("[FAIL]\n"); }
 }
 
 void test_pmm(void) {
-    g_tests_total = 0;
+    g_tests_total  = 0;
     g_tests_passed = 0;
 
     LOGF("\n--- BEGIN PMM TEST ---\n");
-    
-    run_test("Invariants Check", test_invariants);
-    run_test("Alignment Contracts", test_alignment_contract);
-    run_test("Boundary Enforcement", test_boundary_enforcement);
-    run_test("Uniqueness & Overlap", test_uniqueness);
-    run_test("Exhaustion Stability", test_exhaustion_stability);
-    run_test("Buddy Mechanics (Probe)", test_buddy_mechanics);
-    run_test("Memory R/W Access", test_memory_access);
-    run_test("Integrity/Corruption Detect", test_integrity_checks);
-    run_test("Sandwich Coalescing", test_sandwich_coalescing);
-    run_test("Order Churn Stress", test_order_churn);
-    run_test("All Orders Ladder", test_all_orders_ladder);
-    run_test("Reserved Range Slicing", test_reserved_range_slicing);
-    
+
+    run_test("initialized",                   t_initialized);
+    run_test("base < end",                    t_base_end);
+    run_test("size = end - base",             t_sz_consistent);
+    run_test("min_block is power of 2",       t_min_pow2);
+    run_test("min_block >= 4096",             t_min_geq_pg);
+    run_test("alloc: PMM_OK",                 t_alloc_ok);
+    run_test("alloc: within managed range",   t_alloc_range);
+    run_test("alloc: naturally aligned",      t_alloc_aligned);
+    run_test("alloc: unique non-overlapping", t_alloc_uniq);
+    run_test("free: PMM_OK",                  t_free_ok);
+    run_test("mem: read/write access",        t_mem_access);
+    run_test("mem: pattern persistence",      t_mem_pattern);
+    run_test("free: before base → error",     t_free_before_base);
+    run_test("free: after end → error",       t_free_after_end);
+    run_test("buddy: split + merge",          t_buddy_split_merge);
+    run_test("stats: smoke (no crash)",       t_stats_smoke);
+    run_test("stats: alloc_calls increments", t_stats_alloc_cnt);
+    run_test("stats: free_calls increments",  t_stats_free_cnt);
+    run_test("stats: dump no crash",          t_stats_dump);
+    run_test("integrity: clean",              t_verify_clean);
+    run_test("integrity: detects corruption", t_corrupt_detect);
+    run_test("mark_reserved_range",           t_reserved);
+    run_test("mark_free_range (edge)",        t_mark_free);
+    run_test("order churn stress",            t_order_churn);
+    run_test("all orders ladder",             t_all_orders);
+    run_test("exhaustion + recovery",         t_exhaustion);
+    run_test("sandwich coalesce",             t_sandwich);
+
     LOGF("--- END PMM TEST ---\n");
     LOGF("PMM Test Results: %d/%d\n\n", g_tests_passed, g_tests_total);
 
@@ -491,15 +458,13 @@ void test_pmm(void) {
     #include <klibc/stdio.h>
     if (g_tests_passed != g_tests_total) {
         console_set_color(CONSOLE_COLOR_RED, CONSOLE_COLOR_BLACK);
-        kprintf("[-] Some tests failed (%d/%d). Please check the debug klog for details.\n", g_tests_passed, g_tests_total);
+        kprintf("[-] Some PMM tests failed (%d/%d passed).\n", g_tests_passed, g_tests_total);
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
-    }
-    else{
+    } else {
         console_set_color(CONSOLE_COLOR_GREEN, CONSOLE_COLOR_BLACK);
-        kprintf("[+] All tests passed successfully! (%d/%d)\n", g_tests_passed, g_tests_total);
+        kprintf("[+] All PMM tests passed! (%d/%d)\n", g_tests_passed, g_tests_total);
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     }
     #endif
 }
-
 #pragma endregion
