@@ -21,6 +21,8 @@
 #include <kernel/sys/userspace.h>
 #include <kernel/drivers/input.h>
 #include <kernel/drivers/tty.h>
+#include <kernel/drivers/pci.h>
+#include <kernel/drivers/xhci.h>
 #include <kernel/memory/heap.h>
 #include <kernel/memory/slab.h>
 #include <kernel/sys/process.h>
@@ -221,6 +223,15 @@ void kernel_main(void* mb_info) {
 	ioapic_unmask(1);
 	QEMU_LOG("Initialized Keyboard and routed IRQ 1", TOTAL_DBG);
 	kprintf("[KBD] Keyboard IRQ 1 routed and unmasked.\n");
+
+	// Initialize PCI subsystem and USB/xHCI stack
+	pci_init();
+	if (xhci_init()) {
+		QEMU_LOG("Initialized USB xHCI keyboard", TOTAL_DBG);
+	} else {
+		QEMU_LOG("No USB xHCI keyboard found (falling back to PS/2)", TOTAL_DBG);
+		kprintf("[XHCI] No USB keyboard detected; PS/2 remains active.\n");
+	}
 
 	// Initialize Multitasking
     process_init();
