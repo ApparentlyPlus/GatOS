@@ -17,80 +17,36 @@
 #include <stdint.h>
 
 /*
- * SieveOfEratosthenes - Segmented bit-packed odd-only Sieve of Eratosthenes
+ * donut - Renders a spinning ASCII donut in the console using only syscalls.
  */
-void SieveOfEratosthenes(int n)
-{
-    #define SEG_BYTES (32u * 1024u)
-    #define SEG_BITS (SEG_BYTES * 8u)
-    #define BIT_SET(arr, i) ((arr)[(unsigned)(i) >> 3] |= (uint8_t)(1u << ((unsigned)(i) & 7u)))
-    #define BIT_GET(arr, i) ((arr)[(unsigned)(i) >> 3] & (uint8_t)(1u << ((unsigned)(i) & 7u)))
+void donut(void) {
+    float A = 0, B = 0, i, j, z[1760];
+    char b[1760];
+    char out_buf[1761];
 
-    if (n < 2) return;
-    printf("Prime numbers up to %d:\n", n);
-    if (n >= 2) printf("2 ");
-    if (n < 3) { printf("\n"); return; }
-    int sqrtn = (int)sqrt((double)n);
-    while ((long long)(sqrtn + 1) * (sqrtn + 1) <= (long long)n) sqrtn++;
-    while ((long long)sqrtn * sqrtn > (long long)n) sqrtn--;
-
-    unsigned small_count = (unsigned)(sqrtn >= 3 ? (sqrtn - 3) / 2 + 1 : 0);
-    unsigned small_bytes  = (small_count + 7) / 8;
-
-    uint8_t* small = (uint8_t*)calloc(small_bytes + 1, 1);
-    if (!small) { printf("(out of memory)\n"); return; }
-
-    for (unsigned pi = 0; pi < small_count; pi++) {
-        if (BIT_GET(small, pi)) continue;
-        int p = 2 * (int)pi + 3;
-        long long pp = (long long)p * p;
-        if (pp > sqrtn) break;
-        for (long long m = pp; m <= sqrtn; m += 2 * p) {
-            unsigned mi = (unsigned)(m - 3) / 2;
-            BIT_SET(small, mi);
-        }
-    }
-    unsigned sp_cap = small_count + 8;
-    int* sp = (int*)malloc(sp_cap * sizeof(int));
-    if (!sp) { free(small); printf("(out of memory)\n"); return; }
-    unsigned sp_cnt = 0;
-    for (unsigned pi = 0; pi < small_count; pi++) {
-        if (!BIT_GET(small, pi))
-            sp[sp_cnt++] = 2 * (int)pi + 3;
-    }
-    free(small);
-
-    uint8_t* seg = (uint8_t*)malloc(SEG_BYTES);
-    if (!seg) { free(sp); printf("(out of memory)\n"); return; }
-
-    for (long long seg_low = 3; seg_low <= (long long)n; seg_low += 2 * SEG_BITS) {
-        long long seg_high = seg_low + 2 * SEG_BITS - 2;
-        if (seg_high > (long long)n) seg_high = (long long)n | 1;
-        unsigned seg_cnt = (unsigned)((seg_high - seg_low) / 2) + 1;
-        memset(seg, 0, (seg_cnt + 7) / 8);
-        for (unsigned si = 0; si < sp_cnt; si++) {
-            long long p = sp[si];
-            long long start = ((seg_low + p - 1) / p) * p;
-            if (start == p) start = p * p;
-            if ((start & 1) == 0) start += p;
-
-            for (long long m = start; m <= seg_high; m += 2 * p) {
-                unsigned bit = (unsigned)((m - seg_low) / 2);
-                BIT_SET(seg, bit);
+    for(;;) {
+        memset(b, 32, 1760);
+        memset(z, 0, 7040);
+        for(j = 0; 6.28 > j; j += 0.07) {
+            for(i = 0; 6.28 > i; i += 0.02) {
+                float c = sin(i), d = cos(j), e = sin(A), f = sin(j), g = cos(A), h = d + 2, D = 1 / (c * h * e + f * g + 5), l = cos(i), m = cos(B), n = sin(B), t = c * h * g - f * e;
+                int x = 40 + 30 * D * (l * h * m - t * n), y = 12 + 15 * D * (l * h * n + t * m), o = x + 80 * y, N = 8 * ((f * e - c * d * g) * m - c * d * e - f * g - l * d * n);
+                if(22 > y && y > 0 && x > 0 && 80 > x && D > z[o]) {
+                    z[o] = D;
+                    b[o] = ".,-~:;=!*#$@"[N > 0 ? N : 0];
+                }
             }
         }
-        for (unsigned bi = 0; bi < seg_cnt; bi++) {
-            if (!BIT_GET(seg, bi)) {
-                long long prime = seg_low + 2LL * bi;
-                if (prime <= (long long)n)
-                    printf("%lld ", prime);
-            }
+        
+        syscall_tty_clear();
+        for(int k = 0; 1761 > k; k++) {
+            out_buf[k] = k % 80 ? b[k] : 10;
         }
-    }
+        syscall_write(out_buf, 1761);
 
-    free(seg);
-    free(sp);
-    printf("\n");
+        A += 0.04;
+        B += 0.02;
+    }
 }
 
 /*
@@ -127,5 +83,5 @@ void demo_threadB(void* arg) {
  */
 void demo2_threadA(void* arg) {
     (void)arg;
-    SieveOfEratosthenes(1000);
+    donut();
 }   

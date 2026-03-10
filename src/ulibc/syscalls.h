@@ -20,6 +20,7 @@
 #define SYS_YIELD 6
 #define SYS_SLEEP_MS 7
 #define SYS_READ 8
+#define SYS_TTY_CLEAR 9
 
 #define userspace __attribute__((section(".user_text")))
 
@@ -98,4 +99,8 @@ userspace static inline void syscall_sleep(uint64_t ms) {
 
 userspace static inline int64_t syscall_read(char* buf, size_t len) {
     return (int64_t)sc2(SYS_READ, (uint64_t)buf, (uint64_t)len);
+}
+
+userspace static inline void syscall_tty_clear(void) {
+    sc0(SYS_TTY_CLEAR);
 }

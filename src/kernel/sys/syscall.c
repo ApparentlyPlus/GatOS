@@ -164,6 +164,15 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
             break;
         }
 
+        case SYS_TTY_CLEAR: {
+            tty_t* tty = current->process->tty;
+            if (tty && tty->console) {
+                con_clear(tty->console, CONSOLE_COLOR_BLACK);
+            }
+            registers[14] = 0;
+            break;
+        }
+
         default:
             LOGF("[SYSCALL] Unknown syscall: %lu from thread '%s' (PID %u)\n", 
                  syscall_num, current->name, current->process ? current->process->pid : 0);
