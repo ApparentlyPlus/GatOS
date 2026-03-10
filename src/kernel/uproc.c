@@ -127,5 +127,5 @@ void demo_threadB(void* arg) {
  */
 void demo2_threadA(void* arg) {
     (void)arg;
-    SieveOfEratosthenes(10000);
+    SieveOfEratosthenes(1000);
 }   
