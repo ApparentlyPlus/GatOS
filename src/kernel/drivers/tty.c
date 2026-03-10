@@ -112,12 +112,12 @@ void tty_destroy(tty_t* tty) {
 
     if (g_active_tty == tty) {
         // Hide cursor before switching away
-        if (tty->console) con_set_cursor_enabled(tty->console, false);
+        if (tty->console) con_enable_cursor(tty->console, false);
         
         g_active_tty = g_tty_list;
         if (g_active_tty) {
             con_refresh(g_active_tty->console);
-            con_set_cursor_enabled(g_active_tty->console, true);
+            con_enable_cursor(g_active_tty->console, true);
         }
     }
 
@@ -139,7 +139,7 @@ void tty_switch(tty_t* tty) {
 
     // Hide cursor on the outgoing terminal
     if (g_active_tty && g_active_tty->console) {
-        con_set_cursor_enabled(g_active_tty->console, false);
+        con_enable_cursor(g_active_tty->console, false);
     }
 
     g_active_tty = tty;
@@ -147,7 +147,7 @@ void tty_switch(tty_t* tty) {
     // Show cursor on the incoming terminal
     if (tty->console) {
         con_refresh(tty->console);
-        con_set_cursor_enabled(tty->console, true);
+        con_enable_cursor(tty->console, true);
     }
 }
 

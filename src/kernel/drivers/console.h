@@ -46,6 +46,9 @@ typedef struct {
     uint32_t utf8_codepoint;
     int utf8_bytes_needed;
 
+    // ANSI State
+    uint8_t ansi_state;
+
     // Backbuffer
     console_char_t* buffer;
     size_t width;
@@ -73,12 +76,13 @@ void con_header_init(console_t* con, size_t rows);
 void con_header_write(console_t* con, size_t row, const char* text, uint8_t fg, uint8_t bg);
 
 // Cursor Control
-void con_set_cursor_enabled(console_t* con, bool enabled);
+void con_enable_cursor(console_t* con, bool enabled);
 
 // Global Accessors
 void console_print_char(char character);
 void console_set_color(uint8_t foreground, uint8_t background);
 void console_clear(uint8_t background);
-void console_set_cursor_enabled(bool enabled);
+void console_enable_cursor(bool enabled);
 size_t console_get_width();
 size_t console_get_height();
+

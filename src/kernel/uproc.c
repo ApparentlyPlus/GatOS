@@ -22,7 +22,9 @@
 void donut(void) {
     float A = 0, B = 0, i, j, z[1760];
     char b[1760];
-    char out_buf[1761];
+    char out_buf[1764];
+
+    syscall_write("\x1b[2J", 4);
 
     for(;;) {
         memset(b, 32, 1760);
@@ -38,11 +40,13 @@ void donut(void) {
             }
         }
         
-        syscall_tty_clear();
+        out_buf[0] = '\x1b';
+        out_buf[1] = '[';
+        out_buf[2] = 'H';
         for(int k = 0; 1761 > k; k++) {
-            out_buf[k] = k % 80 ? b[k] : 10;
+            out_buf[3 + k] = k % 80 ? b[k] : '\n';
         }
-        syscall_write(out_buf, 1761);
+        syscall_write(out_buf, 1764);
 
         A += 0.04;
         B += 0.02;

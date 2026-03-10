@@ -75,7 +75,7 @@ void panic_c(const char* message, cpu_context_t* context)
         LOGF("****************************************************\n");
     } else {
         // Setup the screen
-        console_set_cursor_enabled(false);
+        console_enable_cursor(false);
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_RED);
         console_clear(CONSOLE_COLOR_RED);
         

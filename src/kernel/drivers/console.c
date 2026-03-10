@@ -228,6 +228,7 @@ void con_init(console_t* con) {
     con->bg_color = CONSOLE_COLOR_BLACK;
     con->utf8_bytes_needed = 0;
     con->utf8_codepoint = 0;
+    con->ansi_state = 0;
     con->reentrancy_count = 0;
     
     con->cursor_enabled = true;
@@ -298,6 +299,68 @@ void con_putc(console_t* con, char character) {
     }
     
     uint8_t byte = (uint8_t)character;
+
+    // ANSI Escape Sequence Parsing
+    if (con->ansi_state == 1) { // Saw ESC
+        if (byte == '[') {
+            con->ansi_state = 2;
+        } else {
+            con->ansi_state = 0;
+            handle_cp_inst(con, '\x1b');
+            handle_cp_inst(con, byte);
+        }
+        if (locked) spinlock_release(&con->lock, flags);
+        return;
+    } else if (con->ansi_state == 2) { // Saw ESC [
+        if (byte == 'H') {
+            con->cursor_x = 0;
+            con->cursor_y = con->header_rows;
+            con->ansi_state = 0;
+        } else if (byte == '2') {
+            con->ansi_state = 3; // Expect 'J'
+        } else {
+            // Unhandled ANSI sequence, just ignore and reset
+            con->ansi_state = 0;
+        }
+        if (locked) spinlock_release(&con->lock, flags);
+        return;
+    } else if (con->ansi_state == 3) { // Saw ESC [ 2
+        if (byte == 'J') {
+            // \x1b[2J - Clear screen
+            con->ansi_state = 0;
+            extern tty_t* g_active_tty;
+            bool is_active = (g_active_tty && g_active_tty->console == con);
+            if (is_active && con->cursor_enabled) con_render_cursor(con, false);
+            
+            for (size_t y = con->header_rows; y < con->height; y++) {
+                for (size_t x = 0; x < con->width; x++) {
+                    size_t i = y * con->width + x;
+                    if (con->buffer[i].codepoint != ' ' || con->buffer[i].fg != con->fg_color || con->buffer[i].bg != con->bg_color) {
+                        con->buffer[i].codepoint = ' ';
+                        con->buffer[i].fg = con->fg_color;
+                        con->buffer[i].bg = con->bg_color;
+                        if (is_active) {
+                            draw_glyph(get_glyph_ptr(' '), x * g_font_width, y * (g_font_height + PADDING_Y), 
+                                       VGA_PALETTE[con->fg_color], VGA_PALETTE[con->bg_color]);
+                        }
+                    }
+                }
+            }
+            con->cursor_x = 0;
+            con->cursor_y = con->header_rows;
+            
+            if (is_active && con->cursor_enabled) con_render_cursor(con, true);
+        } else {
+            con->ansi_state = 0;
+        }
+        if (locked) spinlock_release(&con->lock, flags);
+        return;
+    } else if (byte == '\x1b') {
+        con->ansi_state = 1;
+        if (locked) spinlock_release(&con->lock, flags);
+        return;
+    }
+
     if (con->utf8_bytes_needed == 0) {
         if ((byte & 0x80) == 0) handle_cp_inst(con, byte);
         else if ((byte & 0xE0) == 0xC0) { con->utf8_bytes_needed = 1; con->utf8_codepoint = byte & 0x1F; }
@@ -334,9 +397,9 @@ void con_set_color(console_t* con, uint8_t foreground, uint8_t background) {
 }
 
 /*
- * con_set_cursor_enabled - Enables or disables the blinking caret for a console instance.
+ * con_enable_cursor - Enables or disables the blinking caret for a console instance.
  */
-void con_set_cursor_enabled(console_t* con, bool enabled) {
+void con_enable_cursor(console_t* con, bool enabled) {
     bool flags = spinlock_acquire(&con->lock);
     if (con->cursor_enabled && !enabled) {
         con_render_cursor(con, false);
@@ -396,12 +459,12 @@ void console_set_color(uint8_t foreground, uint8_t background) {
 }
 
 /*
- * console_set_cursor_enabled - Global accessor to toggle the cursor for the active TTY.
+ * console_enable_cursor - Global accessor to toggle the cursor for the active TTY.
  */
-void console_set_cursor_enabled(bool enabled) {
+void console_enable_cursor(bool enabled) {
     extern tty_t* g_active_tty;
     if (g_active_tty && g_active_tty->console) {
-        con_set_cursor_enabled(g_active_tty->console, enabled);
+        con_enable_cursor(g_active_tty->console, enabled);
     }
 }
 
