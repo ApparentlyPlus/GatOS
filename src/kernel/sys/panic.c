@@ -112,6 +112,7 @@ void panic_c(const char* message, cpu_context_t* context)
         con_crash_printf("  RSP: 0x%016lx\n", context->iret_rsp);
         con_crash_printf("  SS:  0x%04lx\n",  context->iret_ss);
 
+
         uint64_t fl = context->iret_flags;
         con_crash_printf("\nCPU Flags (RFLAGS): 0x%016lx\n", fl);
         con_crash_printf("  Flags:%s%s%s%s%s%s%s%s%s\n",
@@ -157,4 +158,17 @@ void panicf(const char* fmt, ...)
     kvsnprintf(buf, sizeof(buf), fmt, args);
     va_end(args);
     panic_c(buf, NULL);
+}
+
+/*
+ * panicf_c - Formatted panic preserving the CPU context for the crash screen
+ */
+void panicf_c(cpu_context_t* context, const char* fmt, ...)
+{
+    char buf[512];
+    va_list args;
+    va_start(args, fmt);
+    kvsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    panic_c(buf, context);
 }

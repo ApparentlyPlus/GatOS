@@ -14,4 +14,5 @@
 void panic_c(const char* message, cpu_context_t* context);
 void panic(const char* message);
 void panicf(const char* fmt, ...);
+void panicf_c(cpu_context_t* context, const char* fmt, ...);
 void halt_system(void);

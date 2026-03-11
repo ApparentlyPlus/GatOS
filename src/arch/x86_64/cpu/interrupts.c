@@ -17,7 +17,6 @@
 #include <kernel/sys/process.h>
 #include <kernel/debug.h>
 #include <kernel/misc.h>
-#include <klibc/string.h>
 #include <kernel/memory/pmm.h>
 #include <arch/x86_64/memory/paging.h>
 
@@ -200,6 +199,21 @@ cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
         context = g_irq_handlers[vec](context);
         if (!context) {
             panic("IRQ handler returned NULL context");
+        }
+
+        // Validate iret frame CS and SS to catch smashed frames before iretq faults
+        uint16_t cs = (uint16_t)context->iret_cs;
+        uint16_t ss = (uint16_t)context->iret_ss;
+        if ((cs & 3) == 0) {
+            if (cs != KERNEL_CS)
+                panicf_c(context, "Bad kernel CS in iret frame (cs=0x%04x ss=0x%04x vec=%lu)", cs, ss, vec);
+            if (ss != 0 && ss != KERNEL_DS)
+                panicf_c(context, "Bad kernel SS in iret frame (ss=0x%04x cs=0x%04x vec=%lu)", ss, cs, vec);
+        } else {
+            if (cs != USER_CS)
+                panicf_c(context, "Bad user CS in iret frame (cs=0x%04x ss=0x%04x vec=%lu)", cs, ss, vec);
+            if (ss != USER_DS)
+                panicf_c(context, "Bad user SS in iret frame (ss=0x%04x cs=0x%04x vec=%lu)", ss, cs, vec);
         }
 
         // If it was a hardware interrupt, we must ack it
