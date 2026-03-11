@@ -428,7 +428,6 @@ static void proc_evts(void) {
 
 cpu_context_t *xhci_irq_handler(cpu_context_t *ctx) {
     proc_evts();
-    lapic_eoi();
     return ctx;
 }
 

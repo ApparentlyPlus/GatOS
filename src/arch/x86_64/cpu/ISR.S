@@ -75,8 +75,11 @@ generic_interrupt_handler:
     push r15
     
     // Call our C interrupt dispatcher
+    // Ensure 16-byte stack alignment at call boundary (SysV ABI)
     mov rdi, rsp
+    sub rsp, 8
     call interrupt_dispatcher
+    add rsp, 8
 
     // Restore the stack pointer
     mov rsp, rax

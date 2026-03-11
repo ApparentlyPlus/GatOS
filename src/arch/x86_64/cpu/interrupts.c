@@ -198,6 +198,9 @@ cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
     // If a driver or kernel subsystem has registered a handler, this is the time to invoke it
     if (g_irq_handlers[vec] != NULL) {
         context = g_irq_handlers[vec](context);
+        if (!context) {
+            panic("IRQ handler returned NULL context");
+        }
 
         // If it was a hardware interrupt, we must ack it
         // Exceptions (0-31) generally do not need EOI
