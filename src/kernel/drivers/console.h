@@ -1,5 +1,5 @@
 /*
- * vga_console.h - VGA text mode printing console interface
+ * console.h - Framebuffer text mode printing console interface
  */
 
 #pragma once
@@ -85,4 +85,10 @@ void console_clear(uint8_t background);
 void console_enable_cursor(bool enabled);
 size_t console_get_width();
 size_t console_get_height();
+
+// Crash console api (lock-free, scheduler-free)
+size_t con_crash_width(void);
+void con_crash_clear(uint8_t bg);
+void con_crash_puts(const char* s);
+void con_crash_printf(const char* fmt, ...);
 

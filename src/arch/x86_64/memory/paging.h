@@ -52,6 +52,7 @@
 #define PAGE_PCD            (1ULL << 4)  // Page Cache Disable
 #define PAGE_ACCESSED       (1ULL << 5)
 #define PAGE_DIRTY          (1ULL << 6)
+#define PAGE_HUGE           (1ULL << 7)
 #define PAGE_GLOBAL         (1ULL << 8)
 #define PAGE_NO_EXECUTE     (1ULL << 63)
 
@@ -110,7 +111,9 @@ void cleanup_kernel_page_tables(uintptr_t start, uintptr_t end);
 void build_physmap();
 
 typedef struct{
-    uint64_t total_RAM;
+    uint64_t total_RAM;   // usable RAM (PMM boundary)
+    uint64_t fb_phys;     // framebuffer physical base (crash console)
+    uint64_t fb_size;     // framebuffer size in bytes
     uint64_t total_pages;
     uintptr_t tables_base;
     uint64_t total_PTs;

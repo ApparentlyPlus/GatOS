@@ -39,7 +39,7 @@
 // Forward declaration of userspace app launcher
 extern void uapps(void);
 
-#define TOTAL_DBG 24
+#define TOTAL_DBG 25
 
 static char* KERNEL_VERSION = "v1.9.5-alpha";
 
@@ -102,10 +102,14 @@ void kernel_main(void* mb_info) {
 	unmap_identity();
 	QEMU_LOG("Unmapped identity mapping, only higher half remains", TOTAL_DBG);
 
-	// Build the physmap (mapping of all physical RAM into virtual space)
+	// Build the physmap (mapping of all physical RAM + framebuffer into virtual space)
 
 	build_physmap();
 	QEMU_LOG("Built physmap at PHYSMAP_VIRTUAL_BASE", TOTAL_DBG);
+
+	// console_init is heap free
+	console_init(&multiboot);
+	QEMU_LOG("Initialized console", TOTAL_DBG);
 
 	// Initialize physical memory manager
 
@@ -178,11 +182,6 @@ void kernel_main(void* mb_info) {
 	// Initialize Syscall Interface
     syscall_init();
 	QEMU_LOG("Initialized Syscall Interface", TOTAL_DBG);
-
-	// Initialize Framebuffer Console hardware
-
-	console_init(&multiboot);
-	QEMU_LOG("Initialized Framebuffer Console hardware", TOTAL_DBG);
 
 	// Initialize Kernel TTY
     tty_t* k_tty = tty_create();
