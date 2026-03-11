@@ -109,6 +109,8 @@ void panic_c(const char* message, cpu_context_t* context)
         con_crash_printf("\nInstruction Pointer:\n");
         con_crash_printf("  RIP: 0x%016lx\n", context->iret_rip);
         con_crash_printf("  CS:  0x%04lx\n",  context->iret_cs);
+        con_crash_printf("  RSP: 0x%016lx\n", context->iret_rsp);
+        con_crash_printf("  SS:  0x%04lx\n",  context->iret_ss);
 
         uint64_t fl = context->iret_flags;
         con_crash_printf("\nCPU Flags (RFLAGS): 0x%016lx\n", fl);
