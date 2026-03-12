@@ -37,6 +37,7 @@
 #define USB_RECIP_DEVICE        0x00u
 #define USB_RECIP_INTERFACE     0x01u
 #define USB_RECIP_ENDPOINT      0x02u
+#define USB_RECIP_OTHER         0x03u
 
 /* ------------------------------------------------------------------ */
 /* Standard request codes                                              */

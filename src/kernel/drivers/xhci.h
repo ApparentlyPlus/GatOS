@@ -8,6 +8,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <arch/x86_64/cpu/interrupts.h>
+#include <kernel/sys/spinlock.h>
 
 #define XHCI_CAPLEN         0x00
 #define XHCI_HCIVERSION     0x02
@@ -159,9 +160,38 @@ typedef struct {
     uint64_t hid_phys;
     uint8_t *hid_buf;
     uint8_t prev[8];
+    uint8_t route_string; // For nested hubs
+    uint8_t root_hub_port;
+    uint8_t tt_slot;
+    uint8_t tt_port;
 } xhci_slot_t;
 
-#define XHCI_MSI_VEC        50
+typedef struct {
+    uint8_t *cap;
+    uint8_t *op;
+    uint8_t *rt;
+    uint32_t *db;
+    uint32_t slots;
+    uint32_t ports;
+    uint32_t ctx_sz;
+    bool ac64;
+
+    uint64_t *dcbaa;
+    uint64_t dcbaa_phys;
+
+    ring_t cmd;
+    ring_t evt;
+    erst_t *erst;
+    uint64_t erst_phys;
+    uint8_t *scratch;
+    uint64_t scratch_phys;
+
+    xhci_slot_t dev_slots[256];
+    spinlock_t lock;
+    uint8_t msi_vec;
+} xhci_hc_t;
+
+#define XHCI_MSI_VEC_BASE   50
 
 bool xhci_init(void);
 cpu_context_t *xhci_irq_handler(cpu_context_t *ctx);

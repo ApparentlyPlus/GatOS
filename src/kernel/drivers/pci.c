@@ -99,7 +99,8 @@ void pci_init(void) {
     LOGF("[PCI] Subsystem initialized\n");
 }
 
-bool pci_find_xhci(pci_dev_t *out) {
+int pci_get_xhci_controllers(pci_dev_t *out_arr, int max_out) {
+    int found = 0;
     for (int b = 0; b < 256; b++) {
         for (int d = 0; d < 32; d++) {
             if (r16(b, d, 0, PCI_VENDOR_ID) == 0xFFFF) continue;
@@ -112,6 +113,12 @@ bool pci_find_xhci(pci_dev_t *out) {
                     r8(b, d, f, PCI_SUBCLASS) != PCI_SUBCLASS_USB ||
                     r8(b, d, f, PCI_PROG_IF) != PCI_PROGIF_XHCI) continue;
 
+                if (found >= max_out) {
+                    LOGF("[PCI] Too many xHCI controllers, skipping remaining\n");
+                    return found;
+                }
+
+                pci_dev_t *out = &out_arr[found];
                 if (!decode_bar(b, d, f, 0, &out->bar0_phys, &out->bar0_size)) {
                     LOGF("[PCI] xHCI BAR0 decode failed\n");
                     continue;
@@ -130,11 +137,11 @@ bool pci_find_xhci(pci_dev_t *out) {
 
                 LOGF("[PCI] xHCI at %02x:%02x.%x BAR0=0x%lx (%u B) MSI=0x%02x\n",
                      b, d, f, out->bar0_phys, out->bar0_size, out->msi_cap);
-                return true;
+                found++;
             }
         }
     }
-    return false;
+    return found;
 }
 
 void pci_enable(pci_dev_t *d) {

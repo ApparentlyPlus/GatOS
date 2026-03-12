@@ -3,53 +3,38 @@
  */
 
 #include <kernel/drivers/xhci.h>
-
 #include <kernel/drivers/pci.h>
 #include <kernel/drivers/usb.h>
 #include <kernel/drivers/input.h>
 #include <kernel/drivers/keyboard.h>
 #include <kernel/memory/pmm.h>
 #include <kernel/memory/vmm.h>
+#include <kernel/memory/heap.h>
 #include <arch/x86_64/memory/paging.h>
 #include <arch/x86_64/cpu/interrupts.h>
 #include <kernel/sys/apic.h>
 #include <kernel/sys/spinlock.h>
 #include <kernel/sys/timers.h>
 #include <kernel/debug.h>
+#include <klibc/stdio.h>
 #include <klibc/string.h>
 #include <kernel/sys/panic.h>
 
-static uint8_t *g_cap, *g_op, *g_rt;
-static uint32_t *g_db;
-static uint32_t g_slots, g_ports, g_ctx_sz;
-static bool g_xhci_ac64;
+static xhci_hc_t *g_hcs[16];
+static int g_hc_cnt = 0;
 
-static uint64_t *g_dcbaa;
-static uint64_t g_dcbaa_phys;
-
-static ring_t g_cmd;
-static ring_t g_evt;
-static erst_t *g_erst;
-static uint64_t g_erst_phys;
-static uint8_t *g_scratch;
-static uint64_t g_scratch_phys;
-
-static xhci_slot_t g_kbd;
-static spinlock_t g_lock;
-
-static inline uint32_t cr32(uint32_t o) { return *(volatile uint32_t *)(g_cap + o); }
-static inline uint8_t cr8(uint32_t o) { return *(volatile uint8_t *)(g_cap + o); }
-static inline uint32_t or32(uint32_t o) { return *(volatile uint32_t *)(g_op + o); }
-static inline void ow32(uint32_t o, uint32_t v) { *(volatile uint32_t *)(g_op + o) = v; }
-static inline void ow64(uint32_t o, uint64_t v) { ow32(o, (uint32_t)v); ow32(o + 4, (uint32_t)(v >> 32)); }
-static inline uint32_t rr32(uint32_t o) { return *(volatile uint32_t *)(g_rt + o); }
-static inline void rw32(uint32_t o, uint32_t v) { *(volatile uint32_t *)(g_rt + o) = v; }
-static inline void rw64(uint32_t o, uint64_t v) { rw32(o, (uint32_t)v); rw32(o + 4, (uint32_t)(v >> 32)); }
-static inline uint32_t ir32(uint32_t r) { return rr32(XHCI_IR0 + r); }
-static inline void iw32(uint32_t r, uint32_t v) { rw32(XHCI_IR0 + r, v); }
-static inline void iw64(uint32_t r, uint64_t v) { rw64(XHCI_IR0 + r, v); }
-static inline void dbw(uint32_t s, uint32_t v) { *(volatile uint32_t *)(g_db + s) = v; }
-
+static inline uint32_t cr32(xhci_hc_t *hc, uint32_t o) { return *(volatile uint32_t *)(hc->cap + o); }
+static inline uint8_t cr8(xhci_hc_t *hc, uint32_t o) { return *(volatile uint8_t *)(hc->cap + o); }
+static inline uint32_t or32(xhci_hc_t *hc, uint32_t o) { return *(volatile uint32_t *)(hc->op + o); }
+static inline void ow32(xhci_hc_t *hc, uint32_t o, uint32_t v) { *(volatile uint32_t *)(hc->op + o) = v; }
+static inline void ow64(xhci_hc_t *hc, uint32_t o, uint64_t v) { ow32(hc, o, (uint32_t)v); ow32(hc, o + 4, (uint32_t)(v >> 32)); }
+static inline uint32_t rr32(xhci_hc_t *hc, uint32_t o) { return *(volatile uint32_t *)(hc->rt + o); }
+static inline void rw32(xhci_hc_t *hc, uint32_t o, uint32_t v) { *(volatile uint32_t *)(hc->rt + o) = v; }
+static inline void rw64(xhci_hc_t *hc, uint32_t o, uint64_t v) { rw32(hc, o, (uint32_t)v); rw32(hc, o + 4, (uint32_t)(v >> 32)); }
+static inline uint32_t ir32(xhci_hc_t *hc, uint32_t r) { return rr32(hc, XHCI_IR0 + r); }
+static inline void iw32(xhci_hc_t *hc, uint32_t r, uint32_t v) { rw32(hc, XHCI_IR0 + r, v); }
+static inline void iw64(xhci_hc_t *hc, uint32_t r, uint64_t v) { rw64(hc, XHCI_IR0 + r, v); }
+static inline void dbw(xhci_hc_t *hc, uint32_t s, uint32_t v) { *(volatile uint32_t *)(hc->db + s) = v; }
 
 static void assert_dma_not_in_kernel(uint64_t phys, size_t sz, const char *name) {
     uint64_t kstart = get_kstart(false);
@@ -61,11 +46,11 @@ static void assert_dma_not_in_kernel(uint64_t phys, size_t sz, const char *name)
     }
 }
 
-static void *dma_alloc(size_t sz, uint64_t *phys) {
+static void *dma_alloc(xhci_hc_t *hc, size_t sz, uint64_t *phys) {
     sz = align_up(sz, PAGE_SIZE);
     if (pmm_alloc(sz, phys) != PMM_OK)
         panicf("[XHCI] DMA OOM (%zu bytes)\n", sz);
-    if (!g_xhci_ac64 && *phys >= 0x100000000ULL)
+    if (!hc->ac64 && *phys >= 0x100000000ULL)
         panicf("[XHCI] DMA alloc returned >4GiB (0x%lx) on 32-bit controller\n", *phys);
     void *v = (void *)PHYSMAP_P2V(*phys);
     kmemset(v, 0, sz);
@@ -73,8 +58,8 @@ static void *dma_alloc(size_t sz, uint64_t *phys) {
     return v;
 }
 
-static void ring_init(ring_t *r, uint32_t cnt) {
-    r->trbs = dma_alloc(cnt * sizeof(trb_t), &r->phys);
+static void ring_init(xhci_hc_t *hc, ring_t *r, uint32_t cnt) {
+    r->trbs = dma_alloc(hc, cnt * sizeof(trb_t), &r->phys);
     r->enq = r->deq = 0;
     r->cyc = 1;
     trb_t *link = &r->trbs[cnt - 1];
@@ -99,58 +84,58 @@ static void enq(ring_t *r, uint32_t cnt, uint32_t d0, uint32_t d1, uint32_t d2, 
     }
 }
 
-static void evt_init(void) {
-    g_evt.trbs = dma_alloc(ERING_SZ * sizeof(trb_t), &g_evt.phys);
-    g_evt.deq = 0;
-    g_evt.cyc = 1;
-    g_erst = dma_alloc(sizeof(erst_t), &g_erst_phys);
-    g_erst[0].base = g_evt.phys;
-    g_erst[0].size = ERING_SZ;
-    iw32(IR_IMOD, 0);
-    iw32(IR_ERSTSZ, 1);
-    iw64(IR_ERSTBA_LO, g_erst_phys);
-    iw64(IR_ERDP_LO, g_evt.phys | ERDP_EHB);
-    iw32(IR_IMAN, ir32(IR_IMAN) | IMAN_IE | IMAN_IP);
+static void evt_init(xhci_hc_t *hc) {
+    hc->evt.trbs = dma_alloc(hc, ERING_SZ * sizeof(trb_t), &hc->evt.phys);
+    hc->evt.deq = 0;
+    hc->evt.cyc = 1;
+    hc->erst = dma_alloc(hc, sizeof(erst_t), &hc->erst_phys);
+    hc->erst[0].base = hc->evt.phys;
+    hc->erst[0].size = ERING_SZ;
+    iw32(hc, IR_IMOD, 0);
+    iw32(hc, IR_ERSTSZ, 1);
+    iw64(hc, IR_ERSTBA_LO, hc->erst_phys);
+    iw64(hc, IR_ERDP_LO, hc->evt.phys | ERDP_EHB);
+    iw32(hc, IR_IMAN, ir32(hc, IR_IMAN) | IMAN_IE | IMAN_IP);
 }
 
-static trb_t *deq(void) {
-    trb_t *t = &g_evt.trbs[g_evt.deq];
+static trb_t *deq(xhci_hc_t *hc) {
+    trb_t *t = &hc->evt.trbs[hc->evt.deq];
     __asm__ volatile("" ::: "memory");
-    if ((t->ctrl & TRB_C) != (uint32_t)g_evt.cyc) return NULL;
-    if (++g_evt.deq >= ERING_SZ) {
-        g_evt.deq = 0;
-        g_evt.cyc ^= 1;
+    if ((t->ctrl & TRB_C) != (uint32_t)hc->evt.cyc) return NULL;
+    if (++hc->evt.deq >= ERING_SZ) {
+        hc->evt.deq = 0;
+        hc->evt.cyc ^= 1;
     }
-    iw64(IR_ERDP_LO, (g_evt.phys + g_evt.deq * sizeof(trb_t)) | ERDP_EHB);
+    iw64(hc, IR_ERDP_LO, (hc->evt.phys + hc->evt.deq * sizeof(trb_t)) | ERDP_EHB);
     return t;
 }
 
-static trb_t wait_ev(uint8_t type, uint32_t tmo) {
+static trb_t wait_ev(xhci_hc_t *hc, uint8_t type, uint32_t tmo) {
     trb_t res = {0};
     uint64_t dl = get_uptime_ms() + tmo;
     while (get_uptime_ms() < dl) {
-        bool was = spinlock_acquire(&g_lock);
-        trb_t *t = deq();
+        bool was = spinlock_acquire(&hc->lock);
+        trb_t *t = deq(hc);
         if (t) {
             uint8_t ty = GET_TYPE(t->ctrl);
             res = *t;
-            spinlock_release(&g_lock, was);
-            ow32(XHCI_STS, STS_EINT);
-            iw32(IR_IMAN, ir32(IR_IMAN) | IMAN_IP);
+            spinlock_release(&hc->lock, was);
+            ow32(hc, XHCI_STS, STS_EINT);
+            iw32(hc, IR_IMAN, ir32(hc, IR_IMAN) | IMAN_IP);
             if (ty == type) return res;
             kmemset(&res, 0, sizeof(res));
         } else {
-            spinlock_release(&g_lock, was);
+            spinlock_release(&hc->lock, was);
         }
         __asm__ volatile("pause");
     }
     return res;
 }
 
-static void bios_handoff(void) {
-    uint32_t xecp = HCC1_XECP(cr32(XHCI_HCCPARAMS1));
+static void bios_handoff(xhci_hc_t *hc) {
+    uint32_t xecp = HCC1_XECP(cr32(hc, XHCI_HCCPARAMS1));
     if (!xecp) return;
-    uint8_t *cap = g_cap + xecp * 4;
+    uint8_t *cap = hc->cap + xecp * 4;
     for (int i = 0; i < 256; i++) {
         if (*cap == EXCAP_LEGACY) {
             volatile uint32_t *reg = (volatile uint32_t *)cap;
@@ -167,72 +152,72 @@ static void bios_handoff(void) {
     }
 }
 
-static bool reset_hc(void) {
-    ow32(XHCI_CMD, or32(XHCI_CMD) & ~CMD_RS);
+static bool reset_hc(xhci_hc_t *hc) {
+    ow32(hc, XHCI_CMD, or32(hc, XHCI_CMD) & ~CMD_RS);
     for (int i = 0; i < 100; i++) {
-        if (or32(XHCI_STS) & STS_HCH) break;
+        if (or32(hc, XHCI_STS) & STS_HCH) break;
         sleep_ms(1);
     }
-    ow32(XHCI_CMD, or32(XHCI_CMD) | CMD_HCRST);
+    ow32(hc, XHCI_CMD, or32(hc, XHCI_CMD) | CMD_HCRST);
     for (int i = 0; i < 100; i++) {
         sleep_ms(1);
-        if (!(or32(XHCI_CMD) & CMD_HCRST) && !(or32(XHCI_STS) & STS_CNR)) return true;
+        if (!(or32(hc, XHCI_CMD) & CMD_HCRST) && !(or32(hc, XHCI_STS) & STS_CNR)) return true;
     }
     return false;
 }
 
-static void start_hc(void) {
-    ow32(XHCI_CMD, or32(XHCI_CMD) | CMD_RS | CMD_INTE | CMD_HSEE);
+static void start_hc(xhci_hc_t *hc) {
+    ow32(hc, XHCI_CMD, or32(hc, XHCI_CMD) | CMD_RS | CMD_INTE | CMD_HSEE);
     for (int i = 0; i < 100; i++) {
-        if (!(or32(XHCI_STS) & STS_HCH)) break;
+        if (!(or32(hc, XHCI_STS) & STS_HCH)) break;
         sleep_ms(1);
     }
     for (int i = 0; i < 500; i++) {
-        if (!(or32(XHCI_STS) & STS_CNR)) return;
+        if (!(or32(hc, XHCI_STS) & STS_CNR)) return;
         sleep_ms(1);
     }
 }
 
-static uint8_t cmd_slot(void) {
-    enq(&g_cmd, RING_SZ, 0, 0, 0, TRB_TYPE(TRB_EN_SLOT));
-    dbw(0, 0);
-    trb_t ev = wait_ev(TRB_EV_CMD, 500);
+static uint8_t cmd_slot(xhci_hc_t *hc) {
+    enq(&hc->cmd, RING_SZ, 0, 0, 0, TRB_TYPE(TRB_EN_SLOT));
+    dbw(hc, 0, 0);
+    trb_t ev = wait_ev(hc, TRB_EV_CMD, 500);
     uint8_t cc = GET_CC(ev.dw2);
     uint8_t id = GET_SLOT(ev.ctrl);
     if (cc != CC_SUCCESS) LOGF("[XHCI] cmd_slot failed: cc=%u\n", cc);
     return cc == CC_SUCCESS ? id : 0;
 }
 
-static bool cmd_addr(uint64_t ctx, uint8_t slot, bool bsr) {
-    enq(&g_cmd, RING_SZ, (uint32_t)ctx, (uint32_t)(ctx >> 32), 0, TRB_TYPE(TRB_ADDR_DEV) | TRB_SLOT(slot) | (bsr ? TRB_BSR : 0));
-    dbw(0, 0);
-    trb_t ev = wait_ev(TRB_EV_CMD, 500);
+static bool cmd_addr(xhci_hc_t *hc, uint64_t ctx, uint8_t slot, bool bsr) {
+    enq(&hc->cmd, RING_SZ, (uint32_t)ctx, (uint32_t)(ctx >> 32), 0, TRB_TYPE(TRB_ADDR_DEV) | TRB_SLOT(slot) | (bsr ? TRB_BSR : 0));
+    dbw(hc, 0, 0);
+    trb_t ev = wait_ev(hc, TRB_EV_CMD, 500);
     uint8_t cc = GET_CC(ev.dw2);
     if (cc != CC_SUCCESS) LOGF("[XHCI] cmd_addr failed: cc=%u (bsr=%d)\n", cc, bsr);
     return cc == CC_SUCCESS;
 }
 
-static bool cmd_cfg(uint64_t ctx, uint8_t slot) {
-    enq(&g_cmd, RING_SZ, (uint32_t)ctx, (uint32_t)(ctx >> 32), 0, TRB_TYPE(TRB_CFG_EP) | TRB_SLOT(slot));
-    dbw(0, 0);
-    uint8_t cc = GET_CC(wait_ev(TRB_EV_CMD, 500).dw2);
+static bool cmd_cfg(xhci_hc_t *hc, uint64_t ctx, uint8_t slot) {
+    enq(&hc->cmd, RING_SZ, (uint32_t)ctx, (uint32_t)(ctx >> 32), 0, TRB_TYPE(TRB_CFG_EP) | TRB_SLOT(slot));
+    dbw(hc, 0, 0);
+    uint8_t cc = GET_CC(wait_ev(hc, TRB_EV_CMD, 500).dw2);
     if (cc != CC_SUCCESS) LOGF("[XHCI] cmd_cfg failed: cc=%u\n", cc);
     return cc == CC_SUCCESS;
 }
 
-static bool cmd_eval(uint64_t ctx, uint8_t slot) {
-    enq(&g_cmd, RING_SZ, (uint32_t)ctx, (uint32_t)(ctx >> 32), 0, TRB_TYPE(TRB_EVAL_CTX) | TRB_SLOT(slot));
-    dbw(0, 0);
-    uint8_t cc = GET_CC(wait_ev(TRB_EV_CMD, 500).dw2);
+static bool cmd_eval(xhci_hc_t *hc, uint64_t ctx, uint8_t slot) {
+    enq(&hc->cmd, RING_SZ, (uint32_t)ctx, (uint32_t)(ctx >> 32), 0, TRB_TYPE(TRB_EVAL_CTX) | TRB_SLOT(slot));
+    dbw(hc, 0, 0);
+    uint8_t cc = GET_CC(wait_ev(hc, TRB_EV_CMD, 500).dw2);
     if (cc != CC_SUCCESS) LOGF("[XHCI] cmd_eval failed: cc=%u\n", cc);
     return cc == CC_SUCCESS;
 }
 
 static inline ctrl_ctx_t *get_ctrl(void *c) { return c; }
-static inline slot_ctx_t *get_slot(void *c) { return (void *)((uint8_t *)c + g_ctx_sz); }
-static inline ep_ctx_t *get_ep(void *c, uint8_t i) { return (void *)((uint8_t *)c + g_ctx_sz * (2 + i)); }
+static inline slot_ctx_t *get_slot(xhci_hc_t *hc, void *c) { return (void *)((uint8_t *)c + hc->ctx_sz); }
+static inline ep_ctx_t *get_ep(xhci_hc_t *hc, void *c, uint8_t i) { return (void *)((uint8_t *)c + hc->ctx_sz * (2 + i)); }
 
-static int ctrl_xfer(xhci_slot_t *s, usb_setup_t *req, uint64_t buf) {
+static int ctrl_xfer(xhci_hc_t *hc, xhci_slot_t *s, usb_setup_t *req, uint64_t buf) {
     bool in = req->bmRequestType & USB_DIR_IN;
     uint32_t d0, d1;
     kmemcpy(&d0, req, 4);
@@ -241,8 +226,8 @@ static int ctrl_xfer(xhci_slot_t *s, usb_setup_t *req, uint64_t buf) {
     enq(&s->ep0, RING_SZ, d0, d1, 8, TRB_TYPE(TRB_SETUP) | TRB_IDT | trt);
     if (req->wLength) enq(&s->ep0, RING_SZ, (uint32_t)buf, (uint32_t)(buf >> 32), req->wLength, TRB_TYPE(TRB_DATA) | (in ? TRB_DIR_IN : 0));
     enq(&s->ep0, RING_SZ, 0, 0, 0, TRB_TYPE(TRB_STATUS) | TRB_IOC | (in && req->wLength ? 0 : TRB_DIR_IN));
-    dbw(s->id, 1);
-    trb_t ev = wait_ev(TRB_EV_XFER, 500);
+    dbw(hc, s->id, 1);
+    trb_t ev = wait_ev(hc, TRB_EV_XFER, 500);
     uint8_t cc = GET_CC(ev.dw2);
     if (cc != CC_SUCCESS && cc != CC_SHORT_PKT) {
         LOGF("[XHCI] ctrl_xfer failed: cc=%u req=0x%02x len=%u\n", cc, req->bRequest, req->wLength);
@@ -251,27 +236,27 @@ static int ctrl_xfer(xhci_slot_t *s, usb_setup_t *req, uint64_t buf) {
     return req->wLength - (ev.dw2 & 0xFFFFFF);
 }
 
-static int get_desc(xhci_slot_t *s, uint8_t ty, uint8_t idx, uint16_t len) {
+static int get_desc(xhci_hc_t *hc, xhci_slot_t *s, uint8_t ty, uint8_t idx, uint16_t len) {
     usb_setup_t r = { USB_DIR_IN | USB_TYPE_STANDARD | USB_RECIP_DEVICE, USB_REQ_GET_DESCRIPTOR, (uint16_t)((ty << 8) | idx), 0, len };
-    return ctrl_xfer(s, &r, g_scratch_phys);
+    return ctrl_xfer(hc, s, &r, hc->scratch_phys);
 }
 
-static int set_cfg(xhci_slot_t *s, uint8_t v) {
+static int set_cfg(xhci_hc_t *hc, xhci_slot_t *s, uint8_t v) {
     usb_setup_t r = { USB_DIR_OUT | USB_TYPE_STANDARD | USB_RECIP_DEVICE, USB_REQ_SET_CONFIGURATION, v, 0, 0 };
-    return ctrl_xfer(s, &r, 0);
+    return ctrl_xfer(hc, s, &r, 0);
 }
 
-static int set_proto(xhci_slot_t *s, uint8_t i, uint8_t p) {
+static int set_proto(xhci_hc_t *hc, xhci_slot_t *s, uint8_t i, uint8_t p) {
     usb_setup_t r = { USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_INTERFACE, USB_HID_REQ_SET_PROTOCOL, p, i, 0 };
-    return ctrl_xfer(s, &r, 0);
+    return ctrl_xfer(hc, s, &r, 0);
 }
 
-static int set_idle(xhci_slot_t *s, uint8_t i) {
+static int set_idle(xhci_hc_t *hc, xhci_slot_t *s, uint8_t i) {
     usb_setup_t r = { USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_INTERFACE, USB_HID_REQ_SET_IDLE, 0, i, 0 };
-    return ctrl_xfer(s, &r, 0);
+    return ctrl_xfer(hc, s, &r, 0);
 }
 
-static bool parse_cfg(xhci_slot_t *s, uint8_t *buf, uint16_t len) {
+static bool parse_cfg(xhci_hc_t *hc, xhci_slot_t *s, uint8_t *buf, uint16_t len) {
     uint16_t p = 0;
     uint8_t iface = 0xFF;
     bool is_kbd = false;
@@ -282,8 +267,7 @@ static bool parse_cfg(xhci_slot_t *s, uint8_t *buf, uint16_t len) {
             s->cfg_val = ((usb_config_desc_t *)(buf + p))->bConfigurationValue;
         } else if (buf[p + 1] == USB_DESC_INTERFACE) {
             usb_interface_desc_t *id = (void *)(buf + p);
-            /* Accept ANY HID interface for now to ensure we don't skip the keyboard */
-            is_kbd = id->bInterfaceClass == USB_CLASS_HID;
+            is_kbd = id->bInterfaceClass == USB_CLASS_HID && id->bInterfaceProtocol == USB_HID_PROTOCOL_KEYBOARD;
             iface = id->bInterfaceNumber;
             LOGF("[XHCI]   iface %u: cls=%u sub=%u proto=%u\n", iface, id->bInterfaceClass, id->bInterfaceSubClass, id->bInterfaceProtocol);
         } else if (buf[p + 1] == USB_DESC_ENDPOINT) {
@@ -294,7 +278,7 @@ static bool parse_cfg(xhci_slot_t *s, uint8_t *buf, uint16_t len) {
                 s->ep_addr = ed->bEndpointAddress;
                 s->ep_mps = ed->wMaxPacketSize & 0x7FF;
                 s->ep_ival = ed->bInterval;
-                return true; /* Found it, no need to parse the rest of the composite device */
+                return true; 
             }
         }
         p += buf[p];
@@ -307,49 +291,113 @@ static uint16_t get_mps(uint8_t spd) {
     return (spd == SPD_SS || spd == SPD_SSP) ? 512 : (spd == SPD_LS ? 8 : 64);
 }
 
-static bool reset_port(uint8_t p) {
-    uint32_t sc = or32(XHCI_PORTSC(p));
+static bool reset_port(xhci_hc_t *hc, uint8_t p) {
+    uint32_t sc = or32(hc, XHCI_PORTSC(p));
     uint32_t safe_sc = sc & 0x0E00C200;
-    ow32(XHCI_PORTSC(p), safe_sc | PORT_RW1C);
-    ow32(XHCI_PORTSC(p), safe_sc | PORT_PR);
+    ow32(hc, XHCI_PORTSC(p), safe_sc | PORT_RW1C);
+    ow32(hc, XHCI_PORTSC(p), safe_sc | PORT_PR);
     for (int i = 0; i < 200; i++) {
         sleep_ms(1);
-        sc = or32(XHCI_PORTSC(p));
+        sc = or32(hc, XHCI_PORTSC(p));
         if (sc & PORT_PRC) {
             safe_sc = sc & 0x0E00C200;
-            ow32(XHCI_PORTSC(p), safe_sc | PORT_PRC);
+            ow32(hc, XHCI_PORTSC(p), safe_sc | PORT_PRC);
             return true;
         }
     }
     return false;
 }
 
-static bool enum_dev(uint8_t p, uint8_t spd) {
-    xhci_slot_t *s = &g_kbd;
-    kmemset(s, 0, sizeof(*s));
-    s->port = p;
-    s->spd = spd;
-    
-    LOGF("[XHCI] port %u: enum start (spd=%u)\n", p, spd);
+static void enum_hub(xhci_hc_t *hc, xhci_slot_t *hs);
+static bool enum_dev(xhci_hc_t *hc, uint8_t p, uint8_t spd, uint32_t route_string, uint8_t root_hub_port, uint8_t tt_slot, uint8_t tt_port);
 
-    if (!(s->id = cmd_slot())) {
-        LOGF("[XHCI] port %u: enum failed (cmd_slot)\n", p);
-        return false;
+static void enum_hub(xhci_hc_t *hc, xhci_slot_t *hs) {
+    usb_setup_t req_hub = { USB_DIR_IN | USB_TYPE_CLASS | USB_RECIP_DEVICE, USB_REQ_GET_DESCRIPTOR, (uint16_t)((0x29 << 8) | 0), 0, 8 };
+    if (hs->spd == SPD_SS || hs->spd == SPD_SSP) {
+        req_hub.wValue = (0x2A << 8) | 0; // SS Hub Descriptor
     }
 
+    int n = ctrl_xfer(hc, hs, &req_hub, hc->scratch_phys);
+    if (n < 2) {
+        LOGF("[XHCI] slot %u: failed to get hub descriptor\n", hs->id);
+        return;
+    }
+    uint8_t num_ports = hc->scratch[2];
+    LOGF("[XHCI] Hub slot %u has %u ports\n", hs->id, num_ports);
+
+    // Power on all ports
+    for (uint8_t i = 1; i <= num_ports; i++) {
+        usb_setup_t pwr = { USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_OTHER, 3 /* SET_FEATURE */, 8 /* PORT_POWER */, i, 0 };
+        ctrl_xfer(hc, hs, &pwr, 0);
+    }
+    sleep_ms(100);
+
+    for (uint8_t i = 1; i <= num_ports; i++) {
+        // Reset port
+        usb_setup_t rst = { USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_OTHER, 3 /* SET_FEATURE */, 4 /* PORT_RESET */, i, 0 };
+        ctrl_xfer(hc, hs, &rst, 0);
+        sleep_ms(50);
+
+        // Get Port Status
+        usb_setup_t sts = { USB_DIR_IN | USB_TYPE_CLASS | USB_RECIP_OTHER, 0 /* GET_STATUS */, 0, i, 4 };
+        if (ctrl_xfer(hc, hs, &sts, hc->scratch_phys) == 4) {
+            uint32_t status = *(uint32_t *)hc->scratch;
+            if (status & 1) { // Connected
+                uint8_t dspd = SPD_FS;
+                if (status & (1 << 9)) dspd = SPD_LS;
+                else if (status & (1 << 10)) dspd = SPD_HS;
+
+                uint8_t tt_s = hs->tt_slot ? hs->tt_slot : (hs->spd == SPD_HS && dspd != SPD_HS ? hs->id : 0);
+                uint8_t tt_p = hs->tt_slot ? hs->tt_port : (hs->spd == SPD_HS && dspd != SPD_HS ? i : 0);
+                uint32_t route = hs->route_string;
+                if (hs->spd == SPD_SS || hs->spd == SPD_SSP) {
+                    for (int shift = 0; shift < 20; shift += 4) {
+                        if ((route & (0xF << shift)) == 0) {
+                            route |= (i & 0xF) << shift;
+                            break;
+                        }
+                    }
+                }
+
+                enum_dev(hc, i, dspd, route, hs->root_hub_port, tt_s, tt_p);
+            }
+        }
+    }
+}
+
+static bool enum_dev(xhci_hc_t *hc, uint8_t p, uint8_t spd, uint32_t route_string, uint8_t root_hub_port, uint8_t tt_slot, uint8_t tt_port) {
+    uint8_t slot_id = cmd_slot(hc);
+    if (!slot_id) return false;
+
+    xhci_slot_t *s = &hc->dev_slots[slot_id];
+    kmemset(s, 0, sizeof(*s));
+    s->id = slot_id;
+    s->port = p;
+    s->spd = spd;
+    s->route_string = route_string;
+    s->root_hub_port = root_hub_port;
+    s->tt_slot = tt_slot;
+    s->tt_port = tt_port;
+
+    LOGF("[XHCI] slot %u: enum start (spd=%u route=%x rport=%u tt=%u:%u)\n", slot_id, spd, route_string, root_hub_port, tt_slot, tt_port);
+
     s->out_phys = 0;
-    void *out = dma_alloc(PAGE_SIZE, &s->out_phys);
-    g_dcbaa[s->id] = s->out_phys;
-    ring_init(&s->ep0, RING_SZ);
+    void *out = dma_alloc(hc, PAGE_SIZE, &s->out_phys);
+    hc->dcbaa[s->id] = s->out_phys;
+    ring_init(hc, &s->ep0, RING_SZ);
 
     uint64_t in_phys = 0;
-    void *in = dma_alloc(PAGE_SIZE, &in_phys);
+    void *in = dma_alloc(hc, PAGE_SIZE, &in_phys);
     ctrl_ctx_t *c = get_ctrl(in);
     c->add = 3;
-    slot_ctx_t *sc = get_slot(in);
-    sc->dw0 = SLOT_SPD(spd) | SLOT_CTX_ENT(1);
-    sc->dw1 = SLOT_PORT(p + 1);
-    ep_ctx_t *e0 = get_ep(in, 0);
+    slot_ctx_t *sc = get_slot(hc, in);
+    sc->dw0 = SLOT_SPD(spd) | SLOT_CTX_ENT(1) | (route_string & 0xFFFFF);
+    sc->dw1 = SLOT_PORT(root_hub_port);
+    if (tt_slot) {
+        sc->dw2 = (tt_slot) | (tt_port << 8);
+    }
+    
+    ep_ctx_t *e0 = get_ep(hc, in, 0);
     uint16_t mps = get_mps(spd);
     e0->dw1 = EP_CERR(3) | EP_TYPE(EP_CTRL) | EP_PKT(mps);
     e0->deq_lo = (uint32_t)s->ep0.phys | EP_DCS;
@@ -357,28 +405,15 @@ static bool enum_dev(uint8_t p, uint8_t spd) {
     e0->dw4 = EP_AVG(8);
 
     bool is_ss = (spd == SPD_SS || spd == SPD_SSP);
-    if (!cmd_addr(in_phys, s->id, is_ss)) {
-        LOGF("[XHCI] port %u: enum failed (cmd_addr)\n", p);
-        goto fail;
-    }
+    if (!cmd_addr(hc, in_phys, s->id, is_ss)) goto fail;
 
-    /* Wait for device to process SET_ADDRESS */
     sleep_ms(50);
-    {
-        /* Read 18 bytes to get the full device descriptor, including VID/PID */
-        int r18 = get_desc(s, USB_DESC_DEVICE, 0, 18);
-        if (r18 < 18) {
-            LOGF("[XHCI] port %u: enum failed (get_desc device, ret=%d)\n", p, r18);
-            goto fail;
-        }
-    }
 
-    usb_device_desc_t *dd = (void *)g_scratch;
-    LOGF("[XHCI] port %u: dev vid=0x%04x pid=0x%04x cls=%u\n", p, dd->idVendor, dd->idProduct, dd->bDeviceClass);
-    if (dd->bDeviceClass == 9) {
-        LOGF("[XHCI]   -> This is a USB Hub! Skipping. (Keyboard behind hub won't be found)\n");
-        goto fail;
-    }
+    int r18 = get_desc(hc, s, USB_DESC_DEVICE, 0, 18);
+    if (r18 < 18) goto fail;
+
+    usb_device_desc_t *dd = (void *)hc->scratch;
+    LOGF("[XHCI] slot %u: dev vid=0x%04x pid=0x%04x cls=%u\n", s->id, dd->idVendor, dd->idProduct, dd->bDeviceClass);
 
     uint16_t real_mps = (spd == SPD_SS || spd == SPD_SSP) ? (1 << dd->bMaxPacketSize0) : dd->bMaxPacketSize0;
     if (real_mps != mps) {
@@ -388,37 +423,46 @@ static bool enum_dev(uint8_t p, uint8_t spd) {
         e0->deq_lo = (uint32_t)s->ep0.phys | EP_DCS;
         e0->deq_hi = (uint32_t)(s->ep0.phys >> 32);
         e0->dw4 = EP_AVG(8);
-        cmd_eval(in_phys, s->id);
+        cmd_eval(hc, in_phys, s->id);
     }
 
-    int n = get_desc(s, USB_DESC_CONFIG, 0, 9);
-    if (n < 9) {
-        LOGF("[XHCI] port %u: enum failed (get_desc config 9 bytes, ret=%d)\n", p, n);
-        goto fail;
+    if (dd->bDeviceClass == 9) {
+        LOGF("[XHCI] slot %u: This is a USB Hub! Enumerating children...\n", s->id);
+        
+        int n = get_desc(hc, s, USB_DESC_CONFIG, 0, 9);
+        if (n >= 9) {
+            uint16_t total_len = ((usb_config_desc_t *)hc->scratch)->wTotalLength;
+            if (total_len > 2048) total_len = 2048;
+            n = get_desc(hc, s, USB_DESC_CONFIG, 0, total_len);
+            if (n > 0) {
+                uint8_t cfg_val = ((usb_config_desc_t *)hc->scratch)->bConfigurationValue;
+                set_cfg(hc, s, cfg_val);
+                enum_hub(hc, s);
+            }
+        }
+        pmm_free(in_phys, PAGE_SIZE);
+        return false;
     }
-    uint16_t total_len = ((usb_config_desc_t *)g_scratch)->wTotalLength;
-    LOGF("[XHCI] port %u: config wTotalLength=%u\n", p, total_len);
+
+    int n = get_desc(hc, s, USB_DESC_CONFIG, 0, 9);
+    if (n < 9) goto fail;
+    
+    uint16_t total_len = ((usb_config_desc_t *)hc->scratch)->wTotalLength;
     if (total_len > 2048) total_len = 2048;
 
-    n = get_desc(s, USB_DESC_CONFIG, 0, total_len);
-    if (n <= 0 || !parse_cfg(s, g_scratch, n)) {
-        LOGF("[XHCI] port %u: enum failed (parse_cfg, ret=%d)\n", p, n);
-        goto fail;
-    }
-    if (set_cfg(s, s->cfg_val) < 0) {
-        LOGF("[XHCI] port %u: enum failed (set_cfg)\n", p);
-        goto fail;
-    }
+    n = get_desc(hc, s, USB_DESC_CONFIG, 0, total_len);
+    if (n <= 0 || !parse_cfg(hc, s, hc->scratch, n)) goto fail;
+    if (set_cfg(hc, s, s->cfg_val) < 0) goto fail;
 
-    ring_init(&s->intr, RING_SZ);
+    ring_init(hc, &s->intr, RING_SZ);
     s->ep_idx = (s->ep_addr & 0xF) * 2 + 1;
 
     kmemset(in, 0, PAGE_SIZE);
     c->add = 1 | (1 << s->ep_idx);
-    kmemcpy(get_slot(in), (void *)PHYSMAP_P2V(s->out_phys), g_ctx_sz);
-    get_slot(in)->dw0 = (get_slot(in)->dw0 & ~(0x1F << 27)) | SLOT_CTX_ENT(s->ep_idx);
+    kmemcpy(get_slot(hc, in), (void *)PHYSMAP_P2V(s->out_phys), hc->ctx_sz);
+    get_slot(hc, in)->dw0 = (get_slot(hc, in)->dw0 & ~(0x1F << 27)) | SLOT_CTX_ENT(s->ep_idx);
     
-    ep_ctx_t *ei = get_ep(in, s->ep_idx - 1);
+    ep_ctx_t *ei = get_ep(hc, in, s->ep_idx - 1);
     uint8_t iv = 0;
     if (spd == SPD_FS || spd == SPD_LS) {
         uint8_t b = s->ep_ival;
@@ -430,40 +474,37 @@ static bool enum_dev(uint8_t p, uint8_t spd) {
         iv = s->ep_ival ? s->ep_ival - 1 : 0;
     }
     ei->dw0 = EP_IVAL(iv);
-    ei->dw1 = EP_CERR(3) | EP_TYPE(EP_INTR_IN) | EP_PKT(s->ep_mps);
+    ei->dw1 = EP_CERR(3) | EP_TYPE(7) | EP_PKT(s->ep_mps);
     ei->deq_lo = (uint32_t)s->intr.phys | EP_DCS;
     ei->deq_hi = (uint32_t)(s->intr.phys >> 32);
-    ei->dw4 = EP_AVG(s->ep_mps) | EP_ESIT(s->ep_mps);
+    ei->dw4 = EP_AVG(8) | EP_ESIT(s->ep_mps);
 
-    if (!cmd_cfg(in_phys, s->id)) {
-        LOGF("[XHCI] port %u: enum failed (cmd_cfg)\n", p);
-        goto fail;
-    }
-    set_proto(s, s->iface, USB_HID_PROTOCOL_BOOT);
-    set_idle(s, s->iface);
+    if (!cmd_cfg(hc, in_phys, s->id)) goto fail;
+    set_proto(hc, s, s->iface, USB_HID_PROTOCOL_BOOT);
+    set_idle(hc, s, s->iface);
 
-    s->hid_buf = dma_alloc(PAGE_SIZE, &s->hid_phys);
+    s->hid_buf = dma_alloc(hc, PAGE_SIZE, &s->hid_phys);
     pmm_free(in_phys, PAGE_SIZE);
     s->active = true;
-    LOGF("[XHCI] USB keyboard found and configured on port %u!\n", p);
+    kprintf("[XHCI] USB keyboard found and configured on slot %u!\n", s->id);
     return true;
 
 fail:
     if (in_phys) pmm_free(in_phys, PAGE_SIZE);
     if (s->ep0.phys) pmm_free(s->ep0.phys, PAGE_SIZE);
     if (s->intr.phys) pmm_free(s->intr.phys, PAGE_SIZE);
-    if (s->out_phys) { pmm_free(s->out_phys, PAGE_SIZE); g_dcbaa[s->id] = 0; }
+    if (s->out_phys) { pmm_free(s->out_phys, PAGE_SIZE); hc->dcbaa[s->id] = 0; }
     return false;
 }
 
-static const keycode_t kmap[116] = {
-    KEY_UNKNOWN, KEY_UNKNOWN, KEY_UNKNOWN, KEY_UNKNOWN, KEY_A, KEY_B, KEY_C, KEY_D, KEY_E, KEY_F, KEY_G, KEY_H, KEY_I, KEY_J, KEY_K, KEY_L, KEY_M, KEY_N, KEY_O, KEY_P, KEY_Q, KEY_R, KEY_S, KEY_T, KEY_U, KEY_V, KEY_W, KEY_X, KEY_Y, KEY_Z, KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9, KEY_0, KEY_ENTER, KEY_ESC, KEY_BACKSPACE, KEY_TAB, KEY_SPACE, KEY_MINUS, KEY_EQUAL, KEY_LEFT_BRACKET, KEY_RIGHT_BRACKET, KEY_BACKSLASH, KEY_UNKNOWN, KEY_SEMICOLON, KEY_QUOTE, KEY_BACKTICK, KEY_COMMA, KEY_PERIOD, KEY_SLASH, KEY_CAPSLOCK, KEY_F1, KEY_F2, KEY_F3, KEY_F4, KEY_F5, KEY_F6, KEY_F7, KEY_F8, KEY_F9, KEY_F10, KEY_F11, KEY_F12, KEY_UNKNOWN, KEY_SCROLLLOCK, KEY_UNKNOWN, KEY_INSERT, KEY_HOME, KEY_PAGEUP, KEY_DELETE, KEY_END, KEY_PAGEDOWN, KEY_RIGHT, KEY_LEFT, KEY_DOWN, KEY_UP, KEY_NUMLOCK, KEY_KPSLASH, KEY_KPMULT, KEY_KPMINUS, KEY_KPPLUS, KEY_KPENTER, KEY_KP1, KEY_KP2, KEY_KP3, KEY_KP4, KEY_KP5, KEY_KP6, KEY_KP7, KEY_KP8, KEY_KP9, KEY_KP0, KEY_KPDOT, KEY_UNKNOWN, KEY_UNKNOWN, KEY_UNKNOWN, KEY_UNKNOWN, KEY_UNKNOWN, KEY_UNKNOWN, KEY_UNKNOWN, KEY_UNKNOWN, KEY_UNKNOWN, KEY_UNKNOWN, KEY_UNKNOWN, KEY_UNKNOWN, KEY_UNKNOWN, KEY_UNKNOWN, KEY_UNKNOWN, KEY_UNKNOWN, KEY_UNKNOWN
+static const keycode_t kmap[256] = {
+    KEY_UNKNOWN, KEY_UNKNOWN, KEY_UNKNOWN, KEY_UNKNOWN, KEY_A, KEY_B, KEY_C, KEY_D, KEY_E, KEY_F, KEY_G, KEY_H, KEY_I, KEY_J, KEY_K, KEY_L, KEY_M, KEY_N, KEY_O, KEY_P, KEY_Q, KEY_R, KEY_S, KEY_T, KEY_U, KEY_V, KEY_W, KEY_X, KEY_Y, KEY_Z, KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9, KEY_0, KEY_ENTER, KEY_ESC, KEY_BACKSPACE, KEY_TAB, KEY_SPACE, KEY_MINUS, KEY_EQUAL, KEY_LEFT_BRACKET, KEY_RIGHT_BRACKET, KEY_BACKSLASH, KEY_UNKNOWN, KEY_SEMICOLON, KEY_QUOTE, KEY_BACKTICK, KEY_COMMA, KEY_PERIOD, KEY_SLASH, KEY_CAPSLOCK, KEY_F1, KEY_F2, KEY_F3, KEY_F4, KEY_F5, KEY_F6, KEY_F7, KEY_F8, KEY_F9, KEY_F10, KEY_F11, KEY_F12, KEY_UNKNOWN, KEY_SCROLLLOCK, KEY_UNKNOWN, KEY_INSERT, KEY_HOME, KEY_PAGEUP, KEY_DELETE, KEY_END, KEY_PAGEDOWN, KEY_RIGHT, KEY_LEFT, KEY_DOWN, KEY_UP, KEY_NUMLOCK, KEY_KPSLASH, KEY_KPMULT, KEY_KPMINUS, KEY_KPPLUS, KEY_KPENTER, KEY_KP1, KEY_KP2, KEY_KP3, KEY_KP4, KEY_KP5, KEY_KP6, KEY_KP7, KEY_KP8, KEY_KP9, KEY_KP0, KEY_KPDOT
 };
 
 static const uint8_t mmap[8] = { MOD_LCTRL, MOD_LSHIFT, MOD_LALT, MOD_LGUI, MOD_RCTRL, MOD_RSHIFT, MOD_RALT, MOD_RGUI };
 
-static void handle_hid(const uint8_t *r) {
-    uint8_t nmod = 0, c = r[0] ^ g_kbd.prev[0];
+static void handle_hid(xhci_slot_t *s, const uint8_t *r) {
+    uint8_t nmod = 0, c = r[0] ^ s->prev[0];
     for (int i = 0; i < 8; i++) if (r[0] & (1 << i)) nmod |= mmap[i];
 
     if (c) {
@@ -475,127 +516,149 @@ static void handle_hid(const uint8_t *r) {
     }
 
     for (int i = 2; i < 8; i++) {
-        if (g_kbd.prev[i]) {
+        if (s->prev[i]) {
             bool found = false;
-            for (int j = 2; j < 8; j++) if (r[j] == g_kbd.prev[i]) found = true;
-            if (!found && g_kbd.prev[i] < 116 && kmap[g_kbd.prev[i]] != KEY_UNKNOWN)
-                input_handle_key((key_event_t){ kmap[g_kbd.prev[i]], false, nmod, 0 });
+            for (int j = 2; j < 8; j++) if (r[j] == s->prev[i]) found = true;
+            if (!found && s->prev[i] < 116 && kmap[s->prev[i]] != KEY_UNKNOWN)
+                input_handle_key((key_event_t){ kmap[s->prev[i]], false, nmod, 0 });
         }
         if (r[i]) {
             bool found = false;
-            for (int j = 2; j < 8; j++) if (g_kbd.prev[j] == r[i]) found = true;
+            for (int j = 2; j < 8; j++) if (s->prev[j] == r[i]) found = true;
             if (!found && r[i] < 116 && kmap[r[i]] != KEY_UNKNOWN)
                 input_handle_key((key_event_t){ kmap[r[i]], true, nmod, 0 });
         }
     }
-    kmemcpy(g_kbd.prev, r, 8);
+    kmemcpy(s->prev, r, 8);
 }
 
-static void arm_int(void) {
-    enq(&g_kbd.intr, RING_SZ, (uint32_t)g_kbd.hid_phys, (uint32_t)(g_kbd.hid_phys >> 32), 8, TRB_TYPE(TRB_NORMAL) | TRB_IOC | TRB_INTR(0));
-    dbw(g_kbd.id, g_kbd.ep_idx);
+static void arm_int(xhci_hc_t *hc, xhci_slot_t *s) {
+    enq(&s->intr, RING_SZ, (uint32_t)s->hid_phys, (uint32_t)(s->hid_phys >> 32), 8, TRB_TYPE(TRB_NORMAL) | TRB_IOC | TRB_INTR(0));
+    dbw(hc, s->id, s->ep_idx);
 }
 
-static void proc_evts(void) {
+static void proc_evts(xhci_hc_t *hc) {
     for (;;) {
-        bool was = spinlock_acquire(&g_lock);
-        trb_t *t = deq();
-        if (!t) { spinlock_release(&g_lock, was); break; }
+        bool was = spinlock_acquire(&hc->lock);
+        trb_t *t = deq(hc);
+        if (!t) { spinlock_release(&hc->lock, was); break; }
         trb_t ev = *t;
-        spinlock_release(&g_lock, was);
+        spinlock_release(&hc->lock, was);
         
-        ow32(XHCI_STS, STS_EINT);
-        iw32(IR_IMAN, ir32(IR_IMAN) | IMAN_IP);
+        ow32(hc, XHCI_STS, STS_EINT);
+        iw32(hc, IR_IMAN, ir32(hc, IR_IMAN) | IMAN_IP);
         
         if (GET_TYPE(ev.ctrl) == TRB_EV_XFER) {
             uint8_t cc = GET_CC(ev.dw2);
-            if (GET_SLOT(ev.ctrl) == g_kbd.id && GET_EP(ev.ctrl) == g_kbd.ep_idx && g_kbd.active) {
-                if (cc == CC_SUCCESS || cc == CC_SHORT_PKT) handle_hid(g_kbd.hid_buf);
-                arm_int();
+            uint8_t slot_id = GET_SLOT(ev.ctrl);
+            if (slot_id < 256) {
+                xhci_slot_t *s = &hc->dev_slots[slot_id];
+                if (s->active && GET_EP(ev.ctrl) == s->ep_idx) {
+                    if (cc == CC_SUCCESS || cc == CC_SHORT_PKT) handle_hid(s, s->hid_buf);
+                    arm_int(hc, s);
+                }
             }
         }
     }
 }
 
 cpu_context_t *xhci_irq_handler(cpu_context_t *ctx) {
-    proc_evts();
+    for (int i = 0; i < g_hc_cnt; i++) {
+        proc_evts(g_hcs[i]);
+    }
     return ctx;
 }
 
 bool xhci_init(void) {
-    pci_dev_t pci;
-    if (!pci_find_xhci(&pci)) return false;
-    pci_enable(&pci);
+    pci_dev_t pcis[16];
+    int cnt = pci_get_xhci_controllers(pcis, 16);
+    if (cnt == 0) return false;
 
-    uint32_t ms = align_up(pci.bar0_size, PAGE_SIZE);
-    if (ms < PAGE_SIZE) ms = PAGE_SIZE;
-    if (vmm_alloc(NULL, ms, VM_FLAG_WRITE | VM_FLAG_MMIO, (void *)pci.bar0_phys, (void **)&g_cap) != VMM_OK) return false;
+    bool any_kbd = false;
 
-    g_op = g_cap + cr8(XHCI_CAPLEN);
-    g_slots = HCS1_SLOTS(cr32(XHCI_HCSPARAMS1));
-    g_ports = HCS1_PORTS(cr32(XHCI_HCSPARAMS1));
-    uint32_t hcc1 = cr32(XHCI_HCCPARAMS1);
-    g_ctx_sz = HCC1_CSZ(hcc1) ? 64 : 32;
-    g_xhci_ac64 = (hcc1 & 1) != 0;
-    g_rt = g_cap + (cr32(XHCI_RTSOFF) & ~0x1F);
-    g_db = (uint32_t *)(g_cap + (cr32(XHCI_DBOFF) & ~3));
+    for (int i = 0; i < cnt; i++) {
+        pci_dev_t *pci = &pcis[i];
+        pci_enable(pci);
 
-    bios_handoff();
-    if (!reset_hc()) return false;
-    spinlock_init(&g_lock, "xhci_evts");
+        xhci_hc_t *hc = (xhci_hc_t *)kmalloc(sizeof(xhci_hc_t));
+        kmemset(hc, 0, sizeof(xhci_hc_t));
+        g_hcs[g_hc_cnt++] = hc;
 
-    g_dcbaa = dma_alloc(align_up((g_slots + 1) * 8, 64), &g_dcbaa_phys);
-    uint32_t scratches = HCS2_SCRATCH(cr32(XHCI_HCSPARAMS2));
-    if (scratches) {
-        uint64_t spa;
-        uint64_t *spa_buf = dma_alloc(scratches * 8, &spa);
-        for (uint32_t i = 0; i < scratches; i++) dma_alloc(PAGE_SIZE, &spa_buf[i]);
-        g_dcbaa[0] = spa;
-    }
+        uint32_t ms = align_up(pci->bar0_size, PAGE_SIZE);
+        if (ms < PAGE_SIZE) ms = PAGE_SIZE;
+        if (vmm_alloc(NULL, ms, VM_FLAG_WRITE | VM_FLAG_MMIO, (void *)pci->bar0_phys, (void **)&hc->cap) != VMM_OK) continue;
 
-    ow32(XHCI_CONFIG, g_slots & 0xFF);
-    ow64(XHCI_DCBAAP_LO, g_dcbaa_phys);
-    ring_init(&g_cmd, RING_SZ);
-    ow64(XHCI_CRCR_LO, (g_cmd.phys & ~0x3F) | g_cmd.cyc);
-    evt_init();
+        hc->op = hc->cap + cr8(hc, XHCI_CAPLEN);
+        hc->slots = HCS1_SLOTS(cr32(hc, XHCI_HCSPARAMS1));
+        hc->ports = HCS1_PORTS(cr32(hc, XHCI_HCSPARAMS1));
+        uint32_t hcc1 = cr32(hc, XHCI_HCCPARAMS1);
+        hc->ctx_sz = HCC1_CSZ(hcc1) ? 64 : 32;
+        hc->ac64 = (hcc1 & 1) != 0;
+        hc->rt = hc->cap + (cr32(hc, XHCI_RTSOFF) & ~0x1F);
+        hc->db = (uint32_t *)(hc->cap + (cr32(hc, XHCI_DBOFF) & ~3));
+        hc->msi_vec = XHCI_MSI_VEC_BASE + i;
 
-    start_hc();
-    g_scratch = dma_alloc(PAGE_SIZE, &g_scratch_phys);
+        bios_handoff(hc);
+        if (!reset_hc(hc)) continue;
+        spinlock_init(&hc->lock, "xhci_evts");
 
-    LOGF("[XHCI] started: %u ports %u slots ctx=%u ac64=%d\n",
-            g_ports, g_slots, g_ctx_sz, g_xhci_ac64);
-
-    bool kbd_found = false;
-    for (uint8_t p = 0; p < g_ports && !kbd_found; p++) {
-        uint32_t sc = or32(XHCI_PORTSC(p));
-        if (!(sc & PORT_CCS)) continue;
-
-        if (!reset_port(p)) {
-            continue;
+        hc->dcbaa = dma_alloc(hc, align_up((hc->slots + 1) * 8, 64), &hc->dcbaa_phys);
+        uint32_t scratches = HCS2_SCRATCH(cr32(hc, XHCI_HCSPARAMS2));
+        if (scratches) {
+            uint64_t spa;
+            uint64_t *spa_buf = dma_alloc(hc, scratches * 8, &spa);
+            for (uint32_t j = 0; j < scratches; j++) dma_alloc(hc, PAGE_SIZE, &spa_buf[j]);
+            hc->dcbaa[0] = spa;
         }
 
-        sleep_ms(2); /* allow device to settle after reset, 2ms per xHCI standards */
+        ow32(hc, XHCI_CONFIG, hc->slots & 0xFF);
+        ow64(hc, XHCI_DCBAAP_LO, hc->dcbaa_phys);
+        ring_init(hc, &hc->cmd, RING_SZ);
+        ow64(hc, XHCI_CRCR_LO, (hc->cmd.phys & ~0x3F) | hc->cmd.cyc);
+        evt_init(hc);
 
-        sc = or32(XHCI_PORTSC(p));
-        if (!(sc & PORT_CCS)) continue;
-        if (!(sc & (1 << 1))) {
-            /* PED=0: port disabled after reset */
-            continue;
+        start_hc(hc);
+        hc->scratch = dma_alloc(hc, PAGE_SIZE, &hc->scratch_phys);
+
+        kprintf("[XHCI] started HC %d: %u ports %u slots ctx=%u ac64=%d\n", i, hc->ports, hc->slots, hc->ctx_sz, hc->ac64);
+
+        bool port_enumed[256] = {0};
+        for (int retry = 0; retry < 3; retry++) {
+            for (uint8_t p = 0; p < hc->ports; p++) {
+                if (port_enumed[p]) continue;
+                uint32_t sc = or32(hc, XHCI_PORTSC(p));
+                if (!(sc & PORT_CCS)) continue;
+
+                if (!reset_port(hc, p)) continue;
+                sleep_ms(50);
+
+                sc = or32(hc, XHCI_PORTSC(p));
+                if (!(sc & PORT_CCS)) continue;
+                if (!(sc & (1 << 1))) continue; // PED=0 skip
+
+                uint8_t spd = (sc >> PORT_SPD_SHIFT) & PORT_SPD_MASK;
+                if (!spd) spd = SPD_FS;
+
+                port_enumed[p] = true;
+                if (enum_dev(hc, p, spd, 0, p + 1, 0, 0)) {
+                    any_kbd = true;
+                }
+            }
+            sleep_ms(100);
         }
 
-        uint8_t spd = (sc >> PORT_SPD_SHIFT) & PORT_SPD_MASK;
-        if (!spd) spd = SPD_FS;
+        irq_register(hc->msi_vec, (irq_handler_t)xhci_irq_handler);
+        pci_cfg_msi(pci, hc->msi_vec, lapic_get_id());
 
-        kbd_found = enum_dev(p, spd);
+        // Arm all active keyboards on this HC
+        for (int j = 0; j < 256; j++) {
+            if (hc->dev_slots[j].active) arm_int(hc, &hc->dev_slots[j]);
+        }
     }
 
-    if (!kbd_found) {
-        LOGF("[XHCI] no keyboard found\n");
+    if (!any_kbd) {
+        kprintf("[KBD] No USB xHCI keyboard found. PS/2 active.\n");
         return false;
     }
-
-    irq_register(XHCI_MSI_VEC, (irq_handler_t)xhci_irq_handler);
-    pci_cfg_msi(&pci, XHCI_MSI_VEC, lapic_get_id());
-    arm_int();
     return true;
 }
