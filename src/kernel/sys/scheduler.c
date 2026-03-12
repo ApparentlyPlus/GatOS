@@ -61,11 +61,10 @@ void sched_init(void) {
     g_current_thread = thread_create_bootstrap(kernel_proc, "kernel_main");
     if (!g_current_thread) panic("Failed to bootstrap kernel main thread!");
 
-    // Allocate a dedicated kernel stack for kernel_main so it has its own safe space 
-    // when switched back from userspace threads. This also ensures the idle thread can have its own stack.
-    g_current_thread->kernel_stack = kmalloc(KERNEL_STACK_SIZE);
-    if (!g_current_thread->kernel_stack) panic("Failed to allocate kernel stack for kernel_main!");
-    kmemset(g_current_thread->kernel_stack, 0, KERNEL_STACK_SIZE);
+    // Use the boot stack for kernel_main to keep the current execution stack valid.
+    // The boot stack is 32 KiB; we treat the top 16 KiB as the kernel stack.
+    extern char KERNEL_STACK_TOP;
+    g_current_thread->kernel_stack = (void *)((uintptr_t)&KERNEL_STACK_TOP - KERNEL_STACK_SIZE);
 
     g_scheduler_enabled = true;
     LOGF("[SCHED] Scheduler initialized and enabled.\n");
@@ -258,7 +257,19 @@ cpu_context_t* sched_schedule(cpu_context_t* current_context) {
     // Restore FPU state
     __asm__ volatile ("fxrstor %0" :: "m"(g_current_thread->fpu_state));
 
-    return g_current_thread->context;
+    cpu_context_t *next_ctx = g_current_thread->context;
+    if (next_ctx) {
+        uint16_t cs = (uint16_t)next_ctx->iret_cs;
+        uint16_t ss = (uint16_t)next_ctx->iret_ss;
+        bool is_user = (cs & 3) == 3;
+        if (!is_user && (cs != KERNEL_CS || (ss != 0 && ss != KERNEL_DS)))
+            panicf_c(next_ctx, "sched: corrupt kernel ctx for '%s' (cs=0x%x ss=0x%x)",
+                     g_current_thread->name, cs, ss);
+        if (is_user && (cs != USER_CS || ss != USER_DS))
+            panicf_c(next_ctx, "sched: corrupt user ctx for '%s' (cs=0x%x ss=0x%x)",
+                     g_current_thread->name, cs, ss);
+    }
+    return next_ctx;
 }
 
 /*
