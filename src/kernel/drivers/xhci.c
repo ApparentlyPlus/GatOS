@@ -23,19 +23,69 @@
 static xhci_hc_t *g_hcs[16];
 static int g_hc_cnt = 0;
 
+/*
+ * cr32 - Reads a 32-bit value from the xHCI capability registers.
+ */
 static inline uint32_t cr32(xhci_hc_t *hc, uint32_t o) { return *(volatile uint32_t *)(hc->cap + o); }
+
+/*
+ * cr8 - Reads an 8-bit value from the xHCI capability registers.
+ */
 static inline uint8_t cr8(xhci_hc_t *hc, uint32_t o) { return *(volatile uint8_t *)(hc->cap + o); }
+
+/*
+ * or32 - Reads a 32-bit value from the xHCI operational registers.
+ */
 static inline uint32_t or32(xhci_hc_t *hc, uint32_t o) { return *(volatile uint32_t *)(hc->op + o); }
+
+/*
+ * ow32 - Writes a 32-bit value to the xHCI operational registers.
+ */
 static inline void ow32(xhci_hc_t *hc, uint32_t o, uint32_t v) { *(volatile uint32_t *)(hc->op + o) = v; }
+
+/*
+ * ow64 - Writes a 64-bit value to the xHCI operational registers.
+ */
 static inline void ow64(xhci_hc_t *hc, uint32_t o, uint64_t v) { ow32(hc, o, (uint32_t)v); ow32(hc, o + 4, (uint32_t)(v >> 32)); }
+
+/*
+ * rr32 - Reads a 32-bit value from the xHCI runtime registers.
+ */
 static inline uint32_t rr32(xhci_hc_t *hc, uint32_t o) { return *(volatile uint32_t *)(hc->rt + o); }
+
+/*
+ * rw32 - Writes a 32-bit value to the xHCI runtime registers.
+ */
 static inline void rw32(xhci_hc_t *hc, uint32_t o, uint32_t v) { *(volatile uint32_t *)(hc->rt + o) = v; }
+
+/*
+ * rw64 - Writes a 64-bit value to the xHCI runtime registers.
+ */
 static inline void rw64(xhci_hc_t *hc, uint32_t o, uint64_t v) { rw32(hc, o, (uint32_t)v); rw32(hc, o + 4, (uint32_t)(v >> 32)); }
+
+/*
+ * ir32 - Reads a 32-bit value from the xHCI interrupter registers.
+ */
 static inline uint32_t ir32(xhci_hc_t *hc, uint32_t r) { return rr32(hc, XHCI_IR0 + r); }
+
+/*
+ * iw32 - Writes a 32-bit value to the xHCI interrupter registers.
+ */
 static inline void iw32(xhci_hc_t *hc, uint32_t r, uint32_t v) { rw32(hc, XHCI_IR0 + r, v); }
+
+/*
+ * iw64 - Writes a 64-bit value to the xHCI interrupter registers.
+ */
 static inline void iw64(xhci_hc_t *hc, uint32_t r, uint64_t v) { rw64(hc, XHCI_IR0 + r, v); }
+
+/*
+ * dbw - Writes a 32-bit value to the xHCI doorbell registers.
+ */
 static inline void dbw(xhci_hc_t *hc, uint32_t s, uint32_t v) { *(volatile uint32_t *)(hc->db + s) = v; }
 
+/*
+ * assert_dma_not_in_kernel - Ensures that allocated DMA memory does not overlap with the kernel image.
+ */
 static void assert_dma_not_in_kernel(uint64_t phys, size_t sz, const char *name) {
     uint64_t kstart = get_kstart(false);
     uint64_t kend = get_kend(false);
@@ -46,6 +96,9 @@ static void assert_dma_not_in_kernel(uint64_t phys, size_t sz, const char *name)
     }
 }
 
+/*
+ * dma_alloc - Allocates contiguous physical memory for DMA and returns its virtual address.
+ */
 static void *dma_alloc(xhci_hc_t *hc, size_t sz, uint64_t *phys) {
     sz = align_up(sz, PAGE_SIZE);
     if (pmm_alloc(sz, phys) != PMM_OK)
@@ -58,6 +111,9 @@ static void *dma_alloc(xhci_hc_t *hc, size_t sz, uint64_t *phys) {
     return v;
 }
 
+/*
+ * ring_init - Initializes a TRB ring with a specified number of TRBs.
+ */
 static void ring_init(xhci_hc_t *hc, ring_t *r, uint32_t cnt) {
     r->trbs = dma_alloc(hc, cnt * sizeof(trb_t), &r->phys);
     r->enq = r->deq = 0;
@@ -69,6 +125,9 @@ static void ring_init(xhci_hc_t *hc, ring_t *r, uint32_t cnt) {
     link->ctrl = TRB_TYPE(TRB_LINK) | TRB_TC | r->cyc;
 }
 
+/*
+ * enq - Enqueues a TRB into the specified ring and advances the enqueue pointer.
+ */
 static void enq(ring_t *r, uint32_t cnt, uint32_t d0, uint32_t d1, uint32_t d2, uint32_t c) {
     trb_t *t = &r->trbs[r->enq];
     t->dw0 = d0;
@@ -84,6 +143,9 @@ static void enq(ring_t *r, uint32_t cnt, uint32_t d0, uint32_t d1, uint32_t d2, 
     }
 }
 
+/*
+ * evt_init - Initializes the event ring and event ring segment table for the host controller.
+ */
 static void evt_init(xhci_hc_t *hc) {
     hc->evt.trbs = dma_alloc(hc, ERING_SZ * sizeof(trb_t), &hc->evt.phys);
     hc->evt.deq = 0;
@@ -98,6 +160,9 @@ static void evt_init(xhci_hc_t *hc) {
     iw32(hc, IR_IMAN, ir32(hc, IR_IMAN) | IMAN_IE | IMAN_IP);
 }
 
+/*
+ * deq - Dequeues the next event TRB from the event ring if available.
+ */
 static trb_t *deq(xhci_hc_t *hc) {
     trb_t *t = &hc->evt.trbs[hc->evt.deq];
     __asm__ volatile("" ::: "memory");
@@ -110,6 +175,9 @@ static trb_t *deq(xhci_hc_t *hc) {
     return t;
 }
 
+/*
+ * wait_ev - Waits for a specific type of event TRB on the event ring until a timeout occurs.
+ */
 static trb_t wait_ev(xhci_hc_t *hc, uint8_t type, uint32_t tmo) {
     trb_t res = {0};
     uint64_t dl = get_uptime_ms() + tmo;
@@ -132,6 +200,9 @@ static trb_t wait_ev(xhci_hc_t *hc, uint8_t type, uint32_t tmo) {
     return res;
 }
 
+/*
+ * bios_handoff - Performs BIOS to OS handoff for the xHCI controller if supported.
+ */
 static void bios_handoff(xhci_hc_t *hc, pci_dev_t *pci) {
     // Intel Port Routing (Panther Point / Lynx Point quirks)
     // Routes switchable USB 2.0/3.0 ports from EHCI to xHCI.
@@ -161,6 +232,9 @@ static void bios_handoff(xhci_hc_t *hc, pci_dev_t *pci) {
     }
 }
 
+/*
+ * reset_hc - Halts and performs a host controller reset.
+ */
 static bool reset_hc(xhci_hc_t *hc) {
     ow32(hc, XHCI_CMD, or32(hc, XHCI_CMD) & ~CMD_RS);
     for (int i = 0; i < 100; i++) {
@@ -175,6 +249,9 @@ static bool reset_hc(xhci_hc_t *hc) {
     return false;
 }
 
+/*
+ * start_hc - Starts the host controller by setting the run/stop bit and enabling interrupts.
+ */
 static void start_hc(xhci_hc_t *hc) {
     ow32(hc, XHCI_CMD, or32(hc, XHCI_CMD) | CMD_RS | CMD_INTE | CMD_HSEE);
     for (int i = 0; i < 100; i++) {
@@ -187,6 +264,9 @@ static void start_hc(xhci_hc_t *hc) {
     }
 }
 
+/*
+ * cmd_slot - Issues an Enable Slot command to allocate a device slot.
+ */
 static uint8_t cmd_slot(xhci_hc_t *hc) {
     enq(&hc->cmd, RING_SZ, 0, 0, 0, TRB_TYPE(TRB_EN_SLOT));
     dbw(hc, 0, 0);
@@ -197,6 +277,9 @@ static uint8_t cmd_slot(xhci_hc_t *hc) {
     return cc == CC_SUCCESS ? id : 0;
 }
 
+/*
+ * cmd_addr - Issues an Address Device command to assign an address to a slot.
+ */
 static bool cmd_addr(xhci_hc_t *hc, uint64_t ctx, uint8_t slot, bool bsr) {
     enq(&hc->cmd, RING_SZ, (uint32_t)ctx, (uint32_t)(ctx >> 32), 0, TRB_TYPE(TRB_ADDR_DEV) | TRB_SLOT(slot) | (bsr ? TRB_BSR : 0));
     dbw(hc, 0, 0);
@@ -206,6 +289,9 @@ static bool cmd_addr(xhci_hc_t *hc, uint64_t ctx, uint8_t slot, bool bsr) {
     return cc == CC_SUCCESS;
 }
 
+/*
+ * cmd_cfg - Issues a Configure Endpoint command to initialize device endpoints.
+ */
 static bool cmd_cfg(xhci_hc_t *hc, uint64_t ctx, uint8_t slot) {
     enq(&hc->cmd, RING_SZ, (uint32_t)ctx, (uint32_t)(ctx >> 32), 0, TRB_TYPE(TRB_CFG_EP) | TRB_SLOT(slot));
     dbw(hc, 0, 0);
@@ -214,6 +300,9 @@ static bool cmd_cfg(xhci_hc_t *hc, uint64_t ctx, uint8_t slot) {
     return cc == CC_SUCCESS;
 }
 
+/*
+ * cmd_eval - Issues an Evaluate Context command to update slot/endpoint parameters.
+ */
 static bool cmd_eval(xhci_hc_t *hc, uint64_t ctx, uint8_t slot) {
     enq(&hc->cmd, RING_SZ, (uint32_t)ctx, (uint32_t)(ctx >> 32), 0, TRB_TYPE(TRB_EVAL_CTX) | TRB_SLOT(slot));
     dbw(hc, 0, 0);
@@ -222,10 +311,24 @@ static bool cmd_eval(xhci_hc_t *hc, uint64_t ctx, uint8_t slot) {
     return cc == CC_SUCCESS;
 }
 
+/*
+ * get_ctrl - Gets the control context from the input context buffer.
+ */
 static inline ctrl_ctx_t *get_ctrl(void *c) { return c; }
+
+/*
+ * get_slot - Gets the slot context from the input context buffer based on context size.
+ */
 static inline slot_ctx_t *get_slot(xhci_hc_t *hc, void *c) { return (void *)((uint8_t *)c + hc->ctx_sz); }
+
+/*
+ * get_ep - Gets an endpoint context from the input context buffer.
+ */
 static inline ep_ctx_t *get_ep(xhci_hc_t *hc, void *c, uint8_t i) { return (void *)((uint8_t *)c + hc->ctx_sz * (2 + i)); }
 
+/*
+ * ctrl_xfer - Performs a standard control transfer on the default control endpoint.
+ */
 static int ctrl_xfer(xhci_hc_t *hc, xhci_slot_t *s, usb_setup_t *req, uint64_t buf) {
     bool in = req->bmRequestType & USB_DIR_IN;
     uint32_t d0, d1;
@@ -245,26 +348,41 @@ static int ctrl_xfer(xhci_hc_t *hc, xhci_slot_t *s, usb_setup_t *req, uint64_t b
     return req->wLength - (ev.dw2 & 0xFFFFFF);
 }
 
+/*
+ * get_desc - Retrieves a USB descriptor from a device.
+ */
 static int get_desc(xhci_hc_t *hc, xhci_slot_t *s, uint8_t ty, uint8_t idx, uint16_t len) {
     usb_setup_t r = { USB_DIR_IN | USB_TYPE_STANDARD | USB_RECIP_DEVICE, USB_REQ_GET_DESCRIPTOR, (uint16_t)((ty << 8) | idx), 0, len };
     return ctrl_xfer(hc, s, &r, hc->scratch_phys);
 }
 
+/*
+ * set_cfg - Sets the active configuration for a USB device.
+ */
 static int set_cfg(xhci_hc_t *hc, xhci_slot_t *s, uint8_t v) {
     usb_setup_t r = { USB_DIR_OUT | USB_TYPE_STANDARD | USB_RECIP_DEVICE, USB_REQ_SET_CONFIGURATION, v, 0, 0 };
     return ctrl_xfer(hc, s, &r, 0);
 }
 
+/*
+ * set_proto - Sets the HID protocol (e.g., Boot Protocol) for a specific interface.
+ */
 static int set_proto(xhci_hc_t *hc, xhci_slot_t *s, uint8_t i, uint8_t p) {
     usb_setup_t r = { USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_INTERFACE, USB_HID_REQ_SET_PROTOCOL, p, i, 0 };
     return ctrl_xfer(hc, s, &r, 0);
 }
 
+/*
+ * set_idle - Sets the idle rate for an interrupt IN endpoint on a HID device.
+ */
 static int set_idle(xhci_hc_t *hc, xhci_slot_t *s, uint8_t i) {
     usb_setup_t r = { USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_INTERFACE, USB_HID_REQ_SET_IDLE, 0, i, 0 };
     return ctrl_xfer(hc, s, &r, 0);
 }
 
+/*
+ * parse_cfg - Parses the configuration descriptor to find the keyboard interface and endpoint.
+ */
 static bool parse_cfg(xhci_hc_t *hc, xhci_slot_t *s, uint8_t *buf, uint16_t len) {
     uint16_t p = 0;
     uint8_t iface = 0xFF;
@@ -296,10 +414,16 @@ static bool parse_cfg(xhci_hc_t *hc, xhci_slot_t *s, uint8_t *buf, uint16_t len)
     return false;
 }
 
+/*
+ * get_mps - Returns the max packet size for the default control endpoint based on speed.
+ */
 static uint16_t get_mps(uint8_t spd) {
     return (spd == SPD_SS || spd == SPD_SSP) ? 512 : (spd == SPD_LS ? 8 : 64);
 }
 
+/*
+ * reset_port - Triggers a port reset and waits for it to complete.
+ */
 static bool reset_port(xhci_hc_t *hc, uint8_t p) {
     uint32_t sc = or32(hc, XHCI_PORTSC(p));
     uint32_t safe_sc = sc & 0x0E00C200;
@@ -320,6 +444,9 @@ static bool reset_port(xhci_hc_t *hc, uint8_t p) {
 static void enum_hub(xhci_hc_t *hc, xhci_slot_t *hs);
 static bool enum_dev(xhci_hc_t *hc, uint8_t p, uint8_t spd, uint32_t route_string, uint8_t root_hub_port, uint8_t tt_slot, uint8_t tt_port);
 
+/*
+ * enum_hub - Enumerates downstream ports of an identified USB hub.
+ */
 static void enum_hub(xhci_hc_t *hc, xhci_slot_t *hs) {
     usb_setup_t req_hub = { USB_DIR_IN | USB_TYPE_CLASS | USB_RECIP_DEVICE, USB_REQ_GET_DESCRIPTOR, (uint16_t)((0x29 << 8) | 0), 0, 8 };
     if (hs->spd == SPD_SS || hs->spd == SPD_SSP) {
@@ -374,6 +501,9 @@ static void enum_hub(xhci_hc_t *hc, xhci_slot_t *hs) {
     }
 }
 
+/*
+ * enum_dev - Enumerates a generic USB device or hub, configuring its slot and endpoints.
+ */
 static bool enum_dev(xhci_hc_t *hc, uint8_t p, uint8_t spd, uint32_t route_string, uint8_t root_hub_port, uint8_t tt_slot, uint8_t tt_port) {
     uint8_t slot_id = cmd_slot(hc);
     if (!slot_id) return false;
@@ -519,6 +649,9 @@ static const uint8_t mmap[8] = { MOD_LCTRL, MOD_LSHIFT, MOD_LALT, MOD_LGUI, MOD_
 
 static uint8_t usb_locks = 0;
 
+/*
+ * update_leds - Sends a SET_REPORT request to update the keyboard LED indicators.
+ */
 static void update_leds(xhci_hc_t *hc, xhci_slot_t *s, uint8_t leds) {
     if (!s->led_buf) return;
     s->led_buf[0] = leds;
@@ -538,6 +671,9 @@ static void update_leds(xhci_hc_t *hc, xhci_slot_t *s, uint8_t leds) {
     dbw(hc, s->id, 1);
 }
 
+/*
+ * handle_hid - Processes HID keyboard interrupt data, tracking key states and managing modifiers.
+ */
 static void handle_hid(xhci_hc_t *hc, xhci_slot_t *s, const uint8_t *r) {
     uint8_t nmod = 0, c = r[0] ^ s->prev[0];
     for (int i = 0; i < 8; i++) if (r[0] & (1 << i)) nmod |= mmap[i];
@@ -585,11 +721,17 @@ static void handle_hid(xhci_hc_t *hc, xhci_slot_t *s, const uint8_t *r) {
     kmemcpy(s->prev, r, 8);
 }
 
+/*
+ * arm_int - Re-arms the interrupt IN endpoint to receive further HID reports.
+ */
 static void arm_int(xhci_hc_t *hc, xhci_slot_t *s) {
     enq(&s->intr, RING_SZ, (uint32_t)s->hid_phys, (uint32_t)(s->hid_phys >> 32), 8, TRB_TYPE(TRB_NORMAL) | TRB_IOC | TRB_INTR(0));
     dbw(hc, s->id, s->ep_idx);
 }
 
+/*
+ * proc_evts - Processes pending events from the host controller's event ring.
+ */
 static void proc_evts(xhci_hc_t *hc) {
     for (;;) {
         bool was = spinlock_acquire(&hc->lock);
@@ -615,6 +757,9 @@ static void proc_evts(xhci_hc_t *hc) {
     }
 }
 
+/*
+ * xhci_irq_handler - Handles the MSI/IRQ for the xHCI controller, triggering event processing.
+ */
 cpu_context_t *xhci_irq_handler(cpu_context_t *ctx) {
     for (int i = 0; i < g_hc_cnt; i++) {
         proc_evts(g_hcs[i]);
@@ -622,6 +767,9 @@ cpu_context_t *xhci_irq_handler(cpu_context_t *ctx) {
     return ctx;
 }
 
+/*
+ * xhci_init - Discovers and initializes xHCI controllers, starting enumeration for connected devices.
+ */
 bool xhci_init(void) {
     pci_dev_t pcis[16];
     int cnt = pci_get_xhci_controllers(pcis, 16);
@@ -702,7 +850,6 @@ bool xhci_init(void) {
     }
 
     if (!any_kbd) {
-        kprintf("[KBD] No USB xHCI keyboard found. PS/2 active.\n");
         return false;
     }
     return true;
