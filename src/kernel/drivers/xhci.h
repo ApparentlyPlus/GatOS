@@ -159,6 +159,9 @@ typedef struct {
     ring_t ep0, intr;
     uint64_t hid_phys;
     uint8_t *hid_buf;
+    uint64_t led_phys;
+    uint8_t *led_buf;
+    uint8_t cur_leds;
     uint8_t prev[8];
     uint8_t route_string; // For nested hubs
     uint8_t root_hub_port;

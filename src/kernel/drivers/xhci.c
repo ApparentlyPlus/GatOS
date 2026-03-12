@@ -132,7 +132,16 @@ static trb_t wait_ev(xhci_hc_t *hc, uint8_t type, uint32_t tmo) {
     return res;
 }
 
-static void bios_handoff(xhci_hc_t *hc) {
+static void bios_handoff(xhci_hc_t *hc, pci_dev_t *pci) {
+    // Intel Port Routing (Panther Point / Lynx Point quirks)
+    // Routes switchable USB 2.0/3.0 ports from EHCI to xHCI.
+    if (pci->vendor_id == 0x8086) {
+        uint32_t usb3_mask = pci_read32(pci, 0xDC);
+        pci_write32(pci, 0xD8, usb3_mask);
+        uint32_t usb2_mask = pci_read32(pci, 0xD4);
+        pci_write32(pci, 0xD0, usb2_mask);
+    }
+
     uint32_t xecp = HCC1_XECP(cr32(hc, XHCI_HCCPARAMS1));
     if (!xecp) return;
     uint8_t *cap = hc->cap + xecp * 4;
@@ -330,7 +339,7 @@ static void enum_hub(xhci_hc_t *hc, xhci_slot_t *hs) {
         usb_setup_t pwr = { USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_OTHER, 3 /* SET_FEATURE */, 8 /* PORT_POWER */, i, 0 };
         ctrl_xfer(hc, hs, &pwr, 0);
     }
-    sleep_ms(100);
+    sleep_ms(50);
 
     for (uint8_t i = 1; i <= num_ports; i++) {
         // Reset port
@@ -413,7 +422,9 @@ static bool enum_dev(xhci_hc_t *hc, uint8_t p, uint8_t spd, uint32_t route_strin
     if (r18 < 18) goto fail;
 
     usb_device_desc_t *dd = (void *)hc->scratch;
-    LOGF("[XHCI] slot %u: dev vid=0x%04x pid=0x%04x cls=%u\n", s->id, dd->idVendor, dd->idProduct, dd->bDeviceClass);
+    uint16_t vid = dd->idVendor;
+    uint16_t pid = dd->idProduct;
+    LOGF("[XHCI] slot %u: dev vid=0x%04x pid=0x%04x cls=%u\n", s->id, vid, pid, dd->bDeviceClass);
 
     uint16_t real_mps = (spd == SPD_SS || spd == SPD_SSP) ? (1 << dd->bMaxPacketSize0) : dd->bMaxPacketSize0;
     if (real_mps != mps) {
@@ -484,9 +495,10 @@ static bool enum_dev(xhci_hc_t *hc, uint8_t p, uint8_t spd, uint32_t route_strin
     set_idle(hc, s, s->iface);
 
     s->hid_buf = dma_alloc(hc, PAGE_SIZE, &s->hid_phys);
+    s->led_buf = dma_alloc(hc, PAGE_SIZE, &s->led_phys);
     pmm_free(in_phys, PAGE_SIZE);
     s->active = true;
-    kprintf("[XHCI] USB keyboard found and configured on slot %u!\n", s->id);
+    kprintf("[XHCI] USB keyboard found (VID=0x%04x PID=0x%04x) and configured!\n", vid, pid);
     return true;
 
 fail:
@@ -494,6 +506,8 @@ fail:
     if (s->ep0.phys) pmm_free(s->ep0.phys, PAGE_SIZE);
     if (s->intr.phys) pmm_free(s->intr.phys, PAGE_SIZE);
     if (s->out_phys) { pmm_free(s->out_phys, PAGE_SIZE); hc->dcbaa[s->id] = 0; }
+    if (s->hid_phys) pmm_free(s->hid_phys, PAGE_SIZE);
+    if (s->led_phys) pmm_free(s->led_phys, PAGE_SIZE);
     return false;
 }
 
@@ -503,7 +517,28 @@ static const keycode_t kmap[256] = {
 
 static const uint8_t mmap[8] = { MOD_LCTRL, MOD_LSHIFT, MOD_LALT, MOD_LGUI, MOD_RCTRL, MOD_RSHIFT, MOD_RALT, MOD_RGUI };
 
-static void handle_hid(xhci_slot_t *s, const uint8_t *r) {
+static uint8_t usb_locks = 0;
+
+static void update_leds(xhci_hc_t *hc, xhci_slot_t *s, uint8_t leds) {
+    if (!s->led_buf) return;
+    s->led_buf[0] = leds;
+    
+    // Fire and forget SET_REPORT
+    usb_setup_t req = { USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_INTERFACE, USB_HID_REQ_SET_REPORT, (0x02 << 8) | 0, s->iface, 1 };
+    
+    uint32_t d0, d1;
+    kmemcpy(&d0, &req, 4);
+    kmemcpy(&d1, (uint8_t *)&req + 4, 4);
+    uint32_t trt = 2 << 16; // OUT data stage
+    
+    enq(&s->ep0, RING_SZ, d0, d1, 8, TRB_TYPE(TRB_SETUP) | TRB_IDT | trt);
+    enq(&s->ep0, RING_SZ, (uint32_t)s->led_phys, (uint32_t)(s->led_phys >> 32), 1, TRB_TYPE(TRB_DATA)); // no DIR_IN
+    enq(&s->ep0, RING_SZ, 0, 0, 0, TRB_TYPE(TRB_STATUS) | TRB_IOC | TRB_DIR_IN); // Status is IN
+    
+    dbw(hc, s->id, 1);
+}
+
+static void handle_hid(xhci_hc_t *hc, xhci_slot_t *s, const uint8_t *r) {
     uint8_t nmod = 0, c = r[0] ^ s->prev[0];
     for (int i = 0; i < 8; i++) if (r[0] & (1 << i)) nmod |= mmap[i];
 
@@ -511,7 +546,7 @@ static void handle_hid(xhci_slot_t *s, const uint8_t *r) {
         for (int i = 0; i < 8; i++) {
             if (!(c & (1 << i))) continue;
             keycode_t k = (i == 0) ? KEY_LEFT_CTRL : (i == 1) ? KEY_LEFT_SHIFT : (i == 2) ? KEY_LEFT_ALT : (i == 3) ? KEY_LEFT_GUI : (i == 4) ? KEY_RIGHT_CTRL : (i == 5) ? KEY_RIGHT_SHIFT : (i == 6) ? KEY_RIGHT_ALT : (i == 7) ? KEY_RIGHT_GUI : KEY_UNKNOWN;
-            if (k != KEY_UNKNOWN) input_handle_key((key_event_t){ k, (r[0] & (1 << i)) != 0, nmod, 0 });
+            if (k != KEY_UNKNOWN) input_handle_key((key_event_t){ k, (r[0] & (1 << i)) != 0, nmod, usb_locks });
         }
     }
 
@@ -520,13 +555,31 @@ static void handle_hid(xhci_slot_t *s, const uint8_t *r) {
             bool found = false;
             for (int j = 2; j < 8; j++) if (r[j] == s->prev[i]) found = true;
             if (!found && s->prev[i] < 116 && kmap[s->prev[i]] != KEY_UNKNOWN)
-                input_handle_key((key_event_t){ kmap[s->prev[i]], false, nmod, 0 });
+                input_handle_key((key_event_t){ kmap[s->prev[i]], false, nmod, usb_locks });
         }
         if (r[i]) {
             bool found = false;
             for (int j = 2; j < 8; j++) if (s->prev[j] == r[i]) found = true;
-            if (!found && r[i] < 116 && kmap[r[i]] != KEY_UNKNOWN)
-                input_handle_key((key_event_t){ kmap[r[i]], true, nmod, 0 });
+            if (!found && r[i] < 116 && kmap[r[i]] != KEY_UNKNOWN) {
+                keycode_t k = kmap[r[i]];
+                bool locks_changed = false;
+                if (k == KEY_CAPSLOCK) { usb_locks ^= LOCK_CAPS; locks_changed = true; }
+                else if (k == KEY_NUMLOCK) { usb_locks ^= LOCK_NUM; locks_changed = true; }
+                else if (k == KEY_SCROLLLOCK) { usb_locks ^= LOCK_SCROLL; locks_changed = true; }
+                
+                input_handle_key((key_event_t){ k, true, nmod, usb_locks });
+                
+                if (locks_changed) {
+                    uint8_t hid_leds = 0;
+                    if (usb_locks & LOCK_NUM) hid_leds |= 1;
+                    if (usb_locks & LOCK_CAPS) hid_leds |= 2;
+                    if (usb_locks & LOCK_SCROLL) hid_leds |= 4;
+                    if (s->cur_leds != hid_leds) {
+                        s->cur_leds = hid_leds;
+                        update_leds(hc, s, hid_leds);
+                    }
+                }
+            }
         }
     }
     kmemcpy(s->prev, r, 8);
@@ -554,7 +607,7 @@ static void proc_evts(xhci_hc_t *hc) {
             if (slot_id < 256) {
                 xhci_slot_t *s = &hc->dev_slots[slot_id];
                 if (s->active && GET_EP(ev.ctrl) == s->ep_idx) {
-                    if (cc == CC_SUCCESS || cc == CC_SHORT_PKT) handle_hid(s, s->hid_buf);
+                    if (cc == CC_SUCCESS || cc == CC_SHORT_PKT) handle_hid(hc, s, s->hid_buf);
                     arm_int(hc, s);
                 }
             }
@@ -598,7 +651,7 @@ bool xhci_init(void) {
         hc->db = (uint32_t *)(hc->cap + (cr32(hc, XHCI_DBOFF) & ~3));
         hc->msi_vec = XHCI_MSI_VEC_BASE + i;
 
-        bios_handoff(hc);
+        bios_handoff(hc, pci);
         if (!reset_hc(hc)) continue;
         spinlock_init(&hc->lock, "xhci_evts");
 
@@ -620,31 +673,23 @@ bool xhci_init(void) {
         start_hc(hc);
         hc->scratch = dma_alloc(hc, PAGE_SIZE, &hc->scratch_phys);
 
-        kprintf("[XHCI] started HC %d: %u ports %u slots ctx=%u ac64=%d\n", i, hc->ports, hc->slots, hc->ctx_sz, hc->ac64);
+        for (uint8_t p = 0; p < hc->ports; p++) {
+            uint32_t sc = or32(hc, XHCI_PORTSC(p));
+            if (!(sc & PORT_CCS)) continue;
 
-        bool port_enumed[256] = {0};
-        for (int retry = 0; retry < 3; retry++) {
-            for (uint8_t p = 0; p < hc->ports; p++) {
-                if (port_enumed[p]) continue;
-                uint32_t sc = or32(hc, XHCI_PORTSC(p));
-                if (!(sc & PORT_CCS)) continue;
+            if (!reset_port(hc, p)) continue;
+            sleep_ms(50);
 
-                if (!reset_port(hc, p)) continue;
-                sleep_ms(50);
+            sc = or32(hc, XHCI_PORTSC(p));
+            if (!(sc & PORT_CCS)) continue;
+            if (!(sc & (1 << 1))) continue; // PED=0 skip
 
-                sc = or32(hc, XHCI_PORTSC(p));
-                if (!(sc & PORT_CCS)) continue;
-                if (!(sc & (1 << 1))) continue; // PED=0 skip
+            uint8_t spd = (sc >> PORT_SPD_SHIFT) & PORT_SPD_MASK;
+            if (!spd) spd = SPD_FS;
 
-                uint8_t spd = (sc >> PORT_SPD_SHIFT) & PORT_SPD_MASK;
-                if (!spd) spd = SPD_FS;
-
-                port_enumed[p] = true;
-                if (enum_dev(hc, p, spd, 0, p + 1, 0, 0)) {
-                    any_kbd = true;
-                }
+            if (enum_dev(hc, p, spd, 0, p + 1, 0, 0)) {
+                any_kbd = true;
             }
-            sleep_ms(100);
         }
 
         irq_register(hc->msi_vec, (irq_handler_t)xhci_irq_handler);
