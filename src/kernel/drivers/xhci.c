@@ -3,6 +3,7 @@
  */
 
 #include <kernel/drivers/xhci.h>
+
 #include <kernel/drivers/pci.h>
 #include <kernel/drivers/usb.h>
 #include <kernel/drivers/input.h>
@@ -15,12 +16,14 @@
 #include <kernel/sys/spinlock.h>
 #include <kernel/sys/timers.h>
 #include <kernel/debug.h>
+#include <klibc/stdio.h>
 #include <klibc/string.h>
 #include <kernel/sys/panic.h>
 
 static uint8_t *g_cap, *g_op, *g_rt;
 static uint32_t *g_db;
 static uint32_t g_slots, g_ports, g_ctx_sz;
+static bool g_xhci_ac64;
 
 static uint64_t *g_dcbaa;
 static uint64_t g_dcbaa_phys;
@@ -29,6 +32,8 @@ static ring_t g_cmd;
 static ring_t g_evt;
 static erst_t *g_erst;
 static uint64_t g_erst_phys;
+static uint8_t *g_scratch;
+static uint64_t g_scratch_phys;
 
 static xhci_slot_t g_kbd;
 static spinlock_t g_lock;
@@ -46,11 +51,26 @@ static inline void iw32(uint32_t r, uint32_t v) { rw32(XHCI_IR0 + r, v); }
 static inline void iw64(uint32_t r, uint64_t v) { rw64(XHCI_IR0 + r, v); }
 static inline void dbw(uint32_t s, uint32_t v) { *(volatile uint32_t *)(g_db + s) = v; }
 
+
+static void assert_dma_not_in_kernel(uint64_t phys, size_t sz, const char *name) {
+    uint64_t kstart = get_kstart(false);
+    uint64_t kend = get_kend(false);
+    uint64_t end = phys + sz;
+    if (!(end <= kstart || phys >= kend)) {
+        panicf("[XHCI] DMA %s overlaps kernel image: [0x%lx..0x%lx) vs [0x%lx..0x%lx)\n",
+               name, phys, end, kstart, kend);
+    }
+}
+
 static void *dma_alloc(size_t sz, uint64_t *phys) {
     sz = align_up(sz, PAGE_SIZE);
-    if (pmm_alloc(sz, phys) != PMM_OK) panicf("[XHCI] OOM %zu\n", sz);
+    if (pmm_alloc(sz, phys) != PMM_OK)
+        panicf("[XHCI] DMA OOM (%zu bytes)\n", sz);
+    if (!g_xhci_ac64 && *phys >= 0x100000000ULL)
+        panicf("[XHCI] DMA alloc returned >4GiB (0x%lx) on 32-bit controller\n", *phys);
     void *v = (void *)PHYSMAP_P2V(*phys);
     kmemset(v, 0, sz);
+    assert_dma_not_in_kernel(*phys, sz, "alloc");
     return v;
 }
 
@@ -178,13 +198,17 @@ static uint8_t cmd_slot(void) {
     enq(&g_cmd, RING_SZ, 0, 0, 0, TRB_TYPE(TRB_EN_SLOT));
     dbw(0, 0);
     trb_t ev = wait_ev(TRB_EV_CMD, 500);
-    return GET_CC(ev.dw2) == CC_SUCCESS ? GET_SLOT(ev.ctrl) : 0;
+    uint8_t cc = GET_CC(ev.dw2);
+    uint8_t id = GET_SLOT(ev.ctrl);
+    return cc == CC_SUCCESS ? id : 0;
 }
 
 static bool cmd_addr(uint64_t ctx, uint8_t slot, bool bsr) {
     enq(&g_cmd, RING_SZ, (uint32_t)ctx, (uint32_t)(ctx >> 32), 0, TRB_TYPE(TRB_ADDR_DEV) | TRB_SLOT(slot) | (bsr ? TRB_BSR : 0));
     dbw(0, 0);
-    return GET_CC(wait_ev(TRB_EV_CMD, 500).dw2) == CC_SUCCESS;
+    trb_t ev = wait_ev(TRB_EV_CMD, 500);
+    uint8_t cc = GET_CC(ev.dw2);
+    return cc == CC_SUCCESS;
 }
 
 static bool cmd_cfg(uint64_t ctx, uint8_t slot) {
@@ -215,12 +239,11 @@ static int ctrl_xfer(xhci_slot_t *s, usb_setup_t *req, uint64_t buf) {
     dbw(s->id, 1);
     trb_t ev = wait_ev(TRB_EV_XFER, 500);
     uint8_t cc = GET_CC(ev.dw2);
-    if (cc != CC_SUCCESS && cc != CC_SHORT_PKT) return -1;
+    if (cc != CC_SUCCESS && cc != CC_SHORT_PKT) {
+        return -1;
+    }
     return req->wLength - (ev.dw2 & 0xFFFFFF);
 }
-
-static uint8_t *g_scratch;
-static uint64_t g_scratch_phys;
 
 static int get_desc(xhci_slot_t *s, uint8_t ty, uint8_t idx, uint16_t len) {
     usb_setup_t r = { USB_DIR_IN | USB_TYPE_STANDARD | USB_RECIP_DEVICE, USB_REQ_GET_DESCRIPTOR, (uint16_t)((ty << 8) | idx), 0, len };
@@ -252,7 +275,8 @@ static bool parse_cfg(xhci_slot_t *s, uint8_t *buf, uint16_t len) {
             s->cfg_val = ((usb_config_desc_t *)(buf + p))->bConfigurationValue;
         } else if (buf[p + 1] == USB_DESC_INTERFACE) {
             usb_interface_desc_t *id = (void *)(buf + p);
-            is_kbd = id->bInterfaceClass == USB_CLASS_HID && id->bInterfaceSubClass == USB_HID_SUBCLASS_BOOT && id->bInterfaceProtocol == USB_HID_PROTOCOL_KEYBOARD;
+            /* Razer keyboards might use SubClass=0 (Non-boot) but still Protocol=1 (Keyboard) */
+            is_kbd = id->bInterfaceClass == USB_CLASS_HID && id->bInterfaceProtocol == USB_HID_PROTOCOL_KEYBOARD;
             iface = id->bInterfaceNumber;
         } else if (buf[p + 1] == USB_DESC_ENDPOINT) {
             usb_endpoint_desc_t *ed = (void *)(buf + p);
@@ -275,12 +299,15 @@ static uint16_t get_mps(uint8_t spd) {
 
 static bool reset_port(uint8_t p) {
     uint32_t sc = or32(XHCI_PORTSC(p));
-    ow32(XHCI_PORTSC(p), (sc & PORT_PRESERVE) | PORT_RW1C);
-    ow32(XHCI_PORTSC(p), (or32(XHCI_PORTSC(p)) & PORT_PRESERVE) | PORT_PR);
+    uint32_t safe_sc = sc & 0x0E00C200;
+    ow32(XHCI_PORTSC(p), safe_sc | PORT_RW1C);
+    ow32(XHCI_PORTSC(p), safe_sc | PORT_PR);
     for (int i = 0; i < 200; i++) {
         sleep_ms(1);
-        if (or32(XHCI_PORTSC(p)) & PORT_PRC) {
-            ow32(XHCI_PORTSC(p), (or32(XHCI_PORTSC(p)) & PORT_PRESERVE) | PORT_PRC);
+        sc = or32(XHCI_PORTSC(p));
+        if (sc & PORT_PRC) {
+            safe_sc = sc & 0x0E00C200;
+            ow32(XHCI_PORTSC(p), safe_sc | PORT_PRC);
             return true;
         }
     }
@@ -292,7 +319,10 @@ static bool enum_dev(uint8_t p, uint8_t spd) {
     kmemset(s, 0, sizeof(*s));
     s->port = p;
     s->spd = spd;
-    if (!(s->id = cmd_slot())) return false;
+    
+    if (!(s->id = cmd_slot())) {
+        return false;
+    }
 
     s->out_phys = 0;
     void *out = dma_alloc(PAGE_SIZE, &s->out_phys);
@@ -313,9 +343,17 @@ static bool enum_dev(uint8_t p, uint8_t spd) {
     e0->deq_hi = (uint32_t)(s->ep0.phys >> 32);
     e0->dw4 = EP_AVG(8);
 
-    if (!cmd_addr(in_phys, s->id, false)) goto fail;
-    if (get_desc(s, USB_DESC_DEVICE, 0, 8) < 8) goto fail;
-    
+    bool is_ss = (spd == SPD_SS || spd == SPD_SSP);
+    if (!cmd_addr(in_phys, s->id, is_ss)) {
+        goto fail;
+    }
+    {
+        int r8 = get_desc(s, USB_DESC_DEVICE, 0, 8);
+        if (r8 < 8) {
+            goto fail;
+        }
+    }
+
     usb_device_desc_t *dd = (void *)g_scratch;
     uint16_t real_mps = (spd == SPD_SS || spd == SPD_SSP) ? (1 << dd->bMaxPacketSize0) : dd->bMaxPacketSize0;
     if (real_mps != mps) {
@@ -328,9 +366,20 @@ static bool enum_dev(uint8_t p, uint8_t spd) {
         cmd_eval(in_phys, s->id);
     }
 
-    int n = get_desc(s, USB_DESC_CONFIG, 0, 2048);
-    if (n <= 0 || !parse_cfg(s, g_scratch, n)) goto fail;
-    if (set_cfg(s, s->cfg_val) < 0) goto fail;
+    int n = get_desc(s, USB_DESC_CONFIG, 0, 9);
+    if (n < 9) {
+        goto fail;
+    }
+    uint16_t total_len = ((usb_config_desc_t *)g_scratch)->wTotalLength;
+    if (total_len > 2048) total_len = 2048;
+
+    n = get_desc(s, USB_DESC_CONFIG, 0, total_len);
+    if (n <= 0 || !parse_cfg(s, g_scratch, n)) {
+        goto fail;
+    }
+    if (set_cfg(s, s->cfg_val) < 0) {
+        goto fail;
+    }
 
     ring_init(&s->intr, RING_SZ);
     s->ep_idx = (s->ep_addr & 0xF) * 2 + 1;
@@ -355,6 +404,7 @@ static bool enum_dev(uint8_t p, uint8_t spd) {
     s->hid_buf = dma_alloc(PAGE_SIZE, &s->hid_phys);
     pmm_free(in_phys, PAGE_SIZE);
     s->active = true;
+    kprintf("[XHCI] USB keyboard found and configured!\n");
     return true;
 
 fail:
@@ -443,7 +493,9 @@ bool xhci_init(void) {
     g_op = g_cap + cr8(XHCI_CAPLEN);
     g_slots = HCS1_SLOTS(cr32(XHCI_HCSPARAMS1));
     g_ports = HCS1_PORTS(cr32(XHCI_HCSPARAMS1));
-    g_ctx_sz = HCC1_CSZ(cr32(XHCI_HCCPARAMS1)) ? 64 : 32;
+    uint32_t hcc1 = cr32(XHCI_HCCPARAMS1);
+    g_ctx_sz = HCC1_CSZ(hcc1) ? 64 : 32;
+    g_xhci_ac64 = (hcc1 & 1) != 0;
     g_rt = g_cap + (cr32(XHCI_RTSOFF) & ~0x1F);
     g_db = (uint32_t *)(g_cap + (cr32(XHCI_DBOFF) & ~3));
 
@@ -466,48 +518,47 @@ bool xhci_init(void) {
     ow64(XHCI_CRCR_LO, (g_cmd.phys & ~0x3F) | g_cmd.cyc);
     evt_init();
 
-    irq_register(XHCI_MSI_VEC, (irq_handler_t)xhci_irq_handler);
-    pci_cfg_msi(&pci, XHCI_MSI_VEC, lapic_get_id());
-
     start_hc();
     g_scratch = dma_alloc(PAGE_SIZE, &g_scratch_phys);
 
-    /* QEMU usb-host and some real hardware can take a few hundred milliseconds 
-       to report a device connection after the controller starts. We poll for up to 500ms. */
+    kprintf("[XHCI] started: %u ports %u slots ctx=%u ac64=%d\n",
+            g_ports, g_slots, g_ctx_sz, g_xhci_ac64);
+
     bool kbd_found = false;
-    for (int retry = 0; retry < 10 && !kbd_found; retry++) {
+    for (int retry = 0; retry < 3 && !kbd_found; retry++) {
         for (uint8_t p = 0; p < g_ports && !kbd_found; p++) {
             uint32_t sc = or32(XHCI_PORTSC(p));
             if (!(sc & PORT_CCS)) continue;
-            
-            LOGF("[XHCI] port %u: device present, resetting...\n", p);
+
             if (!reset_port(p)) {
-                LOGF("[XHCI] port %u: reset failed\n", p);
                 continue;
             }
-            
+
+            sleep_ms(50); /* allow device to settle after reset */
+
             sc = or32(XHCI_PORTSC(p));
-            LOGF("[XHCI] port %u: after reset PORTSC=0x%x\n", p, sc);
             if (!(sc & PORT_CCS)) continue;
-            
+            if (!(sc & (1 << 1))) {
+                /* PED=0: port disabled after reset — SS port whose device fell back
+                   to HS companion port; its companion will show PED=1 separately */
+                continue;
+            }
+
             uint8_t spd = (sc >> PORT_SPD_SHIFT) & PORT_SPD_MASK;
             if (!spd) spd = SPD_FS;
-            
-            LOGF("[XHCI] port %u: enumerating speed=%u\n", p, spd);
-            sleep_ms(50);
-            
+
             kbd_found = enum_dev(p, spd);
-            if (!kbd_found) {
-                LOGF("[XHCI] port %u: enum_dev returned false\n", p);
-            }
         }
-        if (!kbd_found) sleep_ms(50);
+        if (!kbd_found) sleep_ms(100);
     }
 
     if (!kbd_found) {
-        LOGF("[XHCI] No USB xHCI keyboard found\n");
+        kprintf("[XHCI] no keyboard found\n");
         return false;
     }
+
+    irq_register(XHCI_MSI_VEC, (irq_handler_t)xhci_irq_handler);
+    pci_cfg_msi(&pci, XHCI_MSI_VEC, lapic_get_id());
     arm_int();
     return true;
 }
