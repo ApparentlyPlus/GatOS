@@ -134,7 +134,22 @@ void lapic_eoi(void);
 void lapic_write(uint32_t reg, uint32_t value);
 uint32_t lapic_read(uint32_t reg);
 void lapic_send_ipi(uint32_t dest_id, uint8_t vector);
-uint32_t lapic_get_id(void);
+
+/*
+ * g_lapic_base — virtual address of the mapped LAPIC MMIO region.
+ * Set during lapic_init(); valid after apic_init() returns.
+ * Exposed here so lapic_get_id() can be inlined without a .c dependency.
+ */
+extern uint64_t g_lapic_base;
+
+/*
+ * lapic_get_id — reads the Local APIC ID from MMIO (inlined to break
+ * the spinlock → apic.c file-level dependency).
+ */
+static inline uint32_t lapic_get_id(void) {
+    if (g_lapic_base == 0) return 0;
+    return *(volatile uint32_t *)(uintptr_t)(g_lapic_base + LAPIC_ID) >> 24;
+}
 
 // I/O APIC
 void ioapic_init(void);

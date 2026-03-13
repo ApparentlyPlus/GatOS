@@ -105,11 +105,33 @@ extern uint32_t gdt64_code_segment;
 typedef cpu_context_t* (*irq_handler_t)(cpu_context_t*);
 
 void idt_init(void);
-void enable_interrupts(void);
-void disable_interrupts(void);
 
 void irq_register(uint8_t vector, irq_handler_t handler);
 void irq_unregister(uint8_t vector);
 
-bool interrupts_save(void);
-void interrupts_restore(bool enabled);
+/*
+ * Inline CPU interrupt control — no .c dependency required.
+ * These are pure single-instruction operations that must be inlined
+ * everywhere to avoid function-call overhead in hot paths (spinlocks, panic).
+ */
+static inline void enable_interrupts(void) {
+    __asm__ volatile("sti" ::: "memory");
+}
+
+static inline void disable_interrupts(void) {
+    __asm__ volatile("cli" ::: "memory");
+}
+
+/* Save interrupt flag and unconditionally disable; returns previous state. */
+static inline bool interrupts_save(void) {
+    uint64_t rflags;
+    __asm__ volatile("pushfq; popq %0" : "=r"(rflags) :: "memory");
+    bool enabled = (rflags >> 9) & 1;
+    if (enabled) __asm__ volatile("cli" ::: "memory");
+    return enabled;
+}
+
+/* Restore interrupt state saved by interrupts_save(). */
+static inline void interrupts_restore(bool enabled) {
+    if (enabled) __asm__ volatile("sti" ::: "memory");
+}

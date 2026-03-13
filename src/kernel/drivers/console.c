@@ -7,7 +7,6 @@
 #include <kernel/drivers/tty.h>
 #include <arch/x86_64/memory/paging.h>
 #include <kernel/memory/heap.h>
-#include <kernel/sys/panic.h>
 #include <klibc/string.h>
 #include <klibc/stdio.h>
 #include <stdarg.h>
@@ -175,7 +174,7 @@ static void emit_cp(console_t* con, uint32_t cp) {
 /*
  * con_init - Initializes a console instance (allocates backbuffer, resets state)
  */
-void con_init(console_t* con) {
+bool con_init(console_t* con) {
     con->width = g_max_cols; con->height = g_max_rows;
     con->cursor_x = 0; con->cursor_y = 0;
     con->fg_color = CONSOLE_COLOR_WHITE; con->bg_color = CONSOLE_COLOR_BLACK;
@@ -184,8 +183,9 @@ void con_init(console_t* con) {
     con->cursor_enabled = true; con->header_rows = 0;
     spinlock_init(&con->lock, "console_lock");
     con->buffer = (console_char_t*)kmalloc(con->width * con->height * sizeof(console_char_t));
-    if (!con->buffer) panic("Failed to allocate console backbuffer!");
+    if (!con->buffer) return false;
     con_clear(con, CONSOLE_COLOR_BLACK);
+    return true;
 }
 
 /*

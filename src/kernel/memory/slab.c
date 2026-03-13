@@ -10,6 +10,7 @@
 
 #include <arch/x86_64/memory/paging.h>
 #include <kernel/memory/slab.h>
+#include <kernel/bitops.h>
 #include <kernel/memory/pmm.h>
 #include <kernel/sys/spinlock.h>
 #include <kernel/debug.h>
@@ -170,11 +171,6 @@ static inline bool validate_free_obj(slab_free_obj_t* obj) {
 #pragma endregion
 
 #pragma region Internal Functions
-
-/*
- * is_pow2_u64 - check power-of-two (kept simple)
- */
-static inline bool is_pow2_u64(uint64_t x) { return x && ((x & (x - 1)) == 0); }
 
 /*
  * slab_remove_from_list - remove 'slab' from a doubly-linked list

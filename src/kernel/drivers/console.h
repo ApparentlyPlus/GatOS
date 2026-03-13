@@ -65,7 +65,7 @@ typedef struct {
 void console_init(multiboot_parser_t* parser);
 
 // Instance Management
-void con_init(console_t* con);
+bool con_init(console_t* con);
 void con_putc(console_t* con, char character);
 void con_set_color(console_t* con, uint8_t foreground, uint8_t background);
 void con_clear(console_t* con, uint8_t background);

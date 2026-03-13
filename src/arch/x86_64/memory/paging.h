@@ -88,13 +88,6 @@
 
 #define CEIL_DIV(x, y) (((x) + (y) - 1) / (y)) // this is hacky and must be removed eventually
 
-uintptr_t align_up(uintptr_t val, uintptr_t align);
-uintptr_t align_down(uintptr_t val, uintptr_t align);
-
-uint64_t get_kstart(bool virtual);
-uint64_t get_kend(bool virtual);
-uint64_t get_linker_kend(bool virtual);
-uint64_t get_linker_kstart(bool virtual);
 uint64_t get_physmap_start(void);
 uint64_t get_physmap_end(void);
 
@@ -105,6 +98,7 @@ uint64_t* getPML4();
 void flush_tlb(void);
 void PMT_switch(uint64_t pml4);
 void dbg_dump_pmt(void);
+void QEMU_DUMP_PMT(void);
 
 void unmap_identity();
 void cleanup_kernel_page_tables(uintptr_t start, uintptr_t end);
@@ -121,12 +115,6 @@ typedef struct{
     uint64_t total_PDPTs;
     uint64_t total_PML4s;
 } physmapInfo;
-
-extern uintptr_t KPHYS_END;
-extern uintptr_t KPHYS_START;
-
-static uint64_t KSTART = (uint64_t)&KPHYS_START;
-static uint64_t KEND = (uint64_t)&KPHYS_END;
 
 static physmapInfo physmapStruct = {0};
 #endif

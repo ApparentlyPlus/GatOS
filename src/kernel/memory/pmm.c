@@ -10,6 +10,7 @@
 
 #include <arch/x86_64/memory/paging.h>
 #include <kernel/memory/pmm.h>
+#include <kernel/bitops.h>
 #include <kernel/sys/spinlock.h>
 #include <kernel/debug.h>
 #include <klibc/string.h>
@@ -39,14 +40,7 @@ static const uint64_t EMPTY_SENTINEL = UINT64_MAX;
 // Statistics
 static pmm_stats_t g_stats;
 
-/* 
- * is_pow2_u64 - check if x is a power of two
- */
-static inline bool is_pow2_u64(uint64_t x) { 
-    return x && ((x & (x - 1)) == 0); 
-}
-
-/* 
+/*
  * order_to_size - convert order to block size in bytes 
  */
 static inline uint64_t order_to_size(uint32_t order) { 

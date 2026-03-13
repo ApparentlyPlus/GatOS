@@ -52,22 +52,6 @@ void irq_unregister(uint8_t vector)
     g_irq_handlers[vector] = NULL;
 }
 
-/*
- * enable_interrupts - Enable CPU interrupts (STI)
- */
-void enable_interrupts()
-{
-    __asm__ volatile("sti");
-}
-
-/*
- * disable_interrupts - Disable CPU interrupts (CLI)
- */
-void disable_interrupts()
-{
-    __asm__ volatile("cli");
-}
-
 #pragma endregion
 
 #pragma region IDT Setup
@@ -151,34 +135,6 @@ void idt_init(void)
 #pragma endregion
 
 #pragma region Dispatcher
-
-/*
- * interrupts_save - Disables interrupts and returns whether they were enabled
- */
-bool interrupts_save(void)
-{
-    uint64_t rflags;
-    __asm__ volatile("pushfq; popq %0" : "=r"(rflags));
-    
-    // Check bit 9 (Interrupt Flag)
-    bool enabled = (rflags >> 9) & 1;
-    
-    if (enabled) {
-        disable_interrupts();
-    }
-    
-    return enabled;
-}
-
-/*
- * interrupts_restore - Restores interrupt state based on previous value
- */
-void interrupts_restore(bool enabled)
-{
-    if (enabled) {
-        enable_interrupts();
-    }
-}
 
 /*
  * interrupt_dispatcher - Central C handler called by assembly stubs.

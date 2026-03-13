@@ -23,48 +23,13 @@
 static uint64_t g_fb_pd[PAGE_ENTRIES] __attribute__((aligned(PAGE_SIZE)));
 
 /*
- * align_up - Aligns address to specified boundary
+ * KSTART / KEND — authoritative runtime kernel physical extent.
+ * Initialized to linker-defined values; KEND is bumped by
+ * reserve_required_tablespace() to include physmap page tables.
+ * All kernel code reads these via get_kstart() / get_kend() from layout.h.
  */
-uintptr_t align_up(uintptr_t val, uintptr_t align) {
-    return (val + align - 1) & ~(align - 1);
-}
-
-/*
- * align_down - Aligns address down to specified boundary
- */
-uintptr_t align_down(uintptr_t val, uintptr_t align) {
-    return val & ~(align - 1);
-}
-
-/*
- * get_kstart - Gets the (current) kernel start
- */
-uint64_t get_kstart(bool virtual){
-    return virtual ? KERNEL_P2V(KSTART) : KSTART;
-}
-
-/*
- * get_kend - Gets the (current) kernel end
- */
-uint64_t get_kend(bool virtual){
-    return virtual ? KERNEL_P2V(KEND) : KEND;
-}
-
-/*
- * get_linker_kend - Gets the kernel end as defined by the linker symbol
- */
-uint64_t get_linker_kend(bool virtual){
-    uint64_t linker = (uint64_t)(uintptr_t)&KPHYS_END;
-    return virtual ? KERNEL_P2V(linker) : linker;
-}
-
-/*
- * get_linker_kstart - Gets the kernel start as defined by the linker symbol
- */
-uint64_t get_linker_kstart(bool virtual){
-    uint64_t linker = (uint64_t)(uintptr_t)&KPHYS_START;
-    return virtual ? KERNEL_P2V(linker) : linker;
-}
+uint64_t KSTART = (uint64_t)&KPHYS_START;
+uint64_t KEND   = (uint64_t)&KPHYS_END;
 
 /*
  * get_physmap_start - Gets the start address of the physmap region (virtual)
@@ -322,4 +287,63 @@ void build_physmap() {
     flush_tlb();
 
     LOGF("[PAGING] Physmap: RAM 0x%lx\n", physmapStruct.total_RAM);
+}
+
+/*
+ * QEMU_DUMP_PMT - Walks the live page table and dumps its structure to serial.
+ * Moved here from debug.c: this is a paging diagnostic, not a general debug utility.
+ */
+void QEMU_DUMP_PMT(void) {
+    uint64_t* PML4 = getPML4();
+    serial_write("Page Tables:\n");
+
+    for (int pml4_i = 0; pml4_i < PAGE_ENTRIES; pml4_i++) {
+        uint64_t pml4e = PML4[pml4_i];
+        if (!(pml4e & PAGE_PRESENT)) continue;
+
+        serial_write("PML4[");
+        serial_write_hex16(pml4_i);
+        serial_write("]: ");
+        serial_write_hex32((uint32_t)pml4e);
+        serial_write(" -> PDPT\n");
+
+        uint64_t* pdpt = (uint64_t*)(KERNEL_P2V(pml4e & FRAME_MASK));
+
+        for (int pdpt_i = 0; pdpt_i < PAGE_ENTRIES; pdpt_i++) {
+            uint64_t pdpte = pdpt[pdpt_i];
+            if (!(pdpte & PAGE_PRESENT)) continue;
+
+            serial_write("  PDPT[");
+            serial_write_hex16(pdpt_i);
+            serial_write("]: ");
+            serial_write_hex32((uint32_t)pdpte);
+            serial_write(" -> PD\n");
+
+            uint64_t* pd = (uint64_t*)(KERNEL_P2V(pdpte & FRAME_MASK));
+
+            for (int pd_i = 0; pd_i < PAGE_ENTRIES; pd_i++) {
+                uint64_t pde = pd[pd_i];
+                if (!(pde & PAGE_PRESENT)) continue;
+
+                serial_write("    PD[");
+                serial_write_hex16(pd_i);
+                serial_write("]: ");
+                serial_write_hex32((uint32_t)pde);
+                serial_write(" -> PT\n");
+
+                uint64_t* pt = (uint64_t*)(KERNEL_P2V(pde & FRAME_MASK));
+
+                for (int pt_i = 0; pt_i < PAGE_ENTRIES; pt_i++) {
+                    uint64_t pte = pt[pt_i];
+                    if (!(pte & PAGE_PRESENT)) continue;
+
+                    serial_write("      PT[");
+                    serial_write_hex16(pt_i);
+                    serial_write("]: ");
+                    serial_write_hex32((uint32_t)pte);
+                    serial_write(" -> PHYS\n");
+                }
+            }
+        }
+    }
 }

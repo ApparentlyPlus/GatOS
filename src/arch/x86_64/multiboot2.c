@@ -7,7 +7,7 @@
  * Author: u/ApparentlyPlus
  */
 
-#include <arch/x86_64/memory/paging.h>
+#include <arch/x86_64/memory/layout.h>
 #include <arch/x86_64/multiboot2.h>
 #include <kernel/debug.h>
 #include <klibc/string.h>

@@ -21,7 +21,7 @@
 
 #pragma region Internal Helpers & Globals
 
-static uint64_t g_lapic_base = 0;
+uint64_t g_lapic_base = 0;
 static uint64_t g_ioapic_base = 0;
 static MADT_IOAPIC* g_ioapic_rec = NULL; 
 static uint64_t g_lapic_ticks_per_ms = 0;
@@ -88,13 +88,6 @@ uint32_t lapic_read(uint32_t reg) {
  */
 void lapic_eoi(void) {
     lapic_write(LAPIC_EOI, 0);
-}
-
-/*
- * lapic_get_id - Get the Local APIC ID of the current processor
- */
-uint32_t lapic_get_id(void) {
-    return lapic_read(LAPIC_ID) >> 24;
 }
 
 /*
