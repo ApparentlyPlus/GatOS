@@ -19,23 +19,8 @@ static int dbg_counter = 0;
  * QEMU_LOG - Debug function to klog messages to qemu serial with counter
  */
 void QEMU_LOG(const char* msg, int total) {
-    char buf[128];
-    char* ptr = buf;
-
-    *ptr++ = '[';
-    ptr += int_to_str(++dbg_counter, ptr);
-    *ptr++ = '/';
-    ptr += int_to_str(total, ptr);
-    *ptr++ = ']';
-    *ptr++ = ' ';
-
-    size_t msg_len = kstrlen(msg);
-    kmemcpy(ptr, msg, msg_len);
-    ptr += msg_len;
-
-    *ptr++ = '\n';
-    *ptr = '\0';
-
+    char buf[256];
+    ksnprintf(buf, sizeof(buf), "[%d/%d] %s\n", ++dbg_counter, total, msg);
     serial_write(buf);
 }
 
