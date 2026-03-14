@@ -110,19 +110,22 @@ void irq_register(uint8_t vector, irq_handler_t handler);
 void irq_unregister(uint8_t vector);
 
 /*
- * Inline CPU interrupt control — no .c dependency required.
- * These are pure single-instruction operations that must be inlined
- * everywhere to avoid function-call overhead in hot paths (spinlocks, panic).
+ * enable_interrupts - Set the IF flag in RFLAGS to enable CPU interrupts
  */
 static inline void enable_interrupts(void) {
     __asm__ volatile("sti" ::: "memory");
 }
 
+/*
+ * disable_interrupts - Clear the IF flag in RFLAGS to disable CPU interrupts
+ */
 static inline void disable_interrupts(void) {
     __asm__ volatile("cli" ::: "memory");
 }
 
-/* Save interrupt flag and unconditionally disable; returns previous state. */
+/* 
+ * interrupts_save - Save interrupt flag and unconditionally disable, then return previous state. 
+ */
 static inline bool interrupts_save(void) {
     uint64_t rflags;
     __asm__ volatile("pushfq; popq %0" : "=r"(rflags) :: "memory");
@@ -131,7 +134,9 @@ static inline bool interrupts_save(void) {
     return enabled;
 }
 
-/* Restore interrupt state saved by interrupts_save(). */
+/*
+ * interrupts_restore - Restore interrupt state saved by interrupts_save()
+ */
 static inline void interrupts_restore(bool enabled) {
     if (enabled) __asm__ volatile("sti" ::: "memory");
 }

@@ -9,9 +9,9 @@
  */
 
 #include <arch/x86_64/memory/paging.h>
-#include <kernel/memory/pmm.h>
-#include <kernel/bitops.h>
+#include <arch/x86_64/memory/layout.h>
 #include <kernel/sys/spinlock.h>
+#include <kernel/memory/pmm.h>
 #include <kernel/debug.h>
 #include <klibc/string.h>
 #include <stdbool.h>

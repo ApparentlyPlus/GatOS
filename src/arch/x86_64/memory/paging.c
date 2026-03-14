@@ -22,12 +22,6 @@
  */
 static uint64_t g_fb_pd[PAGE_ENTRIES] __attribute__((aligned(PAGE_SIZE)));
 
-/*
- * KSTART / KEND — authoritative runtime kernel physical extent.
- * Initialized to linker-defined values; KEND is bumped by
- * reserve_required_tablespace() to include physmap page tables.
- * All kernel code reads these via get_kstart() / get_kend() from layout.h.
- */
 uint64_t KSTART = (uint64_t)&KPHYS_START;
 uint64_t KEND   = (uint64_t)&KPHYS_END;
 
@@ -55,11 +49,10 @@ void flush_tlb(void) {
 }
 
 /*
- * PMT_switch - Switch to a page table
+ * PML4_switch - Switch to a page table
  */
-void PMT_switch(uint64_t pml4) {
+void PML4_switch(uint64_t pml4) {
     __asm__ volatile("mov %0, %%cr3" : : "r"(pml4));
-    // LOGF("[PAGING] Page tables switched\n");
 }
 
 /*
@@ -283,17 +276,16 @@ void build_physmap() {
     PML4[0][kernel_index]  = old_pml4[kernel_index];
     PML4[0][physmap_index] = KERNEL_V2P(&PDPTs[0]) | (PAGE_PRESENT | PAGE_WRITABLE);
 
-    PMT_switch(KERNEL_V2P(pml4_base));
+    PML4_switch(KERNEL_V2P(pml4_base));
     flush_tlb();
 
     LOGF("[PAGING] Physmap: RAM 0x%lx\n", physmapStruct.total_RAM);
 }
 
 /*
- * QEMU_DUMP_PMT - Walks the live page table and dumps its structure to serial.
- * Moved here from debug.c: this is a paging diagnostic, not a general debug utility.
+ * QEMU_DUMP_PML4 - Walks the live page table and dumps its structure to serial
  */
-void QEMU_DUMP_PMT(void) {
+void QEMU_DUMP_PML4(void) {
     uint64_t* PML4 = getPML4();
     serial_write("Page Tables:\n");
 

@@ -69,6 +69,7 @@ tty_t* tty_create(void) {
         return NULL;
     }
 
+    // Try to initialize console
     if (!con_init(console)) {
         kfree(console);
         kfree(tty);

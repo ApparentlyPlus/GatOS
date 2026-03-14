@@ -986,7 +986,7 @@ void vmm_switch(vmm_t* vmm_pub) {
     if (!vmm) return;
 
     // Switch to the root page table of the VMM
-    PMT_switch(vmm->public.pt_root);
+    PML4_switch(vmm->public.pt_root);
     g_current_vmm = &vmm->public;
 }
 

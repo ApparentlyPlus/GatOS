@@ -181,9 +181,9 @@ bool con_init(console_t* con) {
     con->utf8_bytes_needed = 0; con->utf8_codepoint = 0;
     con->ansi_state = 0; con->reentrancy_count = 0;
     con->cursor_enabled = true; con->header_rows = 0;
-    spinlock_init(&con->lock, "console_lock");
-    con->buffer = (console_char_t*)kmalloc(con->width * con->height * sizeof(console_char_t));
+    con->buffer = kmalloc(con->width * con->height * sizeof(console_char_t));
     if (!con->buffer) return false;
+    spinlock_init(&con->lock, "console_lock");
     con_clear(con, CONSOLE_COLOR_BLACK);
     return true;
 }

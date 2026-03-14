@@ -96,9 +96,8 @@ uint64_t reserve_required_tablespace(multiboot_parser_t* multiboot);
 uint64_t* getPML4();
 
 void flush_tlb(void);
-void PMT_switch(uint64_t pml4);
-void dbg_dump_pmt(void);
-void QEMU_DUMP_PMT(void);
+void PML4_switch(uint64_t pml4);
+void QEMU_DUMP_PML4(void);
 
 void unmap_identity();
 void cleanup_kernel_page_tables(uintptr_t start, uintptr_t end);
