@@ -674,7 +674,7 @@ void pmm_dump_stats(void) {
         return;
     }
     
-    LOGF("=== PMM Statistics ===\n");
+    LOGF("\n=== PMM Statistics ===\n");
     LOGF("Managed range: [0x%lx - 0x%lx) (0x%lx bytes, %.2f MiB)\n",
            g_range_start, g_range_end, g_range_end - g_range_start,
            (g_range_end - g_range_start) / (1024.0 * 1024.0));

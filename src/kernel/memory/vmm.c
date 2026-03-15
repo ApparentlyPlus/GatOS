@@ -1596,7 +1596,7 @@ void vmm_dump(vmm_t* vmm_pub) {
 
     bool lock_flags = spinlock_acquire(&vmm->lock);
 
-    LOGF("=== VMM Dump ===\n");
+    LOGF("\n=== VMM Dump ===\n");
     LOGF("VMM at %p (magic: 0x%x, is_kernel: %d)\n", vmm, vmm->magic,
          vmm->is_kernel);
     LOGF("Alloc range: 0x%lx - 0x%lx (size: 0x%lx)\n", vmm->public.alloc_base,

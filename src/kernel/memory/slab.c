@@ -824,7 +824,7 @@ void slab_dump_stats(void) {
         return;
     }
 
-    LOGF("=== Slab Allocator Statistics ===\n");
+    LOGF("\n=== Slab Allocator Statistics ===\n");
     LOGF("Total slabs: %lu\n", g_stats.total_slabs);
     LOGF("Total PMM bytes: %lu (%.2f MiB)\n", g_stats.total_pmm_bytes,
          g_stats.total_pmm_bytes / (1024.0 * 1024.0));
@@ -842,7 +842,7 @@ void slab_cache_dump(slab_cache_t* cache) {
 
     bool flags = spinlock_acquire(&cache->lock);
 
-    LOGF("=== Slab Cache: %s ===\n", cache->name);
+    LOGF("\n=== Slab Cache: %s ===\n", cache->name);
     LOGF("User object size: %zu bytes\n", cache->user_size);
     LOGF("Total object size: %zu bytes (align: %zu)\n", cache->obj_size,
          cache->align);
@@ -884,7 +884,7 @@ void slab_dump_all_caches(void) {
         return;
     }
 
-    LOGF("=== Slab Allocator Statistics ===\n");
+    LOGF("\n=== Slab Allocator Statistics ===\n");
     LOGF("Total slabs: %lu\n", g_stats.total_slabs);
     LOGF("Total PMM bytes: %lu (%.2f MiB)\n", g_stats.total_pmm_bytes,
          g_stats.total_pmm_bytes / (1024.0 * 1024.0));

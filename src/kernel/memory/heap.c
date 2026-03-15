@@ -1563,7 +1563,7 @@ void heap_dump(heap_t* heap) {
 
     bool lock_flags = spinlock_acquire(&heap->lock);
 
-    LOGF("=== HEAP DUMP ===\n");
+    LOGF("\n=== HEAP DUMP ===\n");
     LOGF("Heap at %p (magic: 0x%x, is_kernel: %d)\n", heap, heap->magic,
          heap->is_kernel);
     LOGF("Total size: %zu bytes across %zu arenas\n", heap->current_size,
