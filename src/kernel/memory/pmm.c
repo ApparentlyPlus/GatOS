@@ -101,7 +101,17 @@ static inline bool validate_free_header(uint64_t block_phys, uint32_t expected_o
             return false;
         }
     }
-    
+
+    // Validate prev pointer
+    if (header->prev_phys != EMPTY_SENTINEL) {
+        if (header->prev_phys < g_range_start || header->prev_phys >= g_range_end) {
+            LOGF("[PMM ERROR] Invalid prev pointer at 0x%lx: 0x%lx (range: 0x%lx-0x%lx)\n",
+                   block_phys, header->prev_phys, g_range_start, g_range_end);
+            g_stats.corruption_detected++;
+            return false;
+        }
+    }
+
     return true;
 }
 
@@ -138,6 +148,7 @@ static inline void clear_free_header(uint64_t block_phys) {
     header->magic = 0;
     header->order = 0xFFFFFFFF;
     header->next_phys = 0xDEADBEEFDEADBEEF;
+    header->prev_phys = 0xDEADBEEFDEADBEEF;
 }
 
 /*
@@ -146,71 +157,74 @@ static inline void clear_free_header(uint64_t block_phys) {
 static uint64_t pop_head(uint32_t order) {
     uint64_t head = g_free_heads[order];
     if (head == EMPTY_SENTINEL) return EMPTY_SENTINEL;
-    
-    uint64_t next = read_next_word(head, order);
+
+    if (!validate_free_header(head, order)) return EMPTY_SENTINEL;
+
+    pmm_free_header_t* hdr = (pmm_free_header_t*)PHYSMAP_P2V(head);
+    uint64_t next = hdr->next_phys;
     g_free_heads[order] = (next == EMPTY_SENTINEL || next == 0) ? EMPTY_SENTINEL : next;
-    
-    // Clear the header to detect use-after-free
+
+    // New head has no predecessor
+    if (next != EMPTY_SENTINEL && next != 0)
+        ((pmm_free_header_t*)PHYSMAP_P2V(next))->prev_phys = EMPTY_SENTINEL;
+
     clear_free_header(head);
-    
-    // Update statistics
     g_stats.free_blocks[order]--;
-    
     return head;
 }
 
-/* 
+/*
  * push_head - push a block onto the free list for given order
  */
 static void push_head(uint32_t order, uint64_t block_phys) {
-    uint64_t head = g_free_heads[order];
-    write_next_word(block_phys, (head == EMPTY_SENTINEL) ? EMPTY_SENTINEL : head, order);
+    uint64_t old_head = g_free_heads[order];
+    pmm_free_header_t* hdr = (pmm_free_header_t*)PHYSMAP_P2V(block_phys);
+    hdr->magic     = PMM_FREE_BLOCK_MAGIC;
+    hdr->order     = order;
+    hdr->next_phys = (old_head == EMPTY_SENTINEL) ? EMPTY_SENTINEL : old_head;
+    hdr->prev_phys = EMPTY_SENTINEL;
+
+    // Old head now has a predecessor
+    if (old_head != EMPTY_SENTINEL)
+        ((pmm_free_header_t*)PHYSMAP_P2V(old_head))->prev_phys = block_phys;
+
     g_free_heads[order] = block_phys;
-    
-    // Update statistics
     g_stats.free_blocks[order]++;
 }
 
 /*
- * remove_specific - remove a specific block from the free list for given order
+ * remove_specific - O(1) removal of a specific block using its prev/next pointers
  */
 static bool remove_specific(uint32_t order, uint64_t target_phys) {
-    uint64_t prev = EMPTY_SENTINEL;
-    uint64_t cur = g_free_heads[order];
-    
-    while (cur != EMPTY_SENTINEL) {
-        // Validate before reading next
-        if (!validate_free_header(cur, order)) {
-            LOGF("[PMM] Corruption in remove_specific at 0x%lx\n", cur);
-            return false;
-        }
-        
-        uint64_t next = read_next_word(cur, order);
-        
-        if (cur == target_phys) {
-            // Found it, remove from list
-            if (prev == EMPTY_SENTINEL) {
-                // Removing head
-                g_free_heads[order] = (next == 0 || next == EMPTY_SENTINEL) ? EMPTY_SENTINEL : next;
-            } else {
-                // Removing middle/end - update previous node
-                write_next_word(prev, next, order);
-            }
-            
-            // Clear the removed block's header
-            clear_free_header(cur);
-            
-            // Update statistics
-            g_stats.free_blocks[order]--;
-            
-            return true;
-        }
-        
-        prev = cur;
-        cur = (next == 0 || next == EMPTY_SENTINEL) ? EMPTY_SENTINEL : next;
+    if (!validate_block_in_range(target_phys, order)) return false;
+
+    pmm_free_header_t* hdr = (pmm_free_header_t*)PHYSMAP_P2V(target_phys);
+
+    // Block is allocated (or has a different order) — not in this free list, not corruption
+    if (hdr->magic != PMM_FREE_BLOCK_MAGIC || hdr->order != order)
+        return false;
+
+    // Magic and order match: now validate pointer fields for real corruption
+    if (!validate_free_header(target_phys, order)) {
+        LOGF("[PMM] Corruption in remove_specific at 0x%lx\n", target_phys);
+        return false;
     }
-    
-    return false;
+
+    uint64_t prev = hdr->prev_phys;
+    uint64_t next = hdr->next_phys;
+
+    if (prev == EMPTY_SENTINEL) {
+        g_free_heads[order] = (next == 0 || next == EMPTY_SENTINEL) ? EMPTY_SENTINEL : next;
+    } else {
+        ((pmm_free_header_t*)PHYSMAP_P2V(prev))->next_phys = next;
+    }
+
+    if (next != EMPTY_SENTINEL && next != 0)
+        ((pmm_free_header_t*)PHYSMAP_P2V(next))->prev_phys = prev;
+
+    clear_free_header(target_phys);
+    g_stats.free_blocks[order]--;
+    return true;
 }
 
 /* 

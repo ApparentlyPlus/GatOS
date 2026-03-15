@@ -73,12 +73,25 @@ void write_cr4(uint64_t val);
 uint64_t read_xcr0(void);
 void write_xcr0(uint64_t value);
 
+/*
+ * smap_allow - Allows access to supervisor mode pages
+ */
 static inline void smap_allow(void) {
     if (cpu_is_feature_enabled(CPU_FEAT_SMAP))
         __asm__ volatile("stac" ::: "memory");
 }
 
+/*
+ * smap_deny - Denies access to supervisor mode pages
+ */
 static inline void smap_deny(void) {
     if (cpu_is_feature_enabled(CPU_FEAT_SMAP))
         __asm__ volatile("clac" ::: "memory");
+}
+
+/*
+ * set_cr0_ts - Sets the Task Switched bit in CR0
+ */
+static inline void set_cr0_ts(void) {
+    __asm__ volatile("mov %%cr0, %%rax; or $8, %%rax; mov %%rax, %%cr0" ::: "rax", "memory");
 }

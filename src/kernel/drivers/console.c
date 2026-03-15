@@ -116,13 +116,16 @@ static void refresh_locked(console_t* con) {
 }
 
 /*
- * scroll - Scrolls the content area (below header) up by one line
+ * scroll - Scrolls the content area (below header) up by one line.
+ * Uses a pixel-level memmove on the framebuffer instead of a full redraw.
  */
 static void scroll(console_t* con) {
     if (con->cursor_enabled) render_cursor(con, false);
     size_t first = con->header_rows;
     size_t rows  = con->height - first;
     if (!rows) return;
+
+    // Update backbuffer
     if (rows > 1)
         kmemmove(con->buffer + first * con->width,
                  con->buffer + (first + 1) * con->width,
@@ -133,7 +136,34 @@ static void scroll(console_t* con) {
     }
     con->cursor_y--;
     if (con->cursor_y < first) con->cursor_y = first;
-    refresh_locked(con);
+
+    // Scroll the framebuffer with a single pixel memmove instead of full redraw
+    if (g_fb_addr) {
+        extern tty_t* g_active_tty;
+        if (g_active_tty && g_active_tty->console == con) {
+            uint32_t row_h    = (uint32_t)(g_font_height + PADDING_Y);
+            size_t first_px   = first * row_h;
+            size_t src_off    = (first_px + row_h) * g_fb_pitch;
+            size_t dst_off    = first_px * g_fb_pitch;
+            size_t move_bytes = (rows - 1) * row_h * g_fb_pitch;
+
+            if (move_bytes > 0)
+                kmemmove(g_fb_addr + dst_off, g_fb_addr + src_off, move_bytes);
+
+            // Clear the last row
+            uint32_t bg_color    = VGA_PALETTE[con->bg_color];
+            size_t last_row_off  = (con->height - 1) * row_h * g_fb_pitch;
+            size_t last_row_len  = row_h * g_fb_pitch;
+            if (g_fb_bpp == 32) {
+                uint32_t* p = (uint32_t*)(g_fb_addr + last_row_off);
+                for (size_t i = 0; i < last_row_len / 4; i++) p[i] = bg_color;
+            } else {
+                for (uint32_t y = 0; y < row_h; y++)
+                    for (uint32_t x = 0; x < g_fb_width; x++)
+                        put_pixel(x, (uint32_t)((con->height - 1) * row_h) + y, bg_color);
+            }
+        }
+    }
 }
 
 /*

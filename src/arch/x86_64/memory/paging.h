@@ -57,6 +57,7 @@
 #define PAGE_NO_EXECUTE     (1ULL << 63)
 
 #define PAGE_SIZE           0x1000UL
+#define PAGE_2MB            0x200000UL
 #define PAGE_ENTRIES        512
 #define FRAME_MASK          0xFFFFF000
 #define ADDR_MASK           0x000FFFFFFFFFF000UL
@@ -87,6 +88,13 @@
 #include <stdbool.h>
 
 #define CEIL_DIV(x, y) (((x) + (y) - 1) / (y)) // this is hacky and must be removed eventually
+
+/*
+ * invlpg - Invalidate a single TLB entry for the given virtual address
+ */
+static inline void invlpg(void* addr) {
+    __asm__ volatile("invlpg (%0)" :: "r"(addr) : "memory");
+}
 
 uint64_t get_physmap_start(void);
 uint64_t get_physmap_end(void);

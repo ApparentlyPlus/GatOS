@@ -13,6 +13,7 @@
 #include <kernel/memory/vmm.h>
 #include <kernel/memory/heap.h>
 #include <kernel/drivers/tty.h>
+#include <klibc/avl.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -47,8 +48,9 @@ typedef struct thread {
     uint64_t fs_base;       // Thread Local Storage base
     
     uint8_t fpu_state[512] __attribute__((aligned(16))); // FPU/SSE/AVX state
-    
+
     uint64_t sleep_until;   // Timestamp for waking up
+    avl_node_t sleep_node;  // AVL tree node for sleep queue
     
     struct thread* next;       // Next thread in the process (linked list)
     struct thread* sched_next; // Next thread in the scheduler's ready queue
