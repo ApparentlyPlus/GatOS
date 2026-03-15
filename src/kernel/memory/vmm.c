@@ -468,7 +468,12 @@ vmm_status_t vmm_alloc(vmm_t* vmm_pub, size_t length, size_t flags, void* arg,
     }
 
     // Align length to page size
+    size_t orig_length = length;
     length = align_up(length, PAGE_SIZE);
+    if (length < orig_length) {
+        spinlock_release(&vmm->lock, lock_flags);
+        return VMM_ERR_OOM;
+    }
 
     // Walk existing vm_objects to find a gap big enough
     vm_object_internal* cur = vmm->objects_internal;
@@ -500,7 +505,7 @@ vmm_status_t vmm_alloc(vmm_t* vmm_pub, size_t length, size_t flags, void* arg,
     if (!found_base) {
         uintptr_t base = prev ? (prev->public.base + prev->public.length)
                               : vmm->public.alloc_base;
-        if (base + length <= vmm->public.alloc_end) {
+        if (base + length > base && base + length <= vmm->public.alloc_end) {
             found_base = base;
         } else {
             spinlock_release(&vmm->lock, lock_flags);
@@ -559,6 +564,8 @@ vmm_status_t vmm_alloc(vmm_t* vmm_pub, size_t length, size_t flags, void* arg,
             spinlock_release(&vmm->lock, lock_flags);
             return VMM_ERR_NO_MEMORY;
         }
+        
+        kmemset((void*)PHYSMAP_P2V(phys_base), 0, length);
     }
 
     // Map physical -> virtual page-by-page with rollback on failure
@@ -628,10 +635,16 @@ vmm_status_t vmm_alloc_at(vmm_t* vmm_pub, void* desired_addr, size_t length,
     }
 
     // Align length
+    size_t orig_length = length;
     length = align_up(length, PAGE_SIZE);
+    if (length < orig_length) {
+        spinlock_release(&vmm->lock, lock_flags);
+        return VMM_ERR_OOM;
+    }
 
     // Check if desired range is within allocatable space
-    if (desired < vmm->public.alloc_base ||
+    if (length > (UINTPTR_MAX - desired) ||
+        desired < vmm->public.alloc_base ||
         desired + length > vmm->public.alloc_end) {
         LOGF(
             "[VMM] vmm_alloc_at: range 0x%lx-0x%lx outside allocatable space\n",
@@ -1204,30 +1217,62 @@ bool vmm_check_buffer(vmm_t* vmm_pub, const void* ptr, size_t size, size_t requi
     vmm_internal* vmm = vmm_get_instance(vmm_pub);
     if (!vmm || !ptr || size == 0) return false;
 
-    // Pre-compute the PTE bits that must be set (and whether NX must be clear).
-    uint64_t required_pte = PAGE_PRESENT;
-    if (required_flags & VM_FLAG_WRITE) required_pte |= PAGE_WRITABLE;
-    if (required_flags & VM_FLAG_USER)  required_pte |= PAGE_USER;
-    bool require_exec = (required_flags & VM_FLAG_EXEC) != 0;
+    uintptr_t start = (uintptr_t)ptr;
+    if (size > (UINTPTR_MAX - start)) return false;
+    uintptr_t end   = start + size;
 
     bool lock_flags = spinlock_acquire(&vmm->lock);
 
-    // Walk every page in the buffer.
-    uintptr_t start = (uintptr_t)ptr & ~(uintptr_t)(PAGE_SIZE - 1); // align down
-    uintptr_t end   = (uintptr_t)ptr + size;
+    uintptr_t current = start & ~(uintptr_t)(PAGE_SIZE - 1);
+    vm_object_internal* last_obj = NULL;
 
-    for (uintptr_t page = start; page < end; page += PAGE_SIZE) {
-        uint64_t pte = vmm_walk_pte(vmm->public.pt_root, (void*)page);
+    while (current < end) {
+        // Find vm_object for current page
+        if (!last_obj || current < last_obj->public.base || current >= last_obj->public.base + last_obj->public.length) {
+            vm_object_internal* cur_obj = vmm->objects_internal;
+            last_obj = NULL;
+            while (cur_obj) {
+                if (current >= cur_obj->public.base && current < cur_obj->public.base + cur_obj->public.length) {
+                    last_obj = cur_obj;
+                    break;
+                }
+                cur_obj = cur_obj->next_internal;
+            }
+        }
 
-        if ((pte & required_pte) != required_pte) {
+        if (!last_obj) {
             spinlock_release(&vmm->lock, lock_flags);
             return false;
         }
 
-        if (require_exec && (pte & PAGE_NO_EXECUTE)) {
+        if ((last_obj->public.flags & required_flags) != required_flags) {
             spinlock_release(&vmm->lock, lock_flags);
             return false;
         }
+
+        // Check hardware page table for this specific page
+        uint64_t pte = vmm_walk_pte(vmm->public.pt_root, (void*)current);
+        
+        if (!(pte & PAGE_PRESENT)) {
+            // Page not present in hardware tables
+            // If the object is not lazy, this is a violation
+            if (!(last_obj->public.flags & VM_FLAG_LAZY)) {
+                spinlock_release(&vmm->lock, lock_flags);
+                return false;
+            }
+        } else {
+            // Page is present, verify that PTE flags are sufficient
+            if ((required_flags & VM_FLAG_WRITE) && !(pte & PAGE_WRITABLE)) {
+                spinlock_release(&vmm->lock, lock_flags);
+                return false;
+            }
+            if ((required_flags & VM_FLAG_USER) && !(pte & PAGE_USER)) {
+                spinlock_release(&vmm->lock, lock_flags);
+                return false;
+            }
+        }
+
+        current += PAGE_SIZE;
     }
 
     spinlock_release(&vmm->lock, lock_flags);

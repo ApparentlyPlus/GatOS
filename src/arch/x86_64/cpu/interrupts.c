@@ -232,6 +232,7 @@ cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
                 uint64_t phys_base;
                 if (pmm_alloc(PAGE_SIZE, &phys_base) == PMM_OK) {
                     uint64_t page_aligned_cr2 = cr2 & ~(PAGE_SIZE - 1);
+                    kmemset((void*)PHYSMAP_P2V(phys_base), 0, PAGE_SIZE);
                     vmm_status_t status = vmm_map_page(demand_vmm, phys_base, (void*)page_aligned_cr2, demand_obj->flags);
                     if (status == VMM_OK) {
                         return context; // Success, retry instruction

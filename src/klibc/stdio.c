@@ -966,6 +966,15 @@ int vscanf_(const char* format, va_list va) {
             format++;
         }
 
+        int max_width = -1;
+        if (kisdigit((unsigned char)*format)) {
+            max_width = 0;
+            while (kisdigit((unsigned char)*format)) {
+                max_width = max_width * 10 + (*format - '0');
+                format++;
+            }
+        }
+
         // Handle scansets %[...]
         if (*format == '[') {
             format++;
@@ -993,6 +1002,10 @@ int vscanf_(const char* format, va_list va) {
                 if (invert) in_set = !in_set;
                 
                 if (!in_set || ch == '\n') {
+                    _ungetchar(ch);
+                    break;
+                }
+                if (max_width != -1 && matched >= max_width) {
                     _ungetchar(ch);
                     break;
                 }
@@ -1037,6 +1050,10 @@ int vscanf_(const char* format, va_list va) {
                 
                 int matched = 0;
                 while (ch != 0 && !kisspace(ch)) {
+                    if (max_width != -1 && matched >= max_width) {
+                        _ungetchar(ch);
+                        break;
+                    }
                     if (!suppress) *p++ = (char)ch;
                     matched++;
                     ch = _getchar();

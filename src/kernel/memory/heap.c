@@ -119,6 +119,7 @@ static slab_cache_t* g_arena_cache = NULL;
  * heap_align_size - Align up to BLOCK_ALIGN
  */
 size_t heap_align_size(size_t size) {
+    if (size > SIZE_MAX - (BLOCK_ALIGN - 1)) return 0;
     return align_up(size, BLOCK_ALIGN);
 }
 
@@ -316,6 +317,13 @@ static inline void stats_arena_remove(heap_t* heap, heap_arena_t* arena) {
  */
 static void remove_from_free_list(heap_t* heap, heap_block_header_t* block) {
     if (!heap || !block) return;
+
+    if (block->prev_free && block->prev_free->next_free != block) {
+        panic("heap: safe-unlink violation (prev->next != block)");
+    }
+    if (block->next_free && block->next_free->prev_free != block) {
+        panic("heap: safe-unlink violation (next->prev != block)");
+    }
 
     if (block->prev_free) {
         block->prev_free->next_free = block->next_free;
@@ -813,7 +821,15 @@ static void* heap_malloc_internal(heap_t* heap, size_t size, bool zero, bool urg
     bool should_zero = zero || (heap->flags & HEAP_FLAG_ZERO);
 
     // Normalize size to alignment and enforce minimum payload
+    size_t orig_size = size;
     size = heap_align_size(size);
+    if (size == 0 && orig_size > 0) {
+        if (urgent) {
+            panicf("[HEAP] Size overflow: %zu", orig_size);
+        }
+        return NULL;
+    }
+    
     if (size < MIN_BLOCK_SIZE) {
         size = MIN_BLOCK_SIZE;
     }
@@ -1116,6 +1132,10 @@ void* krealloc(void* ptr, size_t size) {
     }
 
     size_t aligned_size = heap_align_size(size);
+    if (aligned_size == 0 && size > 0) {
+        spinlock_release(&heap->lock, flags);
+        return NULL;
+    }
     if (aligned_size <= block->size) {
         // shrink in place, maybe split to avoid wasting space
         if (block->size - aligned_size >= MIN_BLOCK_SIZE +
@@ -1388,6 +1408,10 @@ void* heap_realloc(heap_t* heap, void* ptr, size_t size) {
     }
 
     size_t aligned_size = heap_align_size(size);
+    if (aligned_size == 0 && size > 0) {
+        spinlock_release(&heap->lock, flags);
+        return NULL;
+    }
     if (aligned_size <= block->size) {
         if (block->size - aligned_size >= MIN_BLOCK_SIZE +
                                               sizeof(heap_block_header_t) +

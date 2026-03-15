@@ -135,6 +135,13 @@ void cpu_init(void)
     if (c & (1 << 28)) g_cpu.features |= CPU_FEAT_AVX;
     if (c & (1 << 5))  g_cpu.features |= CPU_FEAT_VMX;
 
+    // Structured Extended Feature Flags
+    if (max_basic >= 7) {
+        cpuid(7, 0, &a, &b, &c, &d);
+        if (b & (1 << 7))  g_cpu.features |= CPU_FEAT_SMEP;
+        if (b & (1 << 20)) g_cpu.features |= CPU_FEAT_SMAP;
+    }
+
     // Extended features (AMD/NX/64-bit/SVM)
     cpuid(0x80000000, 0, &a, &b, &c, &d);
     uint32_t max_ext = a;
@@ -178,6 +185,16 @@ void cpu_init(void)
 	if (cpu_has_feature(CPU_FEAT_AVX)) {
 		cpu_enable_feature(CPU_FEAT_AVX);
 	}
+
+    // Enable SMEP if supported
+    if (cpu_has_feature(CPU_FEAT_SMEP)) {
+        cpu_enable_feature(CPU_FEAT_SMEP);
+    }
+
+    // Enable SMAP if supported
+    if (cpu_has_feature(CPU_FEAT_SMAP)) {
+        cpu_enable_feature(CPU_FEAT_SMAP);
+    }
 
     // Set active GS_BASE to our cpu_local structure for Ring 0.
     // Set KERNEL_GS_BASE to 0 (will be used to store User GS during Ring 0 execution).
@@ -271,6 +288,18 @@ bool cpu_enable_feature(cpu_feature_t feature)
             write_msr(0xC0000080, efer);
             return true;
 
+        case CPU_FEAT_SMEP:
+            cr4 = read_cr4();
+            cr4 |= (1 << 20); // CR4.SMEP
+            write_cr4(cr4);
+            return true;
+
+        case CPU_FEAT_SMAP:
+            cr4 = read_cr4();
+            cr4 |= (1 << 21); // CR4.SMAP
+            write_cr4(cr4);
+            return true;
+
         default:
             return false;
     }
@@ -316,6 +345,14 @@ bool cpu_is_feature_enabled(cpu_feature_t feature)
         case CPU_FEAT_SVM:
             efer = read_msr(0xC0000080);
             return (efer & (1 << 12)) != 0;
+
+        case CPU_FEAT_SMEP:
+            cr4 = read_cr4();
+            return (cr4 & (1 << 20)) != 0;
+
+        case CPU_FEAT_SMAP:
+            cr4 = read_cr4();
+            return (cr4 & (1 << 21)) != 0;
 
         default:
             return false;

@@ -106,11 +106,9 @@ process_t* process_create(const char* name, tty_t* existing_tty) {
     kstrncpy(proc->name, name, MAX_PROCESS_NAME - 1);
 
     // Create a unique address space for the process
-    // alloc_base is set past the end of the pre-mapped user sections so that
-    // vmm_alloc never collides with pages installed by vmm_map_range (which
-    // does not register vm_objects and is therefore invisible to the gap finder)
-    uintptr_t heap_base = align_up((uintptr_t)&USER_BSS_END, PAGE_SIZE);
-    proc->vmm = vmm_create(heap_base, 0x00007FFFFFFFF000);
+    // The alloc_base is set to USER_CODE_VIRT_ADDR so we can map the user sections
+    // using vmm_alloc_at, which will properly register them as vm_objects.
+    proc->vmm = vmm_create(USER_CODE_VIRT_ADDR, 0x00007FFFFFFFF000);
     if (!proc->vmm) {
         kfree(proc);
         return NULL;
@@ -121,43 +119,47 @@ process_t* process_create(const char* name, tty_t* existing_tty) {
     uintptr_t user_text_phys = (uintptr_t)&USER_TEXT_LOAD_ADDR;
     size_t user_text_size = align_up((uintptr_t)&USER_TEXT_END - (uintptr_t)&USER_TEXT_START, PAGE_SIZE);
     if (user_text_size > 0) {
-        vmm_status_t map_status = vmm_map_range(proc->vmm, user_text_phys, 
-                                                (void*)USER_CODE_VIRT_ADDR, 
+        void* out_addr = NULL;
+        vmm_status_t map_status = vmm_alloc_at(proc->vmm, (void*)USER_CODE_VIRT_ADDR, 
                                                 user_text_size, 
-                                                VM_FLAG_USER | VM_FLAG_EXEC);
+                                                VM_FLAG_USER | VM_FLAG_EXEC | VM_FLAG_MMIO, 
+                                                (void*)user_text_phys, &out_addr);
         if (map_status != VMM_OK) goto map_fail;
     }
 
     uintptr_t user_rodata_phys = (uintptr_t)&USER_RODATA_LOAD_ADDR;
     size_t user_rodata_size = align_up((uintptr_t)&USER_RODATA_END - (uintptr_t)&USER_RODATA_START, PAGE_SIZE);
     if (user_rodata_size > 0) {
+        void* out_addr = NULL;
         uintptr_t user_rodata_virt = (uintptr_t)&USER_RODATA_START;
-        vmm_status_t map_status = vmm_map_range(proc->vmm, user_rodata_phys, 
-                                                (void*)user_rodata_virt, 
+        vmm_status_t map_status = vmm_alloc_at(proc->vmm, (void*)user_rodata_virt, 
                                                 user_rodata_size, 
-                                                VM_FLAG_USER);
+                                                VM_FLAG_USER | VM_FLAG_MMIO, 
+                                                (void*)user_rodata_phys, &out_addr);
         if (map_status != VMM_OK) goto map_fail;
     }
 
     uintptr_t user_data_phys = (uintptr_t)&USER_DATA_LOAD_ADDR;
     size_t user_data_size = align_up((uintptr_t)&USER_DATA_END - (uintptr_t)&USER_DATA_START, PAGE_SIZE);
     if (user_data_size > 0) {
+        void* out_addr = NULL;
         uintptr_t user_data_virt = (uintptr_t)&USER_DATA_START;
-        vmm_status_t map_status = vmm_map_range(proc->vmm, user_data_phys, 
-                                                (void*)user_data_virt, 
+        vmm_status_t map_status = vmm_alloc_at(proc->vmm, (void*)user_data_virt, 
                                                 user_data_size, 
-                                                VM_FLAG_USER | VM_FLAG_WRITE);
+                                                VM_FLAG_USER | VM_FLAG_WRITE | VM_FLAG_MMIO, 
+                                                (void*)user_data_phys, &out_addr);
         if (map_status != VMM_OK) goto map_fail;
     }
 
     uintptr_t user_bss_phys = (uintptr_t)&USER_BSS_LOAD_ADDR;
     size_t user_bss_size = align_up((uintptr_t)&USER_BSS_END - (uintptr_t)&USER_BSS_START, PAGE_SIZE);
     if (user_bss_size > 0) {
+        void* out_addr = NULL;
         uintptr_t user_bss_virt = (uintptr_t)&USER_BSS_START;
-        vmm_status_t map_status = vmm_map_range(proc->vmm, user_bss_phys, 
-                                                (void*)user_bss_virt, 
+        vmm_status_t map_status = vmm_alloc_at(proc->vmm, (void*)user_bss_virt, 
                                                 user_bss_size, 
-                                                VM_FLAG_USER | VM_FLAG_WRITE);
+                                                VM_FLAG_USER | VM_FLAG_WRITE | VM_FLAG_MMIO, 
+                                                (void*)user_bss_phys, &out_addr);
         if (map_status != VMM_OK) goto map_fail;
     }
 
@@ -338,6 +340,8 @@ void process_destroy(process_t* process) {
     if (!process) return;
 
     LOGF("[PROC] Destroying process '%s' (PID: %u)\n", process->name, process->pid);
+
+    sched_remove_process(process);
 
     // Destroy all threads
     thread_t* thread = process->threads;

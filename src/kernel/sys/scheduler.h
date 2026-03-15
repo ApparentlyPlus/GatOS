@@ -20,3 +20,4 @@ thread_t* sched_current(void);
 void sched_sleep(uint64_t ms);
 void sched_exit(void);
 bool sched_active(void);
+void sched_remove_process(struct process* proc);

@@ -28,6 +28,8 @@ typedef enum {
     CPU_FEAT_VMX       = (1 << 10),
     CPU_FEAT_SVM       = (1 << 11),
     CPU_FEAT_64BIT     = (1 << 12),
+    CPU_FEAT_SMEP      = (1 << 13),
+    CPU_FEAT_SMAP      = (1 << 14),
 } cpu_feature_t;
 
 // CPU Information Structure
@@ -70,3 +72,13 @@ uint64_t read_cr4(void);
 void write_cr4(uint64_t val);
 uint64_t read_xcr0(void);
 void write_xcr0(uint64_t value);
+
+static inline void smap_allow(void) {
+    if (cpu_is_feature_enabled(CPU_FEAT_SMAP))
+        __asm__ volatile("stac" ::: "memory");
+}
+
+static inline void smap_deny(void) {
+    if (cpu_is_feature_enabled(CPU_FEAT_SMAP))
+        __asm__ volatile("clac" ::: "memory");
+}

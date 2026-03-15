@@ -256,7 +256,7 @@ void kernel_main(void* mb_info) {
 	    kprintf("\nType anything you want: ");
 
 	    // Use scanset to read until newline
-	    if (kscanf(" %[^\n]", tt) > 0) {
+	    if (kscanf(" %127[^\n]", tt) > 0) {
 	        kprintf("You typed: %s\n", tt);
 	    }
 	}

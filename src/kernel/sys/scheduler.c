@@ -17,6 +17,7 @@
 #include <kernel/memory/heap.h>
 #include <kernel/debug.h>
 #include <klibc/string.h>
+#include <klibc/stdio.h>
 
 static thread_t* g_current_thread = NULL;
 static thread_t* g_ready_queue_head = NULL;
@@ -29,6 +30,9 @@ static thread_t* g_idle_thread = NULL;
 static process_t* g_idle_process = NULL;
 
 static bool g_scheduler_enabled = false;
+
+static void sched_add_dead(thread_t* thread);
+static void sched_add_sleep(thread_t* thread);
 
 /*
  * idle_thread_entry - The main function for the idle thread
@@ -83,6 +87,11 @@ bool sched_active(void) {
 void sched_add(thread_t* thread) {
     if (!thread) return;
 
+    if (thread->state == THREAD_STATE_DEAD) {
+        sched_add_dead(thread);
+        return;
+    }
+
     thread->state = THREAD_STATE_READY;
     thread->sched_next = NULL;
 
@@ -131,6 +140,67 @@ static void sched_add_dead(thread_t* thread) {
     
     thread->sched_next = g_dead_queue_head;
     g_dead_queue_head = thread;
+}
+
+/*
+ * sched_remove_process - Removes all threads belonging to a process from all scheduler queues
+ */
+void sched_remove_process(process_t* proc) {
+    if (!proc) return;
+
+    // Remove from ready queue
+    thread_t* prev = NULL;
+    thread_t* curr = g_ready_queue_head;
+    while (curr) {
+        if (curr->process == proc) {
+            if (prev) {
+                prev->sched_next = curr->sched_next;
+            } else {
+                g_ready_queue_head = curr->sched_next;
+            }
+            if (g_ready_queue_tail == curr) {
+                g_ready_queue_tail = prev;
+            }
+            curr = curr->sched_next;
+        } else {
+            prev = curr;
+            curr = curr->sched_next;
+        }
+    }
+
+    // Remove from sleep queue
+    prev = NULL;
+    curr = g_sleep_queue_head;
+    while (curr) {
+        if (curr->process == proc) {
+            if (prev) {
+                prev->sched_next = curr->sched_next;
+            } else {
+                g_sleep_queue_head = curr->sched_next;
+            }
+            curr = curr->sched_next;
+        } else {
+            prev = curr;
+            curr = curr->sched_next;
+        }
+    }
+
+    // Remove from dead queue
+    prev = NULL;
+    curr = g_dead_queue_head;
+    while (curr) {
+        if (curr->process == proc) {
+            if (prev) {
+                prev->sched_next = curr->sched_next;
+            } else {
+                g_dead_queue_head = curr->sched_next;
+            }
+            curr = curr->sched_next;
+        } else {
+            prev = curr;
+            curr = curr->sched_next;
+        }
+    }
 }
 
 /*
@@ -207,7 +277,7 @@ cpu_context_t* sched_schedule(cpu_context_t* current_context) {
             }
             if (proc->tty) {
                 char term_msg[128];
-                int len = snprintf_(term_msg, sizeof(term_msg), 
+                int len = ksnprintf(term_msg, sizeof(term_msg), 
                                    "\n[Process %s (PID %u) has terminated]\n", 
                                    proc->name, proc->pid);
                 tty_write(proc->tty, term_msg, (size_t)len);
@@ -217,14 +287,24 @@ cpu_context_t* sched_schedule(cpu_context_t* current_context) {
     }
 
     // Pick next thread from ready queue
-    thread_t* next_thread = g_ready_queue_head;
-    if (next_thread) {
+    thread_t* next_thread = NULL;
+    while (g_ready_queue_head) {
+        next_thread = g_ready_queue_head;
         g_ready_queue_head = next_thread->sched_next;
         if (!g_ready_queue_head) {
             g_ready_queue_tail = NULL;
         }
         next_thread->sched_next = NULL;
-    } else {
+
+        if (next_thread->state == THREAD_STATE_DEAD) {
+            sched_add_dead(next_thread);
+            next_thread = NULL;
+        } else {
+            break;
+        }
+    }
+    
+    if (!next_thread) {
         // No ready threads, run idle thread
         next_thread = g_idle_thread;
     }
