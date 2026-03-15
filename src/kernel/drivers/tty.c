@@ -147,13 +147,18 @@ void tty_switch(tty_t* tty) {
 }
 
 /*
- * tty_cycle - Cycles focus to the next available TTY.
+ * tty_cycle - Cycles focus to the next available non-hidden TTY.
  */
 void tty_cycle(void) {
     ensure_lock_init();
     bool flags = spinlock_acquire(&g_tty_list_lock);
-    if (g_active_tty && g_active_tty->next) {
-        tty_switch(g_active_tty->next);
+    if (g_active_tty) {
+        tty_t* next = g_active_tty->next;
+        // Skip hidden TTYs and stop if we've wrapped back to current
+        while (next != g_active_tty && next->hidden)
+            next = next->next;
+        if (next != g_active_tty && !next->hidden)
+            tty_switch(next);
     }
     spinlock_release(&g_tty_list_lock, flags);
 }

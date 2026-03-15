@@ -23,6 +23,7 @@
 #include <kernel/drivers/tty.h>
 #include <kernel/drivers/pci.h>
 #include <kernel/drivers/xhci.h>
+#include <kernel/drivers/dashboard.h>
 #include <kernel/memory/heap.h>
 #include <kernel/memory/slab.h>
 #include <kernel/sys/process.h>
@@ -39,7 +40,7 @@
 // Forward declaration of userspace app launcher
 extern void uapps(void);
 
-#define TOTAL_DBG 25
+#define TOTAL_DBG 26
 
 static char* KERNEL_VERSION = "v2.0.0";
 
@@ -240,6 +241,11 @@ void kernel_main(void* mb_info) {
 	// Create userspace processes and threads
 	uapps();
 	QEMU_LOG("Created userspace processes and threads", TOTAL_DBG);
+
+	// Initialize kernel dashboard
+	dash_init();
+	kprintf("[KERNEL] Dashboard ready (CTRL+SHIFT+ESC)\n");
+	QEMU_LOG("Initialized kernel dashboard (CTRL+SHIFT+ESC)", TOTAL_DBG);
 
 	// Enable interrupts
 

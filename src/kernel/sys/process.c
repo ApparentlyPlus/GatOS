@@ -170,6 +170,7 @@ process_t* process_create(const char* name, tty_t* existing_tty) {
         proc->tty = tty_create();
         if (!proc->tty) goto map_fail;
         tty_header_init(proc->tty, 3);
+        proc->tty->hidden = false;
         process_header_update(proc);
     }
 

@@ -37,6 +37,8 @@ typedef struct tty {
     struct tty* next;
     struct tty* prev;
 
+    bool hidden; // if true, excluded from Alt+Tab cycle
+
 } tty_t;
 
 // Public API
