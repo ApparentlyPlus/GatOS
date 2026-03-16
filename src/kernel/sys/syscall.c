@@ -77,8 +77,7 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
                 break;
             }
 
-            if (len > 4096) len = 4096;
-
+            if (len > 65536) len = 65536;
             char* kbuf = kmalloc(len);
             if (!kbuf) {
                 registers[14] = (uint64_t)-1;
