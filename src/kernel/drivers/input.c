@@ -44,7 +44,7 @@ void input_handle_key(key_event_t event) {
 
     // Alt + F4: Close the current virtual terminal (if not protected)
     if ((event.modifiers & MOD_ALT) && event.keycode == KEY_F4) {
-        if (g_active_tty && g_active_tty != g_kernel_tty) {
+        if (g_active_tty && g_active_tty != g_kernel_tty && !is_dash_tty()) {
             tty_destroy(g_active_tty);
         }
         return;

@@ -291,6 +291,10 @@ static void dash_thread_fn(void* arg) {
 
 #pragma region Dashboard API
 
+bool is_dash_tty(void) {
+    return g_active_tty == g_dtty;
+}
+
 /*
  * dash_toggle - Toggles the visibility of the dashboard
  */
