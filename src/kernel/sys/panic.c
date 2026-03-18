@@ -6,182 +6,141 @@
 
 #include <arch/x86_64/cpu/interrupts.h>
 #include <kernel/drivers/console.h>
-#include <klibc/stdio.h>
-#include <kernel/drivers/tty.h>
-#include <kernel/memory/heap.h>
-#include <kernel/debug.h>
+#include <kernel/drivers/serial.h>
 #include <kernel/sys/panic.h>
+#include <kernel/debug.h>
+#include <klibc/stdio.h>
+#include <klibc/string.h>
 #include <stdarg.h>
 
 /*
- * halt_system - Halts the CPU indefinitely.
+ * halt_system - Halts the CPU indefinitely
  */
 void halt_system(void)
 {
-    while (1) {
-        __asm__ volatile("hlt");
-    }
+    while (1) __asm__ volatile("hlt");
 }
 
 /*
- * print_exception_name - Prints a human-readable name for the given exception vector.
+ * exc_name - Returns a human-readable name for an exception vector
  */
-void print_exception_name(uint64_t vector)
+static const char* exc_name(uint64_t vec)
 {
-    char* names[] = {
-        "Divide By Zero",           // 0
-        "Debug",                    // 1
-        "Non-Maskable Interrupt",   // 2
-        "Breakpoint",               // 3
-        "Overflow",                 // 4
-        "Bound Range Exceeded",     // 5
-        "Invalid Opcode",           // 6
-        "Device Not Available",     // 7
-        "Double Fault",             // 8
-        "Coprocessor Segment",      // 9
-        "Invalid TSS",              // 10
-        "Segment Not Present",      // 11
-        "Stack-Segment Fault",      // 12
-        "General Protection",       // 13
-        "Page Fault",               // 14
-        "Reserved",                 // 15
-        "x87 FPU Error",            // 16
-        "Alignment Check",          // 17
-        "Machine Check",            // 18
-        "SIMD Exception",           // 19
+    static const char* names[] = {
+        "Divide-by-Zero",       "Debug",               "NMI",
+        "Breakpoint",           "Overflow",             "Bound Range",
+        "Invalid Opcode",       "Device Not Available", "Double Fault",
+        "Coprocessor Segment",  "Invalid TSS",          "Segment Not Present",
+        "Stack-Segment Fault",  "General Protection",   "Page Fault",
+        "Reserved",             "x87 FPU Error",        "Alignment Check",
+        "Machine Check",        "SIMD Exception",
     };
-    
-    if (vector < sizeof(names)/sizeof(names[0])) {
-        kprintf("%s (#%lu)", names[vector], vector);
-    } else if (vector < 32) {
-        kprintf("Reserved Exception (#%lu)", vector);
-    } else {
-        kprintf("Interrupt (#%lu)", vector);
-    }
+    if (vec < sizeof(names) / sizeof(names[0])) return names[vec];
+    if (vec < 32) return "Reserved Exception";
+    return "External Interrupt";
 }
 
+/*
+ * panic_log - Writes panic info unconditionally to the serial port
+ */
+static void panic_log(const char* msg, cpu_context_t* ctx)
+{
+    LOGF("\n*** KERNEL PANIC ***\n");
+    LOGF("REASON: %s\n", msg);
+    if (ctx)
+        LOGF("%s (#%lu)  ERR=0x%lx  RIP=0x%016lx\n",
+             exc_name(ctx->vector_number),
+             ctx->vector_number,
+             ctx->error_code,
+             ctx->iret_rip);
+    LOGF("********************\n");
+}
+
+/*
+ * panic_c - Core panic handler: logs to serial, then renders the crash screen.
+ */
 void panic_c(const char* message, cpu_context_t* context)
 {
+    int i;
+    int pad;
+
     disable_interrupts();
-    
-    // Check if memory managers and TTY are up. If not, use concise serial output.
-    if (heap_kernel_get() == NULL || g_active_tty == NULL) {
-        LOGF("\n******************* KERNEL PANIC *******************\n");
-        LOGF("REASON: %s\n", message);
-        if (context) {
-            LOGF("EXCEPTION: %lu, ERROR: 0x%lx, RIP: 0x%lx\n", 
-                 context->vector_number, context->error_code, context->iret_rip);
+    panic_log(message, context);
+
+    uint16_t screen_width = (uint16_t)con_crash_width();
+
+    con_crash_clear(CONSOLE_COLOR_RED);
+
+    #define HEADER_MSG "Oh no! Your GatOS ventured into undefined behavior and never returned :("
+    #define SEP_MSG    "---"
+
+    con_crash_puts("\n");
+
+    pad = (screen_width - (int)kstrlen(HEADER_MSG)) / 2;
+    for (i = 0; i < pad; i++) con_crash_puts(" ");
+    con_crash_puts(HEADER_MSG "\n");
+
+    con_crash_puts("\n");
+
+    pad = (screen_width - (int)kstrlen(SEP_MSG)) / 2;
+    for (i = 0; i < pad; i++) con_crash_puts(" ");
+    con_crash_puts(SEP_MSG "\n");
+
+    con_crash_printf("[+] Reason: %s\n", message);
+
+    if (context) {
+        con_crash_printf("[+] Exception: %s (#%lu)\n",
+                         exc_name(context->vector_number),
+                         context->vector_number);
+        con_crash_printf("[+] Error Code: 0x%04lx\n", context->error_code);
+
+        if (context->vector_number == INT_PAGE_FAULT) {
+            uint64_t cr2;
+            __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+            con_crash_printf("[+] CR2 (fault addr): 0x%016lx\n", cr2);
+            con_crash_printf("[+] Access: %s  Mode: %s  Cause: %s\n",
+                (context->error_code & 0x02) ? "write"      : "read",
+                (context->error_code & 0x04) ? "user"       : "supervisor",
+                (context->error_code & 0x01) ? "protection" : "not-present");
+            if (context->error_code & 0x08) con_crash_puts("[+] Reserved bit set in PTE\n");
+            if (context->error_code & 0x10) con_crash_puts("[+] Caused by instruction fetch\n");
         }
-        LOGF("****************************************************\n");
+
+        con_crash_printf("\nInstruction Pointer:\n");
+        con_crash_printf("  RIP: 0x%016lx\n", context->iret_rip);
+        con_crash_printf("  CS:  0x%04lx\n",  context->iret_cs);
+        con_crash_printf("  RSP: 0x%016lx\n", context->iret_rsp);
+        con_crash_printf("  SS:  0x%04lx\n",  context->iret_ss);
+
+
+        uint64_t fl = context->iret_flags;
+        con_crash_printf("\nCPU Flags (RFLAGS): 0x%016lx\n", fl);
+        con_crash_printf("  Flags:%s%s%s%s%s%s%s%s%s\n",
+            (fl & (1 <<  0)) ? " CF" : "",
+            (fl & (1 <<  2)) ? " PF" : "",
+            (fl & (1 <<  4)) ? " AF" : "",
+            (fl & (1 <<  6)) ? " ZF" : "",
+            (fl & (1 <<  7)) ? " SF" : "",
+            (fl & (1 <<  8)) ? " TF" : "",
+            (fl & (1 <<  9)) ? " IF" : "",
+            (fl & (1 << 10)) ? " DF" : "",
+            (fl & (1 << 11)) ? " OF" : "");
     } else {
-        // Setup the screen
-        console_enable_cursor(false);
-        console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_RED);
-        console_clear(CONSOLE_COLOR_RED);
-        
-        uint16_t screen_width = console_get_width();
-        int i; // Loop counter (C89 safe)
-
-        // Define the header messages
-        const char* header_msg = "Oh no! Your GatOS ventured into undefined behavior and never returned :(";
-        const char* sep_msg = "---";
-        const char* footer_msg = "SYSTEM HALTED";
-        
-        // lengths
-        int header_len = 72;
-        int sep_len = 3;
-        int footer_len = 13;
-
-        // Print Header
-        int pad_header = (screen_width - header_len) / 2;
-        if (pad_header < 0) pad_header = 0;
-
-        kprintf("\n");
-        for (i = 0; i < pad_header; i++) kprintf(" ");
-        kprintf("%s\n", header_msg);
-
-        // Print Separator
-        int pad_sep = (screen_width - sep_len) / 2;
-        if (pad_sep < 0) pad_sep = 0;
-
-        kprintf("\n");
-        for (i = 0; i < pad_sep; i++) kprintf(" ");
-        kprintf("%s\n", sep_msg);
-        
-        // Print Body
-        kprintf("\n");
-        kprintf("[+] Reason: %s\n", message);
-        
-        if (context != NULL) {
-            kprintf("[+] Exception: ");
-            print_exception_name(context->vector_number);
-            kprintf("\n");
-            kprintf("[+] Error Code: 0x%04lx\n", context->error_code);
-            
-            // For page faults
-            if (context->vector_number == INT_PAGE_FAULT) {
-                uint64_t cr2;
-                __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
-                kprintf("\n");
-                kprintf("Page Fault Details:\n");
-                kprintf("  Faulting Address (CR2): 0x%016lx\n", cr2);
-                kprintf("  Access Type: %s\n", (context->error_code & 0x02) ? "Write" : "Read");
-                kprintf("  Mode: %s\n", (context->error_code & 0x04) ? "User" : "Supervisor");
-                kprintf("  Cause: %s\n", (context->error_code & 0x01) ? 
-                       "Protection violation" : "Page not present");
-                if (context->error_code & 0x08)
-                    kprintf("  Reserved bit set in page table entry\n");
-                if (context->error_code & 0x10)
-                    kprintf("  Caused by instruction fetch\n");
-            }
-            
-            // IP
-            kprintf("\n");
-            kprintf("Instruction Pointer:\n");
-            kprintf("  RIP: 0x%016lx\n", context->iret_rip);
-            kprintf("  CS:  0x%04lx\n", context->iret_cs);
-            
-            // CPU flags
-            kprintf("\n");
-            kprintf("CPU Flags (RFLAGS): 0x%016lx\n", context->iret_flags);
-            kprintf("  Flags: ");
-            if (context->iret_flags & (1 << 0)) kprintf("CF ");
-            if (context->iret_flags & (1 << 2)) kprintf("PF ");
-            if (context->iret_flags & (1 << 4)) kprintf("AF ");
-            if (context->iret_flags & (1 << 6)) kprintf("ZF ");
-            if (context->iret_flags & (1 << 7)) kprintf("SF ");
-            if (context->iret_flags & (1 << 8)) kprintf("TF ");
-            if (context->iret_flags & (1 << 9)) kprintf("IF ");
-            if (context->iret_flags & (1 << 10)) kprintf("DF ");
-            if (context->iret_flags & (1 << 11)) kprintf("OF ");
-            kprintf("\n");
-            
-        }
-        else{
-            kprintf("\n[-] No CPU context available\n");
-        }
-        
-        int pad_footer = (screen_width - footer_len) / 2;
-        if (pad_footer < 0) pad_footer = 0;
-
-        kprintf("\n");
-        for (i = 0; i < pad_footer; i++) kprintf(" ");
-        kprintf("%s", footer_msg);
-
-        LOGF("\n******************* KERNEL PANIC *******************\n");
-        LOGF("REASON: %s\n", message);
-        if (context) {
-            LOGF("EXCEPTION: %lu, ERROR: 0x%lx, RIP: 0x%lx\n", 
-                 context->vector_number, context->error_code, context->iret_rip);
-        }
-        LOGF("****************************************************\n");
+        con_crash_puts("\n(no CPU context)\n");
     }
-    
+
+    con_crash_puts("\n");
+
+    #define FOOTER_MSG "SYSTEM HALTED"
+    pad = (screen_width - (int)kstrlen(FOOTER_MSG)) / 2;
+    for (i = 0; i < pad; i++) con_crash_puts(" ");
+    con_crash_puts(FOOTER_MSG "\n");
+
     halt_system();
 }
 
 /*
- * panic - Simple panic function without context.
+ * panic - Simple panic with no CPU context
  */
 void panic(const char* message)
 {
@@ -189,16 +148,27 @@ void panic(const char* message)
 }
 
 /*
- * panicf - Formatted panic function without context.
+ * panicf - Formatted panic with no CPU context
  */
 void panicf(const char* fmt, ...)
 {
-    char buffer[512];
+    char buf[512];
     va_list args;
-    
     va_start(args, fmt);
-    kvsnprintf(buffer, sizeof(buffer), fmt, args);
+    kvsnprintf(buf, sizeof(buf), fmt, args);
     va_end(args);
-    
-    panic_c(buffer, NULL);
+    panic_c(buf, NULL);
+}
+
+/*
+ * panicf_c - Formatted panic preserving the CPU context for the crash screen
+ */
+void panicf_c(cpu_context_t* context, const char* fmt, ...)
+{
+    char buf[512];
+    va_list args;
+    va_start(args, fmt);
+    kvsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    panic_c(buf, context);
 }

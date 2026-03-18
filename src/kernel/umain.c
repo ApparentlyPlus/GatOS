@@ -21,5 +21,5 @@ void uapps(void) {
     sched_add(thread_create(proc, "thread_b", demo_threadB, NULL, true, 0));
 
     process_t* proc2 = process_create("donut", NULL);
-    sched_add(thread_create(proc2, "thread_a", donut_sim, NULL, true, 0));
+    sched_add(thread_create(proc2, "donut_thread", donut_sim, NULL, true, 0));
 }

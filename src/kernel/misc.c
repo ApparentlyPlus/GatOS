@@ -108,30 +108,6 @@ void print_test_banner(char* KERNEL_VERSION){
 }
 
 /*
- * int_to_str - Converts integer to string representation
- */
-int int_to_str(int num, char *str) {
-    int i = 0, sign = num;
-    if (num < 0) num = -num;  // Make num positive
-    
-    do {  // Generate digits in reverse order
-        str[i++] = num % 10 + '0';
-    } while ((num /= 10) > 0);
-    
-    if (sign < 0) str[i++] = '-';  // Add sign if needed
-    str[i] = '\0';  // Null-terminate
-    
-    // Reverse the string
-    for (int j = 0, k = i - 1; j < k; j++, k--) {
-        char c = str[j];
-        str[j] = str[k];
-        str[k] = c;
-    }
-
-	return i;
-}
-
-/*
  * get_rip - Retrieves current instruction pointer value
  */
 uintptr_t get_rip() {

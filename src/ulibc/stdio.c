@@ -994,6 +994,15 @@ int uvscanf_(const char* format, va_list va) {
             format++;
         }
 
+        int max_width = -1;
+        if (isdigit((unsigned char)*format)) {
+            max_width = 0;
+            while (isdigit((unsigned char)*format)) {
+                max_width = max_width * 10 + (*format - '0');
+                format++;
+            }
+        }
+
         // Handle scansets %[...]
         if (*format == '[') {
             format++;
@@ -1021,6 +1030,10 @@ int uvscanf_(const char* format, va_list va) {
                 if (invert) in_set = !in_set;
                 
                 if (!in_set || ch == '\n') {
+                    _ungetchar(ch);
+                    break;
+                }
+                if (max_width != -1 && matched >= max_width) {
                     _ungetchar(ch);
                     break;
                 }
@@ -1065,6 +1078,10 @@ int uvscanf_(const char* format, va_list va) {
                 
                 int matched = 0;
                 while (ch != 0 && !isspace(ch)) {
+                    if (max_width != -1 && matched >= max_width) {
+                        _ungetchar(ch);
+                        break;
+                    }
                     if (!suppress) *p++ = (char)ch;
                     matched++;
                     ch = u_getchar();

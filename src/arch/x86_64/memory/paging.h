@@ -52,10 +52,12 @@
 #define PAGE_PCD            (1ULL << 4)  // Page Cache Disable
 #define PAGE_ACCESSED       (1ULL << 5)
 #define PAGE_DIRTY          (1ULL << 6)
+#define PAGE_HUGE           (1ULL << 7)
 #define PAGE_GLOBAL         (1ULL << 8)
 #define PAGE_NO_EXECUTE     (1ULL << 63)
 
 #define PAGE_SIZE           0x1000UL
+#define PAGE_2MB            0x200000UL
 #define PAGE_ENTRIES        512
 #define FRAME_MASK          0xFFFFF000
 #define ADDR_MASK           0x000FFFFFFFFFF000UL
@@ -87,13 +89,13 @@
 
 #define CEIL_DIV(x, y) (((x) + (y) - 1) / (y)) // this is hacky and must be removed eventually
 
-uintptr_t align_up(uintptr_t val, uintptr_t align);
-uintptr_t align_down(uintptr_t val, uintptr_t align);
+/*
+ * invlpg - Invalidate a single TLB entry for the given virtual address
+ */
+static inline void invlpg(void* addr) {
+    __asm__ volatile("invlpg (%0)" :: "r"(addr) : "memory");
+}
 
-uint64_t get_kstart(bool virtual);
-uint64_t get_kend(bool virtual);
-uint64_t get_linker_kend(bool virtual);
-uint64_t get_linker_kstart(bool virtual);
 uint64_t get_physmap_start(void);
 uint64_t get_physmap_end(void);
 
@@ -102,15 +104,17 @@ uint64_t reserve_required_tablespace(multiboot_parser_t* multiboot);
 uint64_t* getPML4();
 
 void flush_tlb(void);
-void PMT_switch(uint64_t pml4);
-void dbg_dump_pmt(void);
+void PML4_switch(uint64_t pml4);
+void QEMU_DUMP_PML4(void);
 
 void unmap_identity();
 void cleanup_kernel_page_tables(uintptr_t start, uintptr_t end);
 void build_physmap();
 
 typedef struct{
-    uint64_t total_RAM;
+    uint64_t total_RAM;   // usable RAM (PMM boundary)
+    uint64_t fb_phys;     // framebuffer physical base (crash console)
+    uint64_t fb_size;     // framebuffer size in bytes
     uint64_t total_pages;
     uintptr_t tables_base;
     uint64_t total_PTs;
@@ -118,12 +122,6 @@ typedef struct{
     uint64_t total_PDPTs;
     uint64_t total_PML4s;
 } physmapInfo;
-
-extern uintptr_t KPHYS_END;
-extern uintptr_t KPHYS_START;
-
-static uint64_t KSTART = (uint64_t)&KPHYS_START;
-static uint64_t KEND = (uint64_t)&KPHYS_END;
 
 static physmapInfo physmapStruct = {0};
 #endif

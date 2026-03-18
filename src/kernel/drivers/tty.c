@@ -9,6 +9,7 @@
  */
 
 #include <kernel/drivers/tty.h>
+#include <kernel/drivers/ldisc.h>
 #include <kernel/memory/heap.h>
 #include <kernel/sys/scheduler.h>
 #include <kernel/sys/panic.h>
@@ -68,7 +69,12 @@ tty_t* tty_create(void) {
         return NULL;
     }
 
-    con_init(console);
+    // Try to initialize console
+    if (!con_init(console)) {
+        kfree(console);
+        kfree(tty);
+        return NULL;
+    }
     tty_init(tty, console);
 
     // Add to global linked list
@@ -141,13 +147,18 @@ void tty_switch(tty_t* tty) {
 }
 
 /*
- * tty_cycle - Cycles focus to the next available TTY.
+ * tty_cycle - Cycles focus to the next available non-hidden TTY.
  */
 void tty_cycle(void) {
     ensure_lock_init();
     bool flags = spinlock_acquire(&g_tty_list_lock);
-    if (g_active_tty && g_active_tty->next) {
-        tty_switch(g_active_tty->next);
+    if (g_active_tty) {
+        tty_t* next = g_active_tty->next;
+        // Skip hidden TTYs and stop if we've wrapped back to current
+        while (next != g_active_tty && next->hidden)
+            next = next->next;
+        if (next != g_active_tty && !next->hidden)
+            tty_switch(next);
     }
     spinlock_release(&g_tty_list_lock, flags);
 }
@@ -238,4 +249,42 @@ void tty_header_init(tty_t* tty, size_t rows) {
 void tty_header_write(tty_t* tty, size_t row, const char* text, uint8_t fg, uint8_t bg) {
     if (!tty || !tty->console) return;
     con_header_write(tty->console, row, text, fg, bg);
+}
+
+/*
+ * ldisc_init - Resets the line discipline state.
+ */
+void ldisc_init(ldisc_t* ld) {
+    kmemset(ld->line_buffer, 0, LDISC_LINE_MAX);
+    ld->pos = 0;
+    ld->echo = true;
+}
+
+/*
+ * ldisc_input - Processes a character through the line discipline.
+ * Handled characters are eventually pushed to the TTY read buffer.
+ */
+void ldisc_input(tty_t* tty, char c) {
+    ldisc_t* ld = &tty->ldisc;
+
+    if (c == '\b') {
+        if (ld->pos > 0) {
+            ld->pos--;
+            if (ld->echo && tty->console) con_putc(tty->console, '\b');
+        }
+        return;
+    }
+
+    if (c == '\n' || c == '\r') {
+        if (ld->echo && tty->console) con_putc(tty->console, '\n');
+        for (uint32_t i = 0; i < ld->pos; i++) tty_push_char_raw(tty, ld->line_buffer[i]);
+        tty_push_char_raw(tty, '\n');
+        ld->pos = 0;
+        return;
+    }
+
+    if (ld->pos < LDISC_LINE_MAX - 1) {
+        ld->line_buffer[ld->pos++] = c;
+        if (ld->echo && tty->console) con_putc(tty->console, c);
+    }
 }

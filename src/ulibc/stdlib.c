@@ -115,6 +115,14 @@ static inline bool block_valid(block_t *b) {
 #pragma region Free List
 
 static void fl_remove(block_t *b) {
+    if (b->prev_free && b->prev_free->next_free != b) {
+        // Crash loudly, no kernel panic available here
+        *(volatile int*)0 = 0;
+    }
+    if (b->next_free && b->next_free->prev_free != b) {
+        *(volatile int*)0 = 0;
+    }
+
     if (b->prev_free) b->prev_free->next_free = b->next_free;
     else              g_heap.free_list = b->next_free;
     if (b->next_free) b->next_free->prev_free = b->prev_free;
@@ -363,7 +371,10 @@ static void heap_init(void) {
 static void *heap_alloc(size_t size, bool zero) {
     heap_init();
 
+    size_t orig_size = size;
     size = align_up(size, BLOCK_ALIGN);
+    if (size < orig_size) return NULL; // Overflow
+    
     if (size < MIN_BLOCK_SIZE) size = MIN_BLOCK_SIZE;
 
     // First-fit from sorted free list
@@ -464,6 +475,10 @@ void *realloc(void *ptr, size_t size) {
     }
 
     size_t aligned = align_up(size, BLOCK_ALIGN);
+    if (aligned < size) {
+        ulock_release(&g_heap_lock);
+        return NULL;
+    }
     if (aligned < MIN_BLOCK_SIZE) aligned = MIN_BLOCK_SIZE;
 
     // Shrink in place

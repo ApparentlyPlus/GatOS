@@ -9,6 +9,7 @@
 
 #include <kernel/drivers/input.h>
 #include <kernel/drivers/tty.h>
+#include <kernel/drivers/dashboard.h>
 #include <kernel/debug.h>
 
 /*
@@ -26,7 +27,15 @@ void input_handle_key(key_event_t event) {
     if (!event.pressed) return;
 
     // Handle System Hotkeys
-    
+
+    // CTRL+SHIFT+ESC: Toggle kernel dashboard
+    if ((event.modifiers & MOD_CTRL) &&
+        (event.modifiers & MOD_SHIFT) &&
+        event.keycode == KEY_ESC) {
+        dash_toggle();
+        return;
+    }
+
     // Alt + Tab: Cycle through virtual terminals
     if ((event.modifiers & MOD_ALT) && event.keycode == KEY_TAB) {
         tty_cycle();
@@ -35,7 +44,7 @@ void input_handle_key(key_event_t event) {
 
     // Alt + F4: Close the current virtual terminal (if not protected)
     if ((event.modifiers & MOD_ALT) && event.keycode == KEY_F4) {
-        if (g_active_tty && g_active_tty != g_kernel_tty) {
+        if (g_active_tty && g_active_tty != g_kernel_tty && !is_dash_tty()) {
             tty_destroy(g_active_tty);
         }
         return;

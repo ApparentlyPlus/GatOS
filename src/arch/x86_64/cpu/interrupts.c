@@ -17,7 +17,6 @@
 #include <kernel/sys/process.h>
 #include <kernel/debug.h>
 #include <kernel/misc.h>
-#include <klibc/string.h>
 #include <kernel/memory/pmm.h>
 #include <arch/x86_64/memory/paging.h>
 
@@ -51,22 +50,6 @@ void irq_register(uint8_t vector, irq_handler_t handler)
 void irq_unregister(uint8_t vector)
 {
     g_irq_handlers[vector] = NULL;
-}
-
-/*
- * enable_interrupts - Enable CPU interrupts (STI)
- */
-void enable_interrupts()
-{
-    __asm__ volatile("sti");
-}
-
-/*
- * disable_interrupts - Disable CPU interrupts (CLI)
- */
-void disable_interrupts()
-{
-    __asm__ volatile("cli");
 }
 
 #pragma endregion
@@ -154,34 +137,6 @@ void idt_init(void)
 #pragma region Dispatcher
 
 /*
- * interrupts_save - Disables interrupts and returns whether they were enabled
- */
-bool interrupts_save(void)
-{
-    uint64_t rflags;
-    __asm__ volatile("pushfq; popq %0" : "=r"(rflags));
-    
-    // Check bit 9 (Interrupt Flag)
-    bool enabled = (rflags >> 9) & 1;
-    
-    if (enabled) {
-        disable_interrupts();
-    }
-    
-    return enabled;
-}
-
-/*
- * interrupts_restore - Restores interrupt state based on previous value
- */
-void interrupts_restore(bool enabled)
-{
-    if (enabled) {
-        enable_interrupts();
-    }
-}
-
-/*
  * interrupt_dispatcher - Central C handler called by assembly stubs.
  */
 cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
@@ -198,6 +153,24 @@ cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
     // If a driver or kernel subsystem has registered a handler, this is the time to invoke it
     if (g_irq_handlers[vec] != NULL) {
         context = g_irq_handlers[vec](context);
+        if (!context) {
+            panic("IRQ handler returned NULL context");
+        }
+
+        // Validate iret frame CS and SS to catch smashed frames before iretq faults
+        uint16_t cs = (uint16_t)context->iret_cs;
+        uint16_t ss = (uint16_t)context->iret_ss;
+        if ((cs & 3) == 0) {
+            if (cs != KERNEL_CS)
+                panicf_c(context, "Bad kernel CS in iret frame (cs=0x%04x ss=0x%04x vec=%lu)", cs, ss, vec);
+            if (ss != 0 && ss != KERNEL_DS)
+                panicf_c(context, "Bad kernel SS in iret frame (ss=0x%04x cs=0x%04x vec=%lu)", ss, cs, vec);
+        } else {
+            if (cs != USER_CS)
+                panicf_c(context, "Bad user CS in iret frame (cs=0x%04x ss=0x%04x vec=%lu)", cs, ss, vec);
+            if (ss != USER_DS)
+                panicf_c(context, "Bad user SS in iret frame (ss=0x%04x cs=0x%04x vec=%lu)", ss, cs, vec);
+        }
 
         // If it was a hardware interrupt, we must ack it
         // Exceptions (0-31) generally do not need EOI
@@ -259,6 +232,7 @@ cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
                 uint64_t phys_base;
                 if (pmm_alloc(PAGE_SIZE, &phys_base) == PMM_OK) {
                     uint64_t page_aligned_cr2 = cr2 & ~(PAGE_SIZE - 1);
+                    kmemset((void*)PHYSMAP_P2V(phys_base), 0, PAGE_SIZE);
                     vmm_status_t status = vmm_map_page(demand_vmm, phys_base, (void*)page_aligned_cr2, demand_obj->flags);
                     if (status == VMM_OK) {
                         return context; // Success, retry instruction

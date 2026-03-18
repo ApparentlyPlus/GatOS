@@ -21,6 +21,9 @@
 #include <kernel/sys/userspace.h>
 #include <kernel/drivers/input.h>
 #include <kernel/drivers/tty.h>
+#include <kernel/drivers/pci.h>
+#include <kernel/drivers/xhci.h>
+#include <kernel/drivers/dashboard.h>
 #include <kernel/memory/heap.h>
 #include <kernel/memory/slab.h>
 #include <kernel/sys/process.h>
@@ -37,9 +40,9 @@
 // Forward declaration of userspace app launcher
 extern void uapps(void);
 
-#define TOTAL_DBG 24
+#define TOTAL_DBG 26
 
-static char* KERNEL_VERSION = "v1.9.5-alpha";
+static char* KERNEL_VERSION = "v2.0.0";
 
 // If it is a test build, the multiboot buffer will be defined in tests.c
 #ifndef TEST_BUILD
@@ -100,10 +103,14 @@ void kernel_main(void* mb_info) {
 	unmap_identity();
 	QEMU_LOG("Unmapped identity mapping, only higher half remains", TOTAL_DBG);
 
-	// Build the physmap (mapping of all physical RAM into virtual space)
+	// Build the physmap (mapping of all physical RAM + framebuffer into virtual space)
 
 	build_physmap();
 	QEMU_LOG("Built physmap at PHYSMAP_VIRTUAL_BASE", TOTAL_DBG);
+
+	// console_init is heap free
+	console_init(&multiboot);
+	QEMU_LOG("Initialized console", TOTAL_DBG);
 
 	// Initialize physical memory manager
 
@@ -177,11 +184,6 @@ void kernel_main(void* mb_info) {
     syscall_init();
 	QEMU_LOG("Initialized Syscall Interface", TOTAL_DBG);
 
-	// Initialize Framebuffer Console hardware
-
-	console_init(&multiboot);
-	QEMU_LOG("Initialized Framebuffer Console hardware", TOTAL_DBG);
-
 	// Initialize Kernel TTY
     tty_t* k_tty = tty_create();
     if (!k_tty) panic("Failed to create kernel TTY!");
@@ -222,6 +224,15 @@ void kernel_main(void* mb_info) {
 	QEMU_LOG("Initialized Keyboard and routed IRQ 1", TOTAL_DBG);
 	kprintf("[KBD] Keyboard IRQ 1 routed and unmasked.\n");
 
+	// Initialize PCI subsystem and USB/xHCI stack
+	pci_init();
+	if (xhci_init()) {
+		QEMU_LOG("Initialized USB xHCI keyboard", TOTAL_DBG);
+	} else {
+		QEMU_LOG("No USB xHCI keyboard found (falling back to PS/2)", TOTAL_DBG);
+		kprintf("[XHCI] No USB keyboard detected; PS/2 remains active.\n");
+	}
+
 	// Initialize Multitasking
     process_init();
     sched_init();
@@ -230,6 +241,11 @@ void kernel_main(void* mb_info) {
 	// Create userspace processes and threads
 	uapps();
 	QEMU_LOG("Created userspace processes and threads", TOTAL_DBG);
+
+	// Initialize kernel dashboard
+	dash_init();
+	kprintf("[KERNEL] Dashboard ready (CTRL+SHIFT+ESC)\n");
+	QEMU_LOG("Initialized kernel dashboard (CTRL+SHIFT+ESC)", TOTAL_DBG);
 
 	// Enable interrupts
 
@@ -246,7 +262,7 @@ void kernel_main(void* mb_info) {
 	    kprintf("\nType anything you want: ");
 
 	    // Use scanset to read until newline
-	    if (kscanf(" %[^\n]", tt) > 0) {
+	    if (kscanf(" %127[^\n]", tt) > 0) {
 	        kprintf("You typed: %s\n", tt);
 	    }
 	}

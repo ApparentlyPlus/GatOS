@@ -306,7 +306,8 @@ def run_qemu(iso_file: Path, headless: bool = False, timeout: Optional[int] = No
     args = [
         "-cdrom", str(iso_file),
         "-serial", "mon:stdio",
-        "-serial", f"file:{DEBUG_LOG}"
+        "-serial", f"file:{DEBUG_LOG}",
+        "-cpu", "kvm64,+smep,+smap"
     ]
     
     if headless:

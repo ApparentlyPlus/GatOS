@@ -14,21 +14,66 @@
 #include <arch/x86_64/cpu/gdt.h>
 #include <arch/x86_64/cpu/cpu.h>
 #include <arch/x86_64/cpu/msr.h>
+#include <arch/x86_64/cpu/interrupts.h>
 #include <kernel/memory/heap.h>
 #include <kernel/debug.h>
+#include <klibc/avl.h>
 #include <klibc/string.h>
+#include <klibc/stdio.h>
 
 static thread_t* g_current_thread = NULL;
 static thread_t* g_ready_queue_head = NULL;
 static thread_t* g_ready_queue_tail = NULL;
 
-static thread_t* g_sleep_queue_head = NULL;
-static thread_t* g_dead_queue_head = NULL;
+static avl_tree_t g_sleep_tree;
+static thread_t*  g_dead_queue_head = NULL;
 
 static thread_t* g_idle_thread = NULL;
 static process_t* g_idle_process = NULL;
 
 static bool g_scheduler_enabled = false;
+
+// Lazy FPU, track which thread's state is live in the FPU hardware
+static thread_t* g_fpu_owner = NULL;
+
+/*
+ * sleep_cmp - Comparison function for the sleep tree
+ */
+static int sleep_cmp(const avl_node_t* a, const avl_node_t* b) {
+    const thread_t* ta = AVL_ENTRY(a, thread_t, sleep_node);
+    const thread_t* tb = AVL_ENTRY(b, thread_t, sleep_node);
+    if (ta->sleep_until < tb->sleep_until) return -1;
+    if (ta->sleep_until > tb->sleep_until) return  1;
+    if (ta->tid < tb->tid) return -1;
+    if (ta->tid > tb->tid) return  1;
+    return 0;
+}
+
+/*
+ * fpu_nm_handler - Handles the FPU not available interrupt
+ */
+static cpu_context_t* fpu_nm_handler(cpu_context_t* ctx) {
+    __asm__ volatile("clts" ::: "memory");
+
+    if (!g_current_thread) {
+        if (g_fpu_owner) {
+            __asm__ volatile("fxsave %0" : "=m"(g_fpu_owner->fpu_state));
+            g_fpu_owner = NULL;
+        }
+        return ctx;
+    }
+
+    if (g_fpu_owner != g_current_thread) {
+        if (g_fpu_owner)
+            __asm__ volatile("fxsave %0" : "=m"(g_fpu_owner->fpu_state));
+        __asm__ volatile("fxrstor %0" :: "m"(g_current_thread->fpu_state));
+        g_fpu_owner = g_current_thread;
+    }
+    return ctx;
+}
+
+static void sched_add_dead(thread_t* thread);
+static void sched_add_sleep(thread_t* thread);
 
 /*
  * idle_thread_entry - The main function for the idle thread
@@ -61,11 +106,13 @@ void sched_init(void) {
     g_current_thread = thread_create_bootstrap(kernel_proc, "kernel_main");
     if (!g_current_thread) panic("Failed to bootstrap kernel main thread!");
 
-    // Allocate a dedicated kernel stack for kernel_main so it has its own safe space 
-    // when switched back from userspace threads. This also ensures the idle thread can have its own stack.
-    g_current_thread->kernel_stack = kmalloc(KERNEL_STACK_SIZE);
-    if (!g_current_thread->kernel_stack) panic("Failed to allocate kernel stack for kernel_main!");
-    kmemset(g_current_thread->kernel_stack, 0, KERNEL_STACK_SIZE);
+    // Use the boot stack for kernel_main to keep the current execution stack valid.
+    // The boot stack is 32 KiB; we treat the top 16 KiB as the kernel stack.
+    extern char KERNEL_STACK_TOP;
+    g_current_thread->kernel_stack = (void *)((uintptr_t)&KERNEL_STACK_TOP - KERNEL_STACK_SIZE);
+
+    avl_init(&g_sleep_tree, sleep_cmp);
+    irq_register(INT_DEVICE_NOT_AVAILABLE, fpu_nm_handler);
 
     g_scheduler_enabled = true;
     LOGF("[SCHED] Scheduler initialized and enabled.\n");
@@ -84,6 +131,11 @@ bool sched_active(void) {
 void sched_add(thread_t* thread) {
     if (!thread) return;
 
+    if (thread->state == THREAD_STATE_DEAD) {
+        sched_add_dead(thread);
+        return;
+    }
+
     thread->state = THREAD_STATE_READY;
     thread->sched_next = NULL;
 
@@ -97,31 +149,12 @@ void sched_add(thread_t* thread) {
 }
 
 /*
- * sched_add_sleep - Adds a thread to the scheduler's sleep queue, sorted by wake time
+ * sched_add_sleep - Inserts a thread into the AVL sleep tre
  */
 static void sched_add_sleep(thread_t* thread) {
     if (!thread) return;
-    
     thread->sched_next = NULL;
-    
-    if (!g_sleep_queue_head) {
-        g_sleep_queue_head = thread;
-        return;
-    }
-    
-    if (thread->sleep_until < g_sleep_queue_head->sleep_until) {
-        thread->sched_next = g_sleep_queue_head;
-        g_sleep_queue_head = thread;
-        return;
-    }
-    
-    thread_t* current = g_sleep_queue_head;
-    while (current->sched_next && current->sched_next->sleep_until <= thread->sleep_until) {
-        current = current->sched_next;
-    }
-    
-    thread->sched_next = current->sched_next;
-    current->sched_next = thread;
+    avl_insert(&g_sleep_tree, &thread->sleep_node);
 }
 
 /*
@@ -132,6 +165,60 @@ static void sched_add_dead(thread_t* thread) {
     
     thread->sched_next = g_dead_queue_head;
     g_dead_queue_head = thread;
+}
+
+/*
+ * sched_remove_process - Removes all threads belonging to a process from all scheduler queues
+ */
+void sched_remove_process(process_t* proc) {
+    if (!proc) return;
+
+    // Remove from ready queue
+    thread_t* prev = NULL;
+    thread_t* curr = g_ready_queue_head;
+    while (curr) {
+        if (curr->process == proc) {
+            if (prev) {
+                prev->sched_next = curr->sched_next;
+            } else {
+                g_ready_queue_head = curr->sched_next;
+            }
+            if (g_ready_queue_tail == curr) {
+                g_ready_queue_tail = prev;
+            }
+            curr = curr->sched_next;
+        } else {
+            prev = curr;
+            curr = curr->sched_next;
+        }
+    }
+
+    // Remove from sleep tree
+    avl_node_t* sn = avl_min(&g_sleep_tree);
+    while (sn) {
+        thread_t* t = AVL_ENTRY(sn, thread_t, sleep_node);
+        avl_node_t* next_sn = avl_next(sn);
+        if (t->process == proc)
+            avl_remove(&g_sleep_tree, sn);
+        sn = next_sn;
+    }
+
+    // Remove from dead queue
+    prev = NULL;
+    curr = g_dead_queue_head;
+    while (curr) {
+        if (curr->process == proc) {
+            if (prev) {
+                prev->sched_next = curr->sched_next;
+            } else {
+                g_dead_queue_head = curr->sched_next;
+            }
+            curr = curr->sched_next;
+        } else {
+            prev = curr;
+            curr = curr->sched_next;
+        }
+    }
 }
 
 /*
@@ -146,9 +233,6 @@ cpu_context_t* sched_schedule(cpu_context_t* current_context) {
     if (g_current_thread) {
         g_current_thread->context = current_context;
         g_current_thread->fs_base = read_msr(MSR_FS_BASE);
-        
-        // Save FPU state
-        __asm__ volatile ("fxsave %0" : "=m"(g_current_thread->fpu_state));
 
         if (g_current_thread->state == THREAD_STATE_RUNNING) {
             g_current_thread->state = THREAD_STATE_READY;
@@ -163,10 +247,14 @@ cpu_context_t* sched_schedule(cpu_context_t* current_context) {
     }
 
     // Wake up sleeping threads
-    while (g_sleep_queue_head && now >= g_sleep_queue_head->sleep_until) {
-        thread_t* thread = g_sleep_queue_head;
-        g_sleep_queue_head = thread->sched_next;
-        sched_add(thread);
+    avl_node_t* sn = avl_min(&g_sleep_tree);
+    while (sn) {
+        thread_t* sleeper = AVL_ENTRY(sn, thread_t, sleep_node);
+        if (sleeper->sleep_until > now) break;
+        avl_node_t* next_sn = avl_next(sn);
+        avl_remove(&g_sleep_tree, sn);
+        sched_add(sleeper);
+        sn = next_sn;
     }
 
     // Capture the old process before we potentially destroy it
@@ -197,7 +285,10 @@ cpu_context_t* sched_schedule(cpu_context_t* current_context) {
         if (thread == g_current_thread) {
             g_current_thread = NULL;
         }
-        
+        if (thread == g_fpu_owner) {
+            g_fpu_owner = NULL;
+        }
+
         thread_destroy(thread);
         
         // Reap process if it has no more threads
@@ -208,7 +299,7 @@ cpu_context_t* sched_schedule(cpu_context_t* current_context) {
             }
             if (proc->tty) {
                 char term_msg[128];
-                int len = snprintf_(term_msg, sizeof(term_msg), 
+                int len = ksnprintf(term_msg, sizeof(term_msg), 
                                    "\n[Process %s (PID %u) has terminated]\n", 
                                    proc->name, proc->pid);
                 tty_write(proc->tty, term_msg, (size_t)len);
@@ -218,14 +309,24 @@ cpu_context_t* sched_schedule(cpu_context_t* current_context) {
     }
 
     // Pick next thread from ready queue
-    thread_t* next_thread = g_ready_queue_head;
-    if (next_thread) {
+    thread_t* next_thread = NULL;
+    while (g_ready_queue_head) {
+        next_thread = g_ready_queue_head;
         g_ready_queue_head = next_thread->sched_next;
         if (!g_ready_queue_head) {
             g_ready_queue_tail = NULL;
         }
         next_thread->sched_next = NULL;
-    } else {
+
+        if (next_thread->state == THREAD_STATE_DEAD) {
+            sched_add_dead(next_thread);
+            next_thread = NULL;
+        } else {
+            break;
+        }
+    }
+    
+    if (!next_thread) {
         // No ready threads, run idle thread
         next_thread = g_idle_thread;
     }
@@ -244,21 +345,33 @@ cpu_context_t* sched_schedule(cpu_context_t* current_context) {
     g_current_thread = next_thread;
     g_current_thread->state = THREAD_STATE_RUNNING;
 
+    // fpu_nm_handler will lazily restore state on first use
+    set_cr0_ts();
+
     // Update Hardware State
     if (g_current_thread->kernel_stack) {
         uint64_t stack_top = (uint64_t)g_current_thread->kernel_stack + KERNEL_STACK_SIZE;
         tss_set_rsp0(stack_top);
-        
+
         // Update local CPU structure for syscall entries
         g_cpu_local.kernel_stack = stack_top;
     }
-    
-    write_msr(MSR_FS_BASE, g_current_thread->fs_base);
-    
-    // Restore FPU state
-    __asm__ volatile ("fxrstor %0" :: "m"(g_current_thread->fpu_state));
 
-    return g_current_thread->context;
+    write_msr(MSR_FS_BASE, g_current_thread->fs_base);
+
+    cpu_context_t *next_ctx = g_current_thread->context;
+    if (next_ctx) {
+        uint16_t cs = (uint16_t)next_ctx->iret_cs;
+        uint16_t ss = (uint16_t)next_ctx->iret_ss;
+        bool is_user = (cs & 3) == 3;
+        if (!is_user && (cs != KERNEL_CS || (ss != 0 && ss != KERNEL_DS)))
+            panicf_c(next_ctx, "sched: corrupt kernel ctx for '%s' (cs=0x%x ss=0x%x)",
+                     g_current_thread->name, cs, ss);
+        if (is_user && (cs != USER_CS || ss != USER_DS))
+            panicf_c(next_ctx, "sched: corrupt user ctx for '%s' (cs=0x%x ss=0x%x)",
+                     g_current_thread->name, cs, ss);
+    }
+    return next_ctx;
 }
 
 /*

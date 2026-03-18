@@ -17,6 +17,8 @@
 #include <kernel/memory/vmm.h>
 #include <kernel/drivers/tty.h>
 #include <kernel/debug.h>
+#include <kernel/memory/heap.h>
+#include <klibc/string.h>
 
 extern void syscall_entry(void);
 
@@ -70,18 +72,39 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
             const char* buf = (const char*)registers[9];
             size_t len = (size_t)registers[10];
 
+            if (!buf || len == 0) {
+                registers[14] = (uint64_t)-1;
+                break;
+            }
+
+            if (len > 65536) len = 65536;
+            char* kbuf = kmalloc(len);
+            if (!kbuf) {
+                registers[14] = (uint64_t)-1;
+                break;
+            }
+
+            bool ints = interrupts_save();
             if (!vmm_check_buffer(current->process->vmm, buf, len, VM_FLAG_USER)) {
+                interrupts_restore(ints);
+                kfree(kbuf);
                 LOGF("[SYSCALL] SYS_WRITE: Invalid buffer pointer 0x%lx (len: %zu) from thread '%s' (PID %u)\n", 
                      (uintptr_t)buf, len, current->name, current->process ? current->process->pid : 0);
                 sched_exit();
                 break;
             }
+            smap_allow();
+            kmemcpy(kbuf, buf, len);
+            smap_deny();
+            interrupts_restore(ints);
 
             // We need to verify the buffer is in user space
             // For now, let's just use the process's TTY if it has one.
             if (current->process && current->process->tty) {
-                tty_write(current->process->tty, buf, len);
+                tty_write(current->process->tty, kbuf, len);
             }
+            kfree(kbuf);
+            registers[14] = (uint64_t)len;
             break;
         }
             
@@ -90,6 +113,9 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
             size_t length = (size_t)registers[10];
             size_t vm_flags = (size_t)registers[11];
             
+            size_t user_allowed_flags = VM_FLAG_WRITE | VM_FLAG_EXEC | VM_FLAG_LAZY;
+            vm_flags &= user_allowed_flags;
+
             void* out_addr = NULL;
             vmm_status_t status;
             
@@ -114,14 +140,6 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
             break;
         }
         
-        case SYS_SET_FS_BASE: {
-            uint64_t base = registers[9];
-            current->fs_base = base;
-            write_msr(MSR_FS_BASE, base);
-            registers[14] = 0;
-            break;
-        }
-
         case SYS_YIELD:
             sched_yield();
             break;
@@ -159,11 +177,32 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
                 break;
             }
 
-            size_t n = tty_read(tty, buf, count);
+            char* kbuf = kmalloc(count);
+            if (!kbuf) {
+                registers[14] = (uint64_t)-1;
+                break;
+            }
+
+            size_t n = tty_read(tty, kbuf, count);
+
+            bool ints = interrupts_save();
+            if (!vmm_check_buffer(current->process->vmm, buf, n, VM_FLAG_USER | VM_FLAG_WRITE)) {
+                interrupts_restore(ints);
+                kfree(kbuf);
+                sched_exit();
+                break;
+            }
+
+            smap_allow();
+            kmemcpy(buf, kbuf, n);
+            smap_deny();
+            interrupts_restore(ints);
+            kfree(kbuf);
+
             registers[14] = (uint64_t)n;
             break;
         }
-
+        
         case SYS_TTY_CTRL: {
             uint64_t cmd  = registers[9];
             uint64_t arg2 = registers[10];
@@ -198,6 +237,19 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
                     registers[14] = (uint64_t)-1;
                     break;
             }
+            break;
+        }
+
+        case SYS_SET_FS_BASE: {
+            uint64_t base = registers[9];
+            // Disallow setting FS base to values in the kernel space range to prevent abuse
+            if (base >= 0x0000800000000000ULL) {
+                registers[14] = (uint64_t)-1;
+                break;
+            }
+            current->fs_base = base;
+            write_msr(MSR_FS_BASE, base);
+            registers[14] = 0;
             break;
         }
 

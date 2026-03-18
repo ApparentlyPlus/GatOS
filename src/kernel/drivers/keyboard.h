@@ -79,4 +79,32 @@ bool keyboard_get_event(key_event_t* out_event);
 cpu_context_t* keyboard_handler(cpu_context_t* ctx); // To be called from ISR
 
 // Layout translation (US QWERTY default)
-char keyboard_keycode_to_ascii(key_event_t event);
+static const char layout_us_qwerty[] = {
+    0, 0, '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '=', 0,
+    0, 'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '[', ']', '\n',
+    0, 'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', '\'', '`',
+    0, '\\', 'z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/', 0,
+    '*', 0, ' ', 0
+};
+
+static const char layout_us_qwerty_shift[] = {
+    0, 0, '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+', 0,
+    0, 'Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P', '{', '}', '\n',
+    0, 'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', ':', '\"', '~',
+    0, '|', 'Z', 'X', 'C', 'V', 'B', 'N', 'M', '<', '>', '?', 0,
+    '*', 0, ' ', 0
+};
+
+static inline char keyboard_keycode_to_ascii(key_event_t event) {
+    if (event.keycode > KEY_CAPSLOCK) return 0;
+
+    bool shift = (event.modifiers & MOD_SHIFT) != 0;
+    bool caps  = (event.locks & LOCK_CAPS) != 0;
+
+    bool upper = shift;
+    if (event.keycode >= KEY_Q && event.keycode <= KEY_P) upper ^= caps;
+    if (event.keycode >= KEY_A && event.keycode <= KEY_L) upper ^= caps;
+    if (event.keycode >= KEY_Z && event.keycode <= KEY_M) upper ^= caps;
+
+    return upper ? layout_us_qwerty_shift[event.keycode] : layout_us_qwerty[event.keycode];
+}

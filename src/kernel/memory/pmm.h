@@ -53,9 +53,10 @@ typedef struct {
 
 // Free block header stored at the start of each free block
 typedef struct {
-    uint32_t magic; 
+    uint32_t magic;
     uint32_t order;
     uint64_t next_phys;
+    uint64_t prev_phys;
 } pmm_free_header_t;
 
 

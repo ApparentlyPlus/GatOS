@@ -117,7 +117,7 @@ void demo_threadB(void* arg) {
 
     printf("What's your name?\n> ");
     char name[100];
-    scanf("%[^\n]", name);
+    scanf(" %99[^\n]", name);
     printf("> Nice to meet you, %s!\n\n", name);
     printf("Press ALT+F4 to terminate this TTY session.\n");
 }
