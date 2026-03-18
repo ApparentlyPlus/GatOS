@@ -20,80 +20,195 @@
 static tty_t* g_dtty;
 static tty_t* g_prev;
 
-#pragma region Low Level Helpers
+#pragma region Layout
 
 /*
- * emit - Emits a string to the console without acquiring locks or refreshing
+ * layout_t - All column/field widths derived from con->width.
+ *
+ *   gap     = W/55, min 2          — uniform inter-column spacing
+ *   key_w   = W/10, min 12         — key label width (kv / kv2)
+ *   val2_w  = W/2 - key_w - 5      — left-value field in kv2 (right pair starts at W/2)
+ *   bar_w   = W/8,  min 10         — bar interior width
+ *   pid_w   = 4
+ *   name_w  = W/5,  min 14
+ *   thr_w   = 3
+ *   mem_w   = W/18, min 8
+ *   tnw     = pid_w + name_w - 10
+ *   state_w = W/14, min 14
  */
+typedef struct {
+    int W;
+    int gap;
+    int key_w;
+    int val2_w;
+    int bar_w;
+    int pid_w;
+    int name_w;
+    int thr_w;
+    int mem_w;
+    int tnw;
+    int state_w;
+} layout_t;
+
+static layout_t make_layout(int W) {
+    layout_t L;
+    L.W       = W;
+    L.gap     = W / 55; if (L.gap     <  2) L.gap     =  2;
+    L.key_w   = W / 10; if (L.key_w   < 12) L.key_w   = 12;
+    L.val2_w  = W / 2 - L.key_w - 5;
+                        if (L.val2_w  < 14) L.val2_w  = 14;
+    L.bar_w   = W / 8;  if (L.bar_w   < 10) L.bar_w   = 10;
+    L.pid_w   = 4;
+    L.name_w  = W / 5;  if (L.name_w  < 14) L.name_w  = 14;
+    L.thr_w   = 3;
+    L.mem_w   = W / 18; if (L.mem_w   <  8) L.mem_w   =  8;
+    L.tnw     = L.pid_w + L.name_w - 10;
+                        if (L.tnw     <  8) L.tnw     =  8;
+    L.state_w = W / 14; if (L.state_w < 14) L.state_w = 14;
+    return L;
+}
+
+#pragma region Low Level Helpers
+
 static void emit(console_t* con, const char* s) {
     while (*s) con_putc(con, *s++);
 }
 
-/*
- * cl - Sets the color of the console
- */
 static void cl(console_t* con, uint8_t fg, uint8_t bg) {
     con_set_color(con, fg, bg);
 }
 
+/* pct_color - Traffic-light color for a 0–100 percentage */
+static uint8_t pct_color(int pct) {
+    if (pct > 80) return CONSOLE_COLOR_LIGHT_RED;
+    if (pct > 50) return CONSOLE_COLOR_YELLOW;
+    return CONSOLE_COLOR_LIGHT_GREEN;
+}
+
 /*
- * section - Draws a section heading
+ * section - Colored title followed by a dim horizontal rule to end of line.
+ *   "  TITLE ─────────────────────────────────────"
  */
-static void section(console_t* con, const char* name) {
-    cl(con, CONSOLE_COLOR_LIGHT_CYAN, CONSOLE_COLOR_BLACK);
+static void section(console_t* con, const layout_t* L, const char* name) {
+    cl(con, CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     emit(con, "  ");
     emit(con, name);
+    emit(con, " ");
+
+    /* measure name length to fill the rest of the line */
+    int name_len = 0;
+    for (const char* p = name; *p; p++) name_len++;
+    int fill = L->W - 3 - name_len;
+    cl(con, CONSOLE_COLOR_DARK_GRAY, CONSOLE_COLOR_BLACK);
+    for (int i = 0; i < fill && i < 256; i++) emit(con, "\xe2\x94\x80"); /* U+2500 ─ */
     con_putc(con, '\n');
     cl(con, CONSOLE_COLOR_LIGHT_GRAY, CONSOLE_COLOR_BLACK);
 }
 
 #pragma region Key Value Helpers
 
-#define KW  "%-13s"
-#define KV2W "%-20s"
-
 /*
- * kv - Draws a key-value pair in the console
+ * kv - Key in dim gray, value in white.
+ *   "  key          : value"
  */
-static void kv(console_t* con, const char* k, const char* v) {
-    char buf[256];
-    ksnprintf(buf, sizeof(buf), "  " KW " : %s\n", k, v);
+static void kv(console_t* con, const layout_t* L, const char* k, const char* v) {
+    char buf[64];
+    ksnprintf(buf, sizeof(buf), "  %-*s : ", L->key_w, k);
+    cl(con, CONSOLE_COLOR_DARK_GRAY, CONSOLE_COLOR_BLACK);
     emit(con, buf);
+    cl(con, CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
+    emit(con, v);
+    con_putc(con, '\n');
 }
 
 /*
- * kv2 - Draws two key-value pairs on the same line in the console
+ * kv2 - Two key-value pairs on one line; right pair starts at column W/2.
  */
-static void kv2(console_t* con, const char* k1, const char* v1, const char* k2, const char* v2) {
-    char buf[256];
-    ksnprintf(buf, sizeof(buf), "  " KW " : " KV2W "  " KW " : %s\n",
-              k1, v1, k2, v2);
+static void kv2(console_t* con, const layout_t* L,
+                const char* k1, const char* v1,
+                const char* k2, const char* v2) {
+    char buf[64];
+    ksnprintf(buf, sizeof(buf), "  %-*s : ", L->key_w, k1);
+    cl(con, CONSOLE_COLOR_DARK_GRAY, CONSOLE_COLOR_BLACK);
     emit(con, buf);
+    cl(con, CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
+    ksnprintf(buf, sizeof(buf), "%-*s", L->val2_w, v1);
+    emit(con, buf);
+    ksnprintf(buf, sizeof(buf), "  %-*s : ", L->key_w, k2);
+    cl(con, CONSOLE_COLOR_DARK_GRAY, CONSOLE_COLOR_BLACK);
+    emit(con, buf);
+    cl(con, CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
+    emit(con, v2);
+    con_putc(con, '\n');
 }
 
 /*
- * fmtsz - Formats a size in bytes into a human-readable string
+ * kv2c - kv2 with explicit colors for each value (for traffic-light feedback).
+ */
+static void kv2c(console_t* con, const layout_t* L,
+                 const char* k1, const char* v1, uint8_t c1,
+                 const char* k2, const char* v2, uint8_t c2) {
+    char buf[64];
+    ksnprintf(buf, sizeof(buf), "  %-*s : ", L->key_w, k1);
+    cl(con, CONSOLE_COLOR_DARK_GRAY, CONSOLE_COLOR_BLACK);
+    emit(con, buf);
+    cl(con, c1, CONSOLE_COLOR_BLACK);
+    ksnprintf(buf, sizeof(buf), "%-*s", L->val2_w, v1);
+    emit(con, buf);
+    ksnprintf(buf, sizeof(buf), "  %-*s : ", L->key_w, k2);
+    cl(con, CONSOLE_COLOR_DARK_GRAY, CONSOLE_COLOR_BLACK);
+    emit(con, buf);
+    cl(con, c2, CONSOLE_COLOR_BLACK);
+    emit(con, v2);
+    con_putc(con, '\n');
+}
+
+/*
+ * bar - Draws a labeled progress bar.
+ *   "  label        : [####..........] pct%"
+ */
+static void bar(console_t* con, const layout_t* L,
+                const char* label, int pct) {
+    char buf[64];
+    int  filled = pct * L->bar_w / 100;
+
+    ksnprintf(buf, sizeof(buf), "  %-*s : [", L->key_w, label);
+    cl(con, CONSOLE_COLOR_DARK_GRAY, CONSOLE_COLOR_BLACK);
+    emit(con, buf);
+    cl(con, pct_color(pct), CONSOLE_COLOR_BLACK);
+    for (int i = 0; i < L->bar_w; i++) con_putc(con, i < filled ? '#' : '.');
+    cl(con, CONSOLE_COLOR_DARK_GRAY, CONSOLE_COLOR_BLACK);
+    emit(con, "] ");
+    cl(con, pct_color(pct), CONSOLE_COLOR_BLACK);
+    ksnprintf(buf, sizeof(buf), "%d%%\n", pct);
+    emit(con, buf);
+    cl(con, CONSOLE_COLOR_LIGHT_GRAY, CONSOLE_COLOR_BLACK);
+}
+
+/*
+ * fmtsz - Formats a size in bytes to a human-readable string.
  */
 static char* fmtsz(char* buf, size_t n, uint64_t b) {
-    if (b < (1ULL << 20)) ksnprintf(buf, n, "%lu KiB", b >> 10);
-    else                   ksnprintf(buf, n, "%lu MiB", b >> 20);
+    if      (b < (1ULL << 10)) ksnprintf(buf, n, "%lu B",   b);
+    else if (b < (1ULL << 20)) ksnprintf(buf, n, "%lu KiB", b >> 10);
+    else                       ksnprintf(buf, n, "%lu MiB", b >> 20);
     return buf;
 }
 
 #pragma region Dashboard Sections
 
 /*
- * draw_cpu - Draws the CPU section in the console
+ * draw_cpu - CPU vendor, brand, core count, and feature flags.
  */
-static void draw_cpu(console_t* con) {
+static void draw_cpu(console_t* con, const layout_t* L) {
     char b[32];
     const CPUInfo* ci = cpu_get_info();
 
-    con_putc(con, '\n');
-    section(con, "CPU");
+    section(con, L, "CPU");
+
     ksnprintf(b, sizeof(b), "%u", ci->core_count);
-    kv2(con, "Vendor", ci->vendor, "Cores", b);
-    kv(con, "Brand", ci->brand);
+    kv2(con, L, "Vendor", ci->vendor, "Cores", b);
+    kv(con,  L, "Brand",  ci->brand);
 
     static const struct { cpu_feature_t f; const char* n; } feats[] = {
         {CPU_FEAT_PAE,    "PAE"   }, {CPU_FEAT_NX,     "NX"    },
@@ -106,24 +221,24 @@ static void draw_cpu(console_t* con) {
         {CPU_FEAT_SMAP,   "SMAP"  },
     };
 
-    // Emit label in key style, then inline colored feature tokens
-    cl(con, CONSOLE_COLOR_LIGHT_GRAY, CONSOLE_COLOR_BLACK);
-    emit(con, "  Features      :");
+    /* Label aligned with kv key column */
+    ksnprintf(b, sizeof(b), "  %-*s : ", L->key_w, "Features");
+    cl(con, CONSOLE_COLOR_DARK_GRAY, CONSOLE_COLOR_BLACK);
+    emit(con, b);
     for (size_t i = 0; i < sizeof(feats)/sizeof(feats[0]); i++) {
         bool on = (ci->features & feats[i].f) != 0;
         cl(con, on ? CONSOLE_COLOR_LIGHT_GREEN : CONSOLE_COLOR_DARK_GRAY,
                CONSOLE_COLOR_BLACK);
-        emit(con, " ");
         emit(con, feats[i].n);
+        emit(con, " ");
     }
-    cl(con, CONSOLE_COLOR_LIGHT_GRAY, CONSOLE_COLOR_BLACK);
     con_putc(con, '\n');
 }
 
 /*
- * draw_mem - Draws the memory section in the console
+ * draw_mem - Physical memory stats + kernel heap stats with pressure bar.
  */
-static void draw_mem(console_t* con) {
+static void draw_mem(console_t* con, const layout_t* L) {
     char ta[24], ua[24], fa[24], xa[24];
 
     /* --- Physical memory --- */
@@ -139,74 +254,87 @@ static void draw_mem(console_t* con) {
         if (!largest && ps.free_blocks[i]) largest = bsz;
     }
     uint64_t phys_used = phys_total - phys_free;
-    uint64_t frag      = phys_free ? (100 - (largest * 100 / phys_free)) : 0;
+    int      used_pct  = phys_total ? (int)(phys_used * 100 / phys_total) : 0;
+    uint64_t frag      = phys_free  ? (100 - (largest * 100 / phys_free)) : 0;
 
-    section(con, "PHYSICAL MEMORY");
+    section(con, L, "PHYSICAL MEMORY");
 
-    kv2(con, "Total",        fmtsz(ta, sizeof(ta), phys_total),
-             "Used",         fmtsz(ua, sizeof(ua), phys_used));
-    kv2(con, "Free",         fmtsz(fa, sizeof(fa), phys_free),
-             "Frag",         (ksnprintf(xa, sizeof(xa), "%lu%%", frag), xa));
+    kv2c(con, L,
+         "Total", fmtsz(ta, sizeof(ta), phys_total), CONSOLE_COLOR_WHITE,
+         "Used",  fmtsz(ua, sizeof(ua), phys_used),  pct_color(used_pct));
+    kv2c(con, L,
+         "Free",  fmtsz(fa, sizeof(fa), phys_free),  CONSOLE_COLOR_WHITE,
+         "Frag",  (ksnprintf(xa, sizeof(xa), "%lu%%", frag), xa),
+                  pct_color((int)frag));
+    bar(con, L, "Usage", used_pct);
 
-    // kheap
+    /* --- Kernel heap --- */
     size_t ht, hu, hf, ho;
     heap_stats(heap_kernel_get(), &ht, &hu, &hf, &ho);
-    int pct  = ht ? (int)(hu * 100 / ht) : 0;
-    int bars = pct / 5;
+    int heap_pct = ht ? (int)(hu * 100 / ht) : 0;
 
     con_putc(con, '\n');
-    section(con, "KERNEL HEAP");
+    section(con, L, "KERNEL HEAP");
 
-    kv2(con, "Arena",   fmtsz(ta, sizeof(ta), ht), "In use",  fmtsz(ua, sizeof(ua), hu));
-    kv2(con, "Free",    fmtsz(fa, sizeof(fa), hf), "Overhead", (ksnprintf(xa, sizeof(xa), "%lu B", (uint64_t)ho), xa));
-
-    // Arena pressure bar
-    emit(con, "  Pressure      : [");
-    cl(con, pct > 80 ? CONSOLE_COLOR_LIGHT_RED :
-            pct > 50 ? CONSOLE_COLOR_YELLOW     :
-                       CONSOLE_COLOR_LIGHT_GREEN,
-           CONSOLE_COLOR_BLACK);
-    for (int i = 0; i < 20; i++) con_putc(con, i < bars ? '#' : '.');
-    cl(con, CONSOLE_COLOR_LIGHT_GRAY, CONSOLE_COLOR_BLACK);
-    ksnprintf(ta, sizeof(ta), "] %d%%\n", pct);
-    emit(con, ta);
+    kv2c(con, L,
+         "Arena",    fmtsz(ta, sizeof(ta), ht), CONSOLE_COLOR_WHITE,
+         "In use",   fmtsz(ua, sizeof(ua), hu), pct_color(heap_pct));
+    kv2c(con, L,
+         "Free",     fmtsz(fa, sizeof(fa), hf), CONSOLE_COLOR_WHITE,
+         "Overhead", (ksnprintf(xa, sizeof(xa), "%lu B", (uint64_t)ho), xa),
+                     CONSOLE_COLOR_WHITE);
+    bar(con, L, "Pressure", heap_pct);
 }
 
 #pragma region Process/Thread Section
 
 /*
- * state_str - Returns the string representation of a thread state
+ * state_str / state_color - Human-readable label and traffic-light color per state.
  */
 static const char* state_str(thread_state_t s) {
     switch (s) {
         case THREAD_STATE_READY:    return "READY";
-        case THREAD_STATE_RUNNING:  return "RUN  ";
-        case THREAD_STATE_BLOCKED:  return "BLOCK";
-        case THREAD_STATE_SLEEPING: return "SLEEP";
-        case THREAD_STATE_DEAD:     return "DEAD ";
-        default:                    return "?    ";
+        case THREAD_STATE_RUNNING:  return "RUNNING";
+        case THREAD_STATE_BLOCKED:  return "BLOCKED";
+        case THREAD_STATE_SLEEPING: return "SLEEPING";
+        case THREAD_STATE_DEAD:     return "DEAD";
+        default:                    return "?";
+    }
+}
+
+static uint8_t state_color(thread_state_t s) {
+    switch (s) {
+        case THREAD_STATE_RUNNING:  return CONSOLE_COLOR_LIGHT_GREEN;
+        case THREAD_STATE_READY:    return CONSOLE_COLOR_GREEN;
+        case THREAD_STATE_SLEEPING: return CONSOLE_COLOR_YELLOW;
+        case THREAD_STATE_BLOCKED:  return CONSOLE_COLOR_LIGHT_CYAN;
+        case THREAD_STATE_DEAD:     return CONSOLE_COLOR_DARK_GRAY;
+        default:                    return CONSOLE_COLOR_LIGHT_GRAY;
     }
 }
 
 /*
- * draw_procs - Draws the processes section in the console
+ * draw_procs - Scaled process + thread table.
  */
-static void draw_procs(console_t* con) {
-    char buf[160], rss[24];
+static void draw_procs(console_t* con, const layout_t* L) {
+    char buf[512], mem[16], virt_s[16], detail[48];
 
-    section(con, "PROCESSES");
+    section(con, L, "PROCESSES");
 
-    cl(con, CONSOLE_COLOR_DARK_GRAY, CONSOLE_COLOR_BLACK);
-    ksnprintf(buf, sizeof(buf), "  %-4s  %-22s  %7s  %s\n",
-              "PID", "NAME", "THREADS", "RSS");
+    /* Header row */
+    cl(con, CONSOLE_COLOR_LIGHT_CYAN, CONSOLE_COLOR_BLACK);
+    ksnprintf(buf, sizeof(buf), "  %-*s%*s%-*s%*s%*s%*s\n",
+              L->pid_w,  "PID",
+              L->gap,    "",
+              L->name_w, "NAME",
+              L->gap + L->thr_w, "THR",
+              L->gap + L->mem_w, "RSS",
+              L->gap + L->mem_w, "VIRT");
     emit(con, buf);
-    cl(con, CONSOLE_COLOR_LIGHT_GRAY, CONSOLE_COLOR_BLACK);
 
     process_t* proc = process_get_all();
     while (proc) {
-        if (con->cursor_y >= con->height - 2) {
-            break;
-        }
+        if (con->cursor_y >= con->height - 2) break;
 
         int nth = 0;
         for (thread_t* t = proc->threads; t; t = t->next) nth++;
@@ -214,20 +342,61 @@ static void draw_procs(console_t* con) {
         size_t vt = 0, res = 0;
         if (proc->vmm) vmm_stats(proc->vmm, &vt, &res);
 
+        /* Process row: PID in yellow, rest in white */
+        cl(con, CONSOLE_COLOR_YELLOW, CONSOLE_COLOR_BLACK);
+        ksnprintf(buf, sizeof(buf), "  %-*u", L->pid_w, proc->pid);
+        emit(con, buf);
         cl(con, CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
-        ksnprintf(buf, sizeof(buf), "  %-4u  %-22.22s  %7d  %s\n",
-                  proc->pid, proc->name, nth,
-                  fmtsz(rss, sizeof(rss), res));
+        ksnprintf(buf, sizeof(buf), "%*s%-*.*s%*d%*s%*s\n",
+                  L->gap,    "",
+                  L->name_w, L->name_w, proc->name,
+                  L->gap + L->thr_w, nth,
+                  L->gap + L->mem_w, fmtsz(mem,    sizeof(mem),    (uint64_t)res),
+                  L->gap + L->mem_w, fmtsz(virt_s, sizeof(virt_s), (uint64_t)vt));
         emit(con, buf);
 
-        cl(con, CONSOLE_COLOR_LIGHT_GRAY, CONSOLE_COLOR_BLACK);
-        if (con->cursor_y + nth < con->height - 2) {
-            for (thread_t* t = proc->threads; t; t = t->next) {
-                ksnprintf(buf, sizeof(buf),
-                          "        +-- TID %-4u  %-17.22s  [%s]\n",
-                          t->tid, t->name, state_str(t->state));
-                emit(con, buf);
+        /* Thread sub-rows: prefix in dim, state bracket right-aligned in state color */
+        for (thread_t* t = proc->threads; t; t = t->next) {
+            if (con->cursor_y >= con->height - 2) break;
+
+            if (t->state == THREAD_STATE_SLEEPING) {
+                int64_t left = (int64_t)t->sleep_until - (int64_t)get_uptime_ms();
+                ksnprintf(detail, sizeof(detail), "SLEEPING %ldms", left > 0 ? left : 0);
+            } else {
+                ksnprintf(detail, sizeof(detail), "%s", state_str(t->state));
             }
+
+            int badge_w = 20;
+            int left_len = 16 + L->gap + L->tnw;
+            int pad = (L->W - 4) - badge_w - left_len;
+            if (pad < 1) pad = 1;
+
+            cl(con, CONSOLE_COLOR_DARK_GRAY, CONSOLE_COLOR_BLACK);
+            ksnprintf(buf, sizeof(buf), "        \xe2\x94\x94\xe2\x94\x80\xe2\x94\x80 %-*u%*s%-*.*s%*s",
+                      4,       t->tid,
+                      L->gap,  "",
+                      L->tnw,  L->tnw, t->name,
+                      pad,     "");
+            emit(con, buf);
+
+            int dlen = 0;
+            for (char* p = detail; *p; p++) dlen++;
+            if (dlen > badge_w - 2) dlen = badge_w - 2;
+            int lpad = (badge_w - 2 - dlen) / 2;
+            int rpad = badge_w - 2 - dlen - lpad;
+
+            cl(con, CONSOLE_COLOR_DARK_GRAY, CONSOLE_COLOR_BLACK);
+            emit(con, "[");
+            cl(con, state_color(t->state), CONSOLE_COLOR_BLACK);
+            
+            ksnprintf(buf, sizeof(buf), "%*s%.*s%*s", 
+                      lpad ? lpad : 0, "", 
+                      dlen, detail, 
+                      rpad ? rpad : 0, "");
+            emit(con, buf);
+            
+            cl(con, CONSOLE_COLOR_DARK_GRAY, CONSOLE_COLOR_BLACK);
+            emit(con, "]\n");
         }
 
         proc = proc->next;
@@ -236,18 +405,16 @@ static void draw_procs(console_t* con) {
 
 #pragma region Main Draw
 
-/*
- * dash_draw - Draws the main dashboard content
- */
 static void dash_draw(void) {
     console_t* con = g_dtty->console;
 
-    // Update sticky header with current uptime
+    /* Update sticky header with current uptime */
     uint64_t ms = get_uptime_ms();
     uint64_t s  = ms / 1000, m = s / 60, h = m / 60;
     s %= 60; m %= 60;
     char hdr[80];
-    ksnprintf(hdr, sizeof(hdr), "GatOS Kernel Dashboard | Uptime: %02lu:%02lu:%02lu", h, m, s);
+    ksnprintf(hdr, sizeof(hdr), "  GatOS Kernel Dashboard  |  Uptime: %02lu:%02lu:%02lu",
+              h, m, s);
     con_header_write(con, 0, hdr, CONSOLE_COLOR_WHITE, CONSOLE_COLOR_MAGENTA);
 
     tty_t* active = g_active_tty;
@@ -256,17 +423,20 @@ static void dash_draw(void) {
     con_clear(con, CONSOLE_COLOR_BLACK);
     cl(con, CONSOLE_COLOR_LIGHT_GRAY, CONSOLE_COLOR_BLACK);
 
-    draw_cpu(con);
+    layout_t L = make_layout((int)con->width);
+
+    draw_cpu(con, &L);
     con_putc(con, '\n');
-    draw_mem(con);
+    draw_mem(con, &L);
     con_putc(con, '\n');
-    draw_procs(con);
+    draw_procs(con, &L);
+
+    /* Pad remaining rows */
+    cl(con, CONSOLE_COLOR_BLACK, CONSOLE_COLOR_BLACK);
+    while (con->cursor_y < con->height - 1) con_putc(con, '\n');
 
     cl(con, CONSOLE_COLOR_DARK_GRAY, CONSOLE_COLOR_BLACK);
-    while (con->cursor_y < con->height - 1) {
-        con_putc(con, '\n');
-    }
-    emit(con, "  CTRL+SHIFT+ESC to close or ALT+TAB to cycle");
+    emit(con, " CTRL+SHIFT+ESC to close or ALT+TAB to cycle");
 
     g_active_tty = active;
     con_refresh(con);
@@ -274,9 +444,6 @@ static void dash_draw(void) {
 
 #pragma region Dashboard Thread
 
-/*
- * dash_thread_fn - Background thread function for the dashboard
- */
 static void dash_thread_fn(void* arg) {
     (void)arg;
     while (1) {
@@ -284,7 +451,7 @@ static void dash_thread_fn(void* arg) {
             dash_draw();
             sleep_ms(2000);
         } else {
-            sleep_ms(100); /* poll; dashboard opens within 100ms */
+            sleep_ms(100);
         }
     }
 }
@@ -295,9 +462,6 @@ bool is_dash_tty(void) {
     return g_active_tty == g_dtty;
 }
 
-/*
- * dash_toggle - Toggles the visibility of the dashboard
- */
 void dash_toggle(void) {
     if (g_active_tty == g_dtty) {
         tty_switch(g_prev ? g_prev : g_kernel_tty);
@@ -308,19 +472,16 @@ void dash_toggle(void) {
     }
 }
 
-/*
- * dash_init - Initializes the dashboard
- */
 void dash_init(void) {
     g_dtty = tty_create();
     if (!g_dtty) return;
 
-    g_dtty->hidden = true; // exclude from Alt+Tab
+    g_dtty->hidden = true;
 
     con_header_init(g_dtty->console, 1);
     con_header_write(g_dtty->console, 0,
                      "  GatOS Kernel Dashboard",
-                     CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
+                     CONSOLE_COLOR_WHITE, CONSOLE_COLOR_MAGENTA);
     con_enable_cursor(g_dtty->console, false);
 
     process_t* proc = process_create("dashboard", g_dtty);
