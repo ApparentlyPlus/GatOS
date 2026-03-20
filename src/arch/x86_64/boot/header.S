@@ -1,7 +1,10 @@
-# -----------------------------------------------------------------------------
-# Multiboot2 header section
-# This section defines the Multiboot2 header.
-# -----------------------------------------------------------------------------
+# header.S - Multiboot2 header section
+# 
+# This section defines the Multiboot2 header. It also requests a 
+# framebuffer from the bootloader, and defines the end tag to indicate 
+# the end of the header.
+# 
+# Author: u/ApparentlyPlus
 
 .intel_syntax noprefix
 
