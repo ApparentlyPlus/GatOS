@@ -16,29 +16,27 @@
 #include <kernel/debug.h>
 #include <klibc/string.h>
 
-static RSDP2Descriptor* g_rsdp = NULL;
-static uint64_t g_root_sdt_phys = 0; // Physical address of RSDT/XSDT
-static void* g_root_sdt_virt = NULL; // Mapped virtual address
-static bool g_xsdt_supported = false;
+static RSDP2Descriptor* rsdp = NULL;
+static uint64_t rsdt_phys = 0; // Physical address of RSDT/XSDT
+static void* rsdt_virt = NULL; // Mapped virtual address
+static bool xsdt_ok = false;
 
 /*
- * acpi_map_phys - Map a physical address to a virtual one using vmm_alloc.
+ * acpi_map_phys - Map a physical address to a virtual one using vmm_alloc
  * This ensures the address is mapped in a safe, non-conflicting region of kernel memory.
  */
 static void* acpi_map_phys(uint64_t phys_addr, size_t size) {
     if (phys_addr == 0) return NULL;
 
     void* virt_addr = NULL;
-    
-    // Calculate page-aligned boundaries
+
     uint64_t page_offset = phys_addr & (PAGE_SIZE - 1);
     uint64_t base_phys = phys_addr - page_offset;
     size_t map_size = align_up(size + page_offset, PAGE_SIZE);
 
-    // Use vmm_alloc to get a fresh virtual address range in the dynamic kernel area.
     // VM_FLAG_MMIO ensures we treat this as device memory.
     vmm_status_t status = vmm_alloc(NULL, map_size, VM_FLAG_WRITE | VM_FLAG_MMIO, (void*)base_phys, &virt_addr);
-    
+
     if (status != VMM_OK) {
         LOGF("[ACPI ERROR] Failed to map physical address 0x%lx (Status: %d)\n", phys_addr, status);
         return NULL;
@@ -48,14 +46,13 @@ static void* acpi_map_phys(uint64_t phys_addr, size_t size) {
 }
 
 /*
- * acpi_unmap_phys - Unmap a previously mapped physical region.
+ * acpi_unmap_phys - Unmap a previously mapped physical region
  */
 static void acpi_unmap_phys(void* virt) {
     if (!virt) return;
 
-    // Align down to get the base of the allocation provided by vmm_alloc
     void* base_virt = (void*)((uintptr_t)virt & ~(PAGE_SIZE - 1));
-    
+
     vmm_free(NULL, base_virt);
 }
 
@@ -110,36 +107,34 @@ RSDP2Descriptor* acpi_find_rsdp(multiboot_parser_t* parser) {
  * acpi_init - Initialize ACPI by locating and validating the RSDP and root SDT
  */
 bool acpi_init(multiboot_parser_t* parser) {
-    g_rsdp = acpi_find_rsdp(parser);
-    if (!g_rsdp) {
+    rsdp = acpi_find_rsdp(parser);
+    if (!rsdp) {
         panic("Failed to find valid RSDP.\n");
         return false;
     }
 
-    if (g_rsdp->Revision >= 2 && g_rsdp->XsdtAddress != 0) {
-        g_xsdt_supported = true;
-        g_root_sdt_phys = g_rsdp->XsdtAddress;
+    if (rsdp->Revision >= 2 && rsdp->XsdtAddress != 0) {
+        xsdt_ok = true;
+        rsdt_phys = rsdp->XsdtAddress;
     } else {
-        g_xsdt_supported = false;
-        g_root_sdt_phys = (uint64_t)g_rsdp->RsdtAddress;
+        xsdt_ok = false;
+        rsdt_phys = (uint64_t)rsdp->RsdtAddress;
     }
 
-    // Map the header first to get the total length
-    ACPISDTHeader* header = (ACPISDTHeader*)acpi_map_phys(g_root_sdt_phys, sizeof(ACPISDTHeader));
+    ACPISDTHeader* header = (ACPISDTHeader*)acpi_map_phys(rsdt_phys, sizeof(ACPISDTHeader));
     if (!header) {
         panic("Failed to map Root SDT Header.");
     }
-    
+
     uint32_t total_length = header->Length;
     acpi_unmap_phys(header);
 
-    // Now map the full table
-    g_root_sdt_virt = acpi_map_phys(g_root_sdt_phys, total_length);
-    if (!g_root_sdt_virt) {
+    rsdt_virt = acpi_map_phys(rsdt_phys, total_length);
+    if (!rsdt_virt) {
         panic("Failed to map full Root SDT.");
     }
 
-    LOGF("[ACPI] Root SDT mapped at 0x%p (Phys: 0x%lx)\n", g_root_sdt_virt, g_root_sdt_phys);
+    LOGF("[ACPI] Root SDT mapped at 0x%p (Phys: 0x%lx)\n", rsdt_virt, rsdt_phys);
     return true;
 }
 
@@ -147,12 +142,12 @@ bool acpi_init(multiboot_parser_t* parser) {
  * acpi_find_table - Find a specific ACPI table by its signature (e.g., "APIC", "HPET")
  */
 void* acpi_find_table(const char* signature) {
-    if (!g_root_sdt_virt) return NULL;
+    if (!rsdt_virt) return NULL;
 
-    ACPISDTHeader* root_header = (ACPISDTHeader*)g_root_sdt_virt;
+    ACPISDTHeader* root_header = (ACPISDTHeader*)rsdt_virt;
     size_t entries_count = 0;
 
-    if (g_xsdt_supported) {
+    if (xsdt_ok) {
         entries_count = (root_header->Length - sizeof(ACPISDTHeader)) / sizeof(uint64_t);
     } else {
         entries_count = (root_header->Length - sizeof(ACPISDTHeader)) / sizeof(uint32_t);
@@ -161,13 +156,12 @@ void* acpi_find_table(const char* signature) {
     for (size_t i = 0; i < entries_count; i++) {
         uint64_t table_phys = 0;
 
-        if (g_xsdt_supported) {
-            table_phys = ((XSDT*)g_root_sdt_virt)->sdt_addresses[i];
+        if (xsdt_ok) {
+            table_phys = ((XSDT*)rsdt_virt)->sdt_addresses[i];
         } else {
-            table_phys = ((RSDT*)g_root_sdt_virt)->sdt_addresses[i];
+            table_phys = ((RSDT*)rsdt_virt)->sdt_addresses[i];
         }
 
-        // Map header to check signature
         ACPISDTHeader* header_virt = (ACPISDTHeader*)acpi_map_phys(table_phys, sizeof(ACPISDTHeader));
         if (!header_virt) continue;
 
@@ -176,7 +170,6 @@ void* acpi_find_table(const char* signature) {
         acpi_unmap_phys(header_virt);
 
         if (match) {
-            // Found it! Map the full table for the caller.
             return acpi_map_phys(table_phys, length);
         }
     }
@@ -187,6 +180,6 @@ void* acpi_find_table(const char* signature) {
 /*
  * Getters
  */
-RSDP2Descriptor* acpi_get_rsdp(void) { return g_rsdp; }
-void* acpi_get_root_sdt(void) { return g_root_sdt_virt; }
-bool acpi_is_xsdt_supported(void) { return g_xsdt_supported; }
+RSDP2Descriptor* acpi_get_rsdp(void) { return rsdp; }
+void* acpi_get_root_sdt(void) { return rsdt_virt; }
+bool acpi_is_xsdt_supported(void) { return xsdt_ok; }

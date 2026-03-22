@@ -22,13 +22,8 @@
 
 #pragma region Types and Globals
 
-// Global Interrupt Descriptor Table
 interrupt_descriptor idt[IDT_SIZE] = {0};
-
-// Static array of registered interrupt handlers
-static irq_handler_t g_irq_handlers[IDT_SIZE] = {0};
-
-// External assembly handler entry point
+static irq_handler_t irq_handlers[IDT_SIZE] = {0};
 extern char interrupt_handler_0[];
 
 #pragma endregion
@@ -41,7 +36,7 @@ extern char interrupt_handler_0[];
  */
 void irq_register(uint8_t vector, irq_handler_t handler)
 {
-    g_irq_handlers[vector] = handler;
+    irq_handlers[vector] = handler;
 }
 
 /*
@@ -49,7 +44,7 @@ void irq_register(uint8_t vector, irq_handler_t handler)
  */
 void irq_unregister(uint8_t vector)
 {
-    g_irq_handlers[vector] = NULL;
+    irq_handlers[vector] = NULL;
 }
 
 #pragma endregion
@@ -69,9 +64,7 @@ void set_idt_entry(uint8_t vector, void* handler, uint8_t dpl, uint8_t ist_index
     entry->address_high = handler_addr >> 32;
     entry->selector = KERNEL_CS;
     entry->flags = INTERRUPT_GATE | ((dpl & 0b11) << 5) | (1 << 7);
-
-    // IST index (0 means no IST stack switching)
-    entry->ist = ist_index & 0x7;
+    entry->ist = ist_index & 0x7; // 0 = no IST stack switching
 
     entry->reserved = 0;
 }
@@ -93,28 +86,23 @@ void load_idt(void* idt_addr)
 }
 
 /*
- * idt_init - Initialize the Interrupt Descriptor Table.
+ * idt_init - Initialize the Interrupt Descriptor Table
  */
 void idt_init(void)
 {
     // Disable the legacy 8259 PICs to prevent interference with the APIC.
     disable_pic();
 
-    // Populate IDT entries with the assembly stubs
     // The stubs are spaced 16 bytes apart in the interrupt_handler_0 block
     for (size_t i = 0; i < IDT_SIZE; i++)
     {
         void* handler = (void*)((uint64_t)interrupt_handler_0 + (i * 16));
-        
-        // Default: No IST, Ring 0 DPL
         uint8_t ist = 0;
         uint8_t dpl = DPL_RING_0;
 
-        // Use IST 1 for Double Fault
         if (i == INT_DOUBLE_FAULT) {
             ist = 1;
         }
-        // Use IST 2 for Page Fault
         else if (i == INT_PAGE_FAULT) {
             ist = 2;
         }
@@ -126,7 +114,6 @@ void idt_init(void)
         set_idt_entry(i, handler, dpl, ist);
     }
 
-    // Load the IDT into the CPU
     load_idt((void*)idt);
 
     LOGF("[IDT] Interrupt Descriptor Table initialized and loaded.\n");
@@ -137,27 +124,24 @@ void idt_init(void)
 #pragma region Dispatcher
 
 /*
- * interrupt_dispatcher - Central C handler called by assembly stubs.
+ * interrupt_dispatcher - Central C handler called by assembly stubs
  */
 cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
 {
     uint64_t vec = context->vector_number;
    
-    // Here we got harmless spurious interrupts, just ignore them
-    // They do NOT require an EOI
+    // Spurious interrupts do NOT require an EOI
     if (vec == INT_SPURIOUS_INTERRUPT) {
         return context;
     }
 
-    // Here is the general dispatcher logic
-    // If a driver or kernel subsystem has registered a handler, this is the time to invoke it
-    if (g_irq_handlers[vec] != NULL) {
-        context = g_irq_handlers[vec](context);
+    if (irq_handlers[vec] != NULL) {
+        context = irq_handlers[vec](context);
         if (!context) {
             panic("IRQ handler returned NULL context");
         }
 
-        // Validate iret frame CS and SS to catch smashed frames before iretq faults
+        // Validate iret frame CS and SS to catch smashed frames before iretq faults.
         uint16_t cs = (uint16_t)context->iret_cs;
         uint16_t ss = (uint16_t)context->iret_ss;
         if ((cs & 3) == 0) {
@@ -172,15 +156,13 @@ cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
                 panicf_c(context, "Bad user SS in iret frame (ss=0x%04x cs=0x%04x vec=%lu)", ss, cs, vec);
         }
 
-        // If it was a hardware interrupt, we must ack it
-        // Exceptions (0-31) generally do not need EOI
+        // Exceptions (0-31) do not need EOI; hardware interrupts do.
         if (vec >= INT_FIRST_INTERRUPT) {
             lapic_eoi();
         }
         return context;
     }
 
-    // Handle Exceptions
     if (vec < INT_FIRST_INTERRUPT) {
         const char* panic_msg = "Unknown Exception";
         
@@ -205,7 +187,7 @@ cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
             case INT_SIMD_ERROR:           panic_msg = "SIMD exception"; break;
         }
 
-        // Demand Paging: check process VMM first, then kernel VMM as fallback
+        // Demand paging: check process VMM first, then kernel VMM as fallback.
         if (vec == INT_PAGE_FAULT) {
             uint64_t cr2;
             __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
@@ -235,9 +217,9 @@ cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
                     kmemset((void*)PHYSMAP_P2V(phys_base), 0, PAGE_SIZE);
                     vmm_status_t status = vmm_map_page(demand_vmm, phys_base, (void*)page_aligned_cr2, demand_obj->flags);
                     if (status == VMM_OK) {
-                        return context; // Success, retry instruction
+                        return context;
                     } else if (status == VMM_ERR_ALREADY_MAPPED) {
-                        pmm_free(phys_base, PAGE_SIZE); // Already backed by another CPU
+                        pmm_free(phys_base, PAGE_SIZE); // Race: already backed by another CPU
                         return context;
                     } else {
                         pmm_free(phys_base, PAGE_SIZE);
@@ -246,7 +228,6 @@ cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
             }
         }
 
-        // Check if the fault came from Ring 3
         bool is_user = (context->iret_cs & 3) == 3;
 
         if (is_user && sched_active()) {
@@ -258,18 +239,17 @@ cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
                 if (vec == INT_PAGE_FAULT) {
                     uint64_t cr2;
                     __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
-                    
-                    // Special case: if we fault at address 0 with an instruction fetch error,
-                    // it usually means a thread tried to return but the stack return address was 0.
+                    // Fault at address 0 with an instruction fetch usually means a thread
+                    // returned from its entry point with 0 on the stack.
                     if (cr2 == 0 && (context->error_code & 16)) {
-                        len = snprintf_(buf, sizeof(buf), "\n[Thread %u from %s (PID %u)] Returned from entry point (RIP: 0x%lx)\n", 
+                        len = snprintf_(buf, sizeof(buf), "\n[Thread %u from %s (PID %u)] Returned from entry point (RIP: 0x%lx)\n",
                                        current->tid, current->process->name, current->process->pid, context->iret_rip);
                     } else {
-                        len = snprintf_(buf, sizeof(buf), "\n[Thread %u from %s (PID %u)] Segmentation Fault at 0x%lx (RIP: 0x%lx)\n", 
+                        len = snprintf_(buf, sizeof(buf), "\n[Thread %u from %s (PID %u)] Segmentation Fault at 0x%lx (RIP: 0x%lx)\n",
                                        current->tid, current->process->name, current->process->pid, cr2, context->iret_rip);
                     }
                 } else {
-                    len = snprintf_(buf, sizeof(buf), "\n[Thread %u from %s (PID %u)] %s (Vector %lu) at RIP: 0x%lx\n", 
+                    len = snprintf_(buf, sizeof(buf), "\n[Thread %u from %s (PID %u)] %s (Vector %lu) at RIP: 0x%lx\n",
                                    current->tid, current->process->name, current->process->pid, panic_msg, vec, context->iret_rip);
                 }
                 
@@ -278,37 +258,31 @@ cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
                 }
                 LOGF("[USERSPACE FAULT] %s", buf + 1);
 
-                // Terminate the thread and yield
                 current->state = THREAD_STATE_DEAD;
                 return sched_schedule(context);
             }
         }
 
-        // Print extra debug info for specific faults (Kernel space)
         if (vec == INT_PAGE_FAULT) {
             uint64_t cr2;
             __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
 
             LOGF("[EXCEPTION] Page Fault at address: 0x%lx\n", cr2);
             LOGF("CR2 (Fault Address): 0x%lx\n", cr2);
-            LOGF("Error Code: 0x%lx (P:%d W:%d U:%d R:%d I:%d)\n", 
+            LOGF("Error Code: 0x%lx (P:%d W:%d U:%d R:%d I:%d)\n",
                 context->error_code,
-                (context->error_code & 1) ? 1 : 0, // Present
-                (context->error_code & 2) ? 1 : 0, // Write
-                (context->error_code & 4) ? 1 : 0, // User
-                (context->error_code & 8) ? 1 : 0, // Reserved Write
-                (context->error_code & 16)? 1 : 0  // Instruction Fetch
-            );
+                (context->error_code & 1)  ? 1 : 0,
+                (context->error_code & 2)  ? 1 : 0,
+                (context->error_code & 4)  ? 1 : 0,
+                (context->error_code & 8)  ? 1 : 0,
+                (context->error_code & 16) ? 1 : 0);
         }
 
-        // Panic will dump the register state from ctx
         LOGF("[PANIC] %s (Vector %d)\n", panic_msg, (int)vec);
         panic_c(panic_msg, context);
     }
 
-    // Handle Unregistered Hardware Interrupts (Vectors 32+)
-    // If we receive an IRQ but have no handler, we must still ack it to
-    // prevent the APIC from blocking future interrupts.
+    // No handler registered; still must EOI to prevent the APIC from blocking future interrupts.
     else {
         LOGF("[INT] Unhandled interrupt vector: %d\n", vec);
         lapic_eoi();

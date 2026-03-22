@@ -64,7 +64,7 @@ void kernel_test(void* mb_info, char* KERNEL_VERSION) {
 
 	// Memory management setup
 	reserve_required_tablespace(&multiboot);
-	cleanup_kernel_page_tables(0x0, get_kend(false));
+	cleanup_kpt(0x0, get_kend(false));
 	unmap_identity();
 	build_physmap();
 
@@ -112,7 +112,7 @@ void kernel_test(void* mb_info, char* KERNEL_VERSION) {
     if (!k_tty) panic("Failed to create kernel TTY!");
 
 	// Default to Kernel TTY
-	g_active_tty = k_tty;
+	active_tty = k_tty;
 
     input_init();
 

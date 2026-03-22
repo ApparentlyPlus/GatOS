@@ -909,58 +909,58 @@ int ufctprintf(void (*out)(char character, void* arg), void* arg, const char* fo
 // Input Implementation
 
 // Userspace read buffer: one syscall per line, drained char-by-char.
-static char   g_read_buf[256];
-static size_t g_read_head = 0;
-static size_t g_read_tail = 0;
+static char   rbuf[256];
+static size_t rhead = 0;
+static size_t rtail = 0;
 
 // Single-character unget buffer (-1 = empty).
-static int g_next_char = -1;
+static int next_char = -1;
 
-// Protects g_read_buf, g_read_head, g_read_tail, g_next_char.
+// Protects rbuf, rhead, rtail, next_char.
 // Zero-initialized in .user_bss == unlocked.
-static ulock_t g_read_lock;
+static ulock_t rlock;
 
 int u_getchar(void) {
-    ulock_acquire(&g_read_lock);
+    ulock_acquire(&rlock);
 
     // Drain single-char unget buffer first.
-    if (g_next_char != -1) {
-        int ch = g_next_char;
-        g_next_char = -1;
-        ulock_release(&g_read_lock);
+    if (next_char != -1) {
+        int ch = next_char;
+        next_char = -1;
+        ulock_release(&rlock);
         return ch;
     }
 
     // Buffer empty: release the lock before blocking in the kernel, then refill.
-    if (g_read_head == g_read_tail) {
-        ulock_release(&g_read_lock);
-        int64_t n = syscall_read(g_read_buf, sizeof(g_read_buf));
-        ulock_acquire(&g_read_lock);
+    if (rhead == rtail) {
+        ulock_release(&rlock);
+        int64_t n = syscall_read(rbuf, sizeof(rbuf));
+        ulock_acquire(&rlock);
         if (n <= 0) {
-            ulock_release(&g_read_lock);
+            ulock_release(&rlock);
             return -1;
         }
         // Only update indices if another thread hasn't already filled the buffer.
-        if (g_read_head == g_read_tail) {
-            g_read_head = 0;
-            g_read_tail = (size_t)n;
+        if (rhead == rtail) {
+            rhead = 0;
+            rtail = (size_t)n;
         }
     }
 
-    if (g_read_head == g_read_tail) {
-        ulock_release(&g_read_lock);
+    if (rhead == rtail) {
+        ulock_release(&rlock);
         return -1;
     }
 
-    int ch = (unsigned char)g_read_buf[g_read_head++];
-    ulock_release(&g_read_lock);
+    int ch = (unsigned char)rbuf[rhead++];
+    ulock_release(&rlock);
     return ch;
 }
 
 static void _ungetchar(int ch) {
-    ulock_acquire(&g_read_lock);
-    g_next_char = ch;
-    ulock_release(&g_read_lock);
+    ulock_acquire(&rlock);
+    next_char = ch;
+    ulock_release(&rlock);
 }
 
 int uvscanf_(const char* format, va_list va) {

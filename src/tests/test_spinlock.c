@@ -13,8 +13,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-static int g_tests_total  = 0;
-static int g_tests_passed = 0;
+static int ntests  = 0;
+static int npass = 0;
 
 /* Read RFLAGS.IF */
 static inline bool irq_on(void) {
@@ -368,15 +368,15 @@ static bool t_try_churn(void) {
 #pragma region Runner
 
 static void run_test(const char* name, bool (*fn)(void)) {
-    g_tests_total++;
+    ntests++;
     LOGF("[TEST] %-40s ", name);
-    if (fn()) { g_tests_passed++; LOGF("[PASS]\n"); }
+    if (fn()) { npass++; LOGF("[PASS]\n"); }
     else       { LOGF("[FAIL]\n"); }
 }
 
 void test_spinlock(void) {
-    g_tests_total  = 0;
-    g_tests_passed = 0;
+    ntests  = 0;
+    npass = 0;
 
     LOGF("\n--- BEGIN SPINLOCK TEST ---\n");
 
@@ -407,18 +407,18 @@ void test_spinlock(void) {
     run_test("try_acquire churn ×500",       t_try_churn);
 
     LOGF("--- END SPINLOCK TEST ---\n");
-    LOGF("Spinlock Test Results: %d/%d\n\n", g_tests_passed, g_tests_total);
+    LOGF("Spinlock Test Results: %d/%d\n\n", npass, ntests);
 
     #ifdef TEST_BUILD
     #include <kernel/drivers/console.h>
     #include <klibc/stdio.h>
-    if (g_tests_passed != g_tests_total) {
+    if (npass != ntests) {
         console_set_color(CONSOLE_COLOR_RED, CONSOLE_COLOR_BLACK);
-        kprintf("[-] Some spinlock tests failed (%d/%d passed).\n", g_tests_passed, g_tests_total);
+        kprintf("[-] Some spinlock tests failed (%d/%d passed).\n", npass, ntests);
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     } else {
         console_set_color(CONSOLE_COLOR_GREEN, CONSOLE_COLOR_BLACK);
-        kprintf("[+] All spinlock tests passed! (%d/%d)\n", g_tests_passed, g_tests_total);
+        kprintf("[+] All spinlock tests passed! (%d/%d)\n", npass, ntests);
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     }
     #endif

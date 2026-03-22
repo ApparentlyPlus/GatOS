@@ -4,7 +4,7 @@
  * Configures the MSRs for the syscall/sysret instructions and
  * dispatches syscalls from userspace.
  *
- * Author: ApparentlyPlus
+ * Author: u/ApparentlyPlus
  */
 
 #include <kernel/sys/syscall.h>
@@ -23,7 +23,6 @@
 extern void syscall_entry(void);
 
 void syscall_init(void) {
-    // Enable SCE (System Call Enable) bit in EFER
     uint64_t efer = read_msr(MSR_EFER);
     efer |= EFER_SCE; 
     write_msr(MSR_EFER, efer);
@@ -39,7 +38,6 @@ void syscall_init(void) {
     uint64_t star = ((uint64_t)0x10 << 48) | ((uint64_t)0x08 << 32);
     write_msr(MSR_STAR, star);
 
-    // LSTAR MSR - Target RIP for syscall
     write_msr(MSR_LSTAR, (uint64_t)syscall_entry);
 
     // FMASK MSR - RFLAGS to clear on syscall. We clear IF (bit 9), DF (bit 10).
@@ -49,7 +47,7 @@ void syscall_init(void) {
 }
 
 /*
- * syscall_dispatcher - Called from assembly stub.
+ * syscall_dispatcher - Called from assembly stub
  */
 void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
     // registers[0] = r15 ... registers[14] = rax
@@ -63,12 +61,10 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
 
     switch (syscall_num) {
         case SYS_EXIT:
-            // sys_exit: Terminate current thread
             sched_exit();
             break;
             
         case SYS_WRITE: {
-            // sys_write(buffer, length)
             const char* buf = (const char*)registers[9];
             size_t len = (size_t)registers[10];
 
@@ -88,8 +84,7 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
             if (!vmm_check_buffer(current->process->vmm, buf, len, VM_FLAG_USER)) {
                 interrupts_restore(ints);
                 kfree(kbuf);
-                LOGF("[SYSCALL] SYS_WRITE: Invalid buffer pointer 0x%lx (len: %zu) from thread '%s' (PID %u)\n", 
-                     (uintptr_t)buf, len, current->name, current->process ? current->process->pid : 0);
+                LOGF("[SYSCALL] SYS_WRITE: Invalid buffer pointer 0x%lx (len: %zu) from thread '%s' (PID %u)\n", (uintptr_t)buf, len, current->name, current->process ? current->process->pid : 0);
                 sched_exit();
                 break;
             }
@@ -98,8 +93,6 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
             smap_deny();
             interrupts_restore(ints);
 
-            // We need to verify the buffer is in user space
-            // For now, let's just use the process's TTY if it has one.
             if (current->process && current->process->tty) {
                 tty_write(current->process->tty, kbuf, len);
             }
@@ -154,19 +147,15 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
             char*  buf   = (char*)registers[9];
             size_t count = (size_t)registers[10];
 
-            // Reject zero length reads and NULL buffers immediately
             if (!buf || count == 0) {
                 registers[14] = (uint64_t)-1;
                 break;
             }
 
-            // Clamp to a sane per call maximum to prevent runaway blocking
             if (count > 4096) count = 4096;
 
-            // Validate the full buffer via page-table walk
             if (!vmm_check_buffer(current->process->vmm, buf, count, VM_FLAG_USER | VM_FLAG_WRITE)) {
-                LOGF("[SYSCALL] SYS_READ: invalid buffer 0x%lx (len: %zu) from '%s'\n",
-                     (uintptr_t)buf, count, current->name);
+                LOGF("[SYSCALL] SYS_READ: invalid buffer 0x%lx (len: %zu) from '%s'\n", (uintptr_t)buf, count, current->name);
                 registers[14] = (uint64_t)-1;
                 break;
             }
@@ -254,10 +243,8 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
         }
 
         default:
-            LOGF("[SYSCALL] Unknown syscall: %lu from thread '%s' (PID %u)\n", 
-                 syscall_num, current->name, current->process ? current->process->pid : 0);
+            LOGF("[SYSCALL] Unknown syscall: %lu from thread '%s' (PID %u)\n", syscall_num, current->name, current->process ? current->process->pid : 0);
 
-            // Terminate offending thread
             sched_exit();
             break;
     }

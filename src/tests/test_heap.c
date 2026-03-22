@@ -79,28 +79,28 @@ typedef struct {
 } __attribute__((aligned(16))) heap_test_ftr_t;
 
 #define MAX_TRACK 1024
-static htrace_t g_track[MAX_TRACK];
-static int  g_tidx         = 0;
-static int  g_tests_total  = 0;
-static int  g_tests_passed = 0;
+static htrace_t track[MAX_TRACK];
+static int  tidx         = 0;
+static int  ntests  = 0;
+static int  npass = 0;
 #pragma endregion
 
 #pragma region Tracker
 
 static void tr_reset(void) {
-    for (int i = 0; i < MAX_TRACK; i++) g_track[i] = (htrace_t){false, NULL};
-    g_tidx = 0;
+    for (int i = 0; i < MAX_TRACK; i++) track[i] = (htrace_t){false, NULL};
+    tidx = 0;
 }
 
 static void tr_add(void* p) {
-    if (g_tidx < MAX_TRACK) g_track[g_tidx++] = (htrace_t){true, p};
+    if (tidx < MAX_TRACK) track[tidx++] = (htrace_t){true, p};
     else LOGF("[WARN] heap tracker full\n");
 }
 
 static void tr_free(void) {
     for (int i = 0; i < MAX_TRACK; i++)
-        if (g_track[i].active) { kfree(g_track[i].ptr); g_track[i].active = false; }
-    g_tidx = 0;
+        if (track[i].active) { kfree(track[i].ptr); track[i].active = false; }
+    tidx = 0;
 }
 
 static heap_test_hdr_t* hdr(void* p) {
@@ -209,7 +209,7 @@ static bool t_free_null(void) {
 static bool t_dbl_free(void) {
     tr_reset();
     void* p = kmalloc(32); tr_add(p);
-    kfree(p); g_track[0].active = false;
+    kfree(p); track[0].active = false;
     kfree(p); /* should warn, not crash */
     TEST_ASSERT_STATUS(heap_check_integrity(heap_kernel_get()), HEAP_OK);
     return true;
@@ -255,7 +255,7 @@ static bool t_realloc_zero_free(void) {
     void* r = krealloc(p, 0);
     TEST_ASSERT(r == NULL);
     TEST_ASSERT(h->magic == BLOCK_MAGIC_FREE);
-    g_track[0].active = false;
+    track[0].active = false;
     tr_free(); return true;
 }
 
@@ -264,7 +264,7 @@ static bool t_realloc_grow(void) {
     void* p = kmalloc(64); tr_add(p);
     kmemset(p, 0x55, 64);
     void* r = krealloc(p, 128); tr_add(r);
-    if (r != p) g_track[0].active = false;
+    if (r != p) track[0].active = false;
     TEST_ASSERT(r != NULL);
     TEST_ASSERT(hdr(r)->size >= 128);
     /* First 64 bytes must be preserved */
@@ -279,7 +279,7 @@ static bool t_realloc_shrink(void) {
     kmemset(p, 0xCC, 256);
     void* r = krealloc(p, 64);
     TEST_ASSERT(r != NULL);
-    if (r != p) { g_track[0].active = false; tr_add(r); }
+    if (r != p) { track[0].active = false; tr_add(r); }
     uint8_t* b = (uint8_t*)r;
     for (int i = 0; i < 64; i++) TEST_ASSERT(b[i] == 0xCC);
     tr_free(); return true;
@@ -291,9 +291,9 @@ static bool t_realloc_hole(void) {
     void* B = kmalloc(64); tr_add(B);
     void* C = kmalloc(64); tr_add(C);
     kmemset(A, 0x11, 64);
-    kfree(B); g_track[1].active = false;
+    kfree(B); track[1].active = false;
     void* A2 = krealloc(A, 100);
-    if (A2 == A) g_track[0].active = false;
+    if (A2 == A) track[0].active = false;
     else         tr_add(A2);
     TEST_ASSERT(A2 != NULL);
     TEST_ASSERT(hdr(A2)->size >= 100);
@@ -379,9 +379,9 @@ static bool t_coalesce_fwd(void) {
     heap_test_hdr_t* hA = hdr(A);
     heap_test_hdr_t* hB = hdr(B);
     size_t sA = hA->total_size, sB = hB->total_size;
-    kfree(A); g_track[0].active = false;
-    kfree(C); g_track[2].active = false;
-    kfree(B); g_track[1].active = false;
+    kfree(A); track[0].active = false;
+    kfree(C); track[2].active = false;
+    kfree(B); track[1].active = false;
     TEST_ASSERT(hA->magic == BLOCK_MAGIC_FREE);
     TEST_ASSERT(hA->total_size >= sA + sB);
     TEST_ASSERT_STATUS(heap_check_integrity(heap_kernel_get()), HEAP_OK);
@@ -391,14 +391,14 @@ static bool t_coalesce_fwd(void) {
 static bool t_split_thresh(void) {
     tr_reset();
     void* p = kmalloc(512); tr_add(p);
-    /* Shrink so remainder > MIN_BLOCK_SIZE — should split */
+    /* Shrink so remainder > MIN_BLOCK_SIZE - should split */
     void* p2 = krealloc(p, 256);
-    if (p2 != p) { g_track[0].active = false; tr_add(p2); }
+    if (p2 != p) { track[0].active = false; tr_add(p2); }
     TEST_ASSERT(p2 != NULL);
     TEST_ASSERT(hdr(p2)->size == 256);
-    /* Tiny shrink — should NOT split */
+    /* Tiny shrink - should NOT split */
     void* p3 = krealloc(p2, 250);
-    if (p3 != p2) { g_track[g_tidx-1].active = false; tr_add(p3); }
+    if (p3 != p2) { track[tidx-1].active = false; tr_add(p3); }
     TEST_ASSERT(hdr(p3)->size == 256);
     tr_free(); return true;
 }
@@ -439,7 +439,7 @@ static bool t_arena_shrink(void) {
     size_t arenas0 = h->arena_count;
     void* p = kmalloc(1024 * 1024); tr_add(p);
     TEST_ASSERT(h->arena_count > arenas0);
-    kfree(p); g_track[0].active = false;
+    kfree(p); track[0].active = false;
     TEST_ASSERT(h->arena_count == arenas0);
     return true;
 }
@@ -551,18 +551,18 @@ static bool t_stress_churn(void) {
 #pragma region Runner
 
 static void run_test(const char* name, bool (*fn)(void)) {
-    g_tests_total++;
+    ntests++;
     LOGF("[TEST] %-40s ", name);
     heap_kernel_get(); /* ensure init */
     bool pass = fn();
-    if (g_tidx > 0) { LOGF("[WARN] leak (cleaning) ... "); tr_free(); }
-    if (pass) { g_tests_passed++; LOGF("[PASS]\n"); }
+    if (tidx > 0) { LOGF("[WARN] leak (cleaning) ... "); tr_free(); }
+    if (pass) { npass++; LOGF("[PASS]\n"); }
     else       { LOGF("[FAIL]\n"); }
 }
 
 void test_heap(void) {
-    g_tests_total  = 0;
-    g_tests_passed = 0;
+    ntests  = 0;
+    npass = 0;
 
     LOGF("\n--- BEGIN HEAP MANAGER TEST ---\n");
 
@@ -604,18 +604,18 @@ void test_heap(void) {
     run_test("stress churn (3000 iters)",     t_stress_churn);
 
     LOGF("--- END HEAP MANAGER TEST ---\n");
-    LOGF("Heap Test Results: %d/%d\n\n", g_tests_passed, g_tests_total);
+    LOGF("Heap Test Results: %d/%d\n\n", npass, ntests);
 
     #ifdef TEST_BUILD
     #include <kernel/drivers/console.h>
     #include <klibc/stdio.h>
-    if (g_tests_passed != g_tests_total) {
+    if (npass != ntests) {
         console_set_color(CONSOLE_COLOR_RED, CONSOLE_COLOR_BLACK);
-        kprintf("[-] Some heap tests failed (%d/%d passed).\n", g_tests_passed, g_tests_total);
+        kprintf("[-] Some heap tests failed (%d/%d passed).\n", npass, ntests);
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     } else {
         console_set_color(CONSOLE_COLOR_GREEN, CONSOLE_COLOR_BLACK);
-        kprintf("[+] All heap tests passed! (%d/%d)\n", g_tests_passed, g_tests_total);
+        kprintf("[+] All heap tests passed! (%d/%d)\n", npass, ntests);
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     }
     #endif

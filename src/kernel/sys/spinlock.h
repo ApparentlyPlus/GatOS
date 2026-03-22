@@ -5,7 +5,7 @@
  * safety by disabling interrupts on the local core during lock acquisition
  * and restoring the previous state upon release.
  *
- * Author: ApparentlyPlus
+ * Author: u/ApparentlyPlus
  */
 
 #pragma once

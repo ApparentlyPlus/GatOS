@@ -4,7 +4,7 @@
  * Centralized memory addresses, sizes, and primitive memory utilities
  * shared by all kernel subsystems. Included by assembler and C code.
  *
- * Author: ApparentlyPlus
+ * Author: u/ApparentlyPlus
  */
 
 #pragma once

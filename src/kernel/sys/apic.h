@@ -1,7 +1,7 @@
 /*
  * apic.h - Local and I/O APIC configuration
  *
- * Author: ApparentlyPlus
+ * Author: u/ApparentlyPlus
  */
 
 #pragma once
@@ -136,14 +136,14 @@ uint32_t lapic_read(uint32_t reg);
 void lapic_send_ipi(uint32_t dest_id, uint8_t vector);
 
 // virtual address of the mapped LAPIC MMIO region
-extern uint64_t g_lapic_base;
+extern uint64_t lapic_base;
 
 /*
  * lapic_get_id - reads the Local APIC ID from MMIO
  */
 static inline uint32_t lapic_get_id(void) {
-    if (g_lapic_base == 0) return 0;
-    return *(volatile uint32_t *)(uintptr_t)(g_lapic_base + LAPIC_ID) >> 24;
+    if (lapic_base == 0) return 0;
+    return *(volatile uint32_t *)(uintptr_t)(lapic_base + LAPIC_ID) >> 24;
 }
 
 // I/O APIC

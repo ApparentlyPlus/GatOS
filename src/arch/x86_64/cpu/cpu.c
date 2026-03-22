@@ -5,7 +5,7 @@
  * using the CPUID instruction and related MSRs. Results are cached in
  * a global CPUInfo structure accessible to the rest of GatOS.
  *
- * Author: ApparentlyPlus
+ * Author: u/ApparentlyPlus
  */
 
 #include <arch/x86_64/cpu/cpu.h>
@@ -13,8 +13,8 @@
 #include <kernel/debug.h>
 #include <klibc/string.h>
 
-static CPUInfo g_cpu;
-cpu_local_t g_cpu_local = {0};
+static CPUInfo cpuinfo;
+cpu_local_t cpu_local = {0};
 
 /*
  * cpuid - Execute the CPUID instruction with given EAX and ECX inputs
@@ -107,107 +107,92 @@ void write_xcr0(uint64_t value)
  */
 void cpu_init(void)
 {
-    kmemset(&g_cpu, 0, sizeof(g_cpu));
+    kmemset(&cpuinfo, 0, sizeof(cpuinfo));
 
     uint32_t a, b, c, d;
 
-    // Vendor string
     cpuid(0, 0, &a, &b, &c, &d);
-    *((uint32_t*)&g_cpu.vendor[0]) = b;
-    *((uint32_t*)&g_cpu.vendor[4]) = d;
-    *((uint32_t*)&g_cpu.vendor[8]) = c;
-    g_cpu.vendor[12] = '\0';
+    *((uint32_t*)&cpuinfo.vendor[0]) = b;
+    *((uint32_t*)&cpuinfo.vendor[4]) = d;
+    *((uint32_t*)&cpuinfo.vendor[8]) = c;
+    cpuinfo.vendor[12] = '\0';
     uint32_t max_basic = a;
 
-    // Basic feature detection
     cpuid(1, 0, &a, &b, &c, &d);
-    g_cpu.family   = ((a >> 8) & 0xF) + ((a >> 20) & 0xFF);
-    g_cpu.model    = ((a >> 4) & 0xF) | ((a >> 12) & 0xF0);
-    g_cpu.stepping = (a & 0xF);
+    cpuinfo.family   = ((a >> 8) & 0xF) + ((a >> 20) & 0xFF);
+    cpuinfo.model    = ((a >> 4) & 0xF) | ((a >> 12) & 0xF0);
+    cpuinfo.stepping = (a & 0xF);
 
-    if (d & (1 << 6))  g_cpu.features |= CPU_FEAT_PAE;
-    if (d & (1 << 25)) g_cpu.features |= CPU_FEAT_SSE;
-    if (d & (1 << 26)) g_cpu.features |= CPU_FEAT_SSE2;
-    if (c & (1 << 0))  g_cpu.features |= CPU_FEAT_SSE3;
-    if (c & (1 << 9))  g_cpu.features |= CPU_FEAT_SSSE3;
-    if (c & (1 << 19)) g_cpu.features |= CPU_FEAT_SSE4_1;
-    if (c & (1 << 20)) g_cpu.features |= CPU_FEAT_SSE4_2;
-    if (c & (1 << 28)) g_cpu.features |= CPU_FEAT_AVX;
-    if (c & (1 << 5))  g_cpu.features |= CPU_FEAT_VMX;
+    if (d & (1 << 6))  cpuinfo.features |= CPU_FEAT_PAE;
+    if (d & (1 << 25)) cpuinfo.features |= CPU_FEAT_SSE;
+    if (d & (1 << 26)) cpuinfo.features |= CPU_FEAT_SSE2;
+    if (c & (1 << 0))  cpuinfo.features |= CPU_FEAT_SSE3;
+    if (c & (1 << 9))  cpuinfo.features |= CPU_FEAT_SSSE3;
+    if (c & (1 << 19)) cpuinfo.features |= CPU_FEAT_SSE4_1;
+    if (c & (1 << 20)) cpuinfo.features |= CPU_FEAT_SSE4_2;
+    if (c & (1 << 28)) cpuinfo.features |= CPU_FEAT_AVX;
+    if (c & (1 << 5))  cpuinfo.features |= CPU_FEAT_VMX;
 
-    // Structured Extended Feature Flags
     if (max_basic >= 7) {
         cpuid(7, 0, &a, &b, &c, &d);
-        if (b & (1 << 7))  g_cpu.features |= CPU_FEAT_SMEP;
-        if (b & (1 << 20)) g_cpu.features |= CPU_FEAT_SMAP;
+        if (b & (1 << 7))  cpuinfo.features |= CPU_FEAT_SMEP;
+        if (b & (1 << 20)) cpuinfo.features |= CPU_FEAT_SMAP;
     }
 
-    // Extended features (AMD/NX/64-bit/SVM)
     cpuid(0x80000000, 0, &a, &b, &c, &d);
     uint32_t max_ext = a;
 
     if (max_ext >= 0x80000001) {
         cpuid(0x80000001, 0, &a, &b, &c, &d);
-        if (d & (1 << 20)) g_cpu.features |= CPU_FEAT_NX;
-        if (d & (1 << 29)) g_cpu.features |= CPU_FEAT_64BIT;
-        if (c & (1 << 2))  g_cpu.features |= CPU_FEAT_SVM;
+        if (d & (1 << 20)) cpuinfo.features |= CPU_FEAT_NX;
+        if (d & (1 << 29)) cpuinfo.features |= CPU_FEAT_64BIT;
+        if (c & (1 << 2))  cpuinfo.features |= CPU_FEAT_SVM;
     }
 
-    // Brand string (0x80000002 - 0x80000004)
     if (max_ext >= 0x80000004) {
-        uint32_t* brand_ptr = (uint32_t*)g_cpu.brand;
+        uint32_t* brand_ptr = (uint32_t*)cpuinfo.brand;
         for (uint32_t i = 0; i < 3; i++) {
-            cpuid(0x80000002 + i, 0, &brand_ptr[i * 4 + 0],
-                                    &brand_ptr[i * 4 + 1],
-                                    &brand_ptr[i * 4 + 2],
-                                    &brand_ptr[i * 4 + 3]);
+            cpuid(0x80000002 + i, 0, &brand_ptr[i * 4 + 0], &brand_ptr[i * 4 + 1], &brand_ptr[i * 4 + 2], &brand_ptr[i * 4 + 3]);
         }
-        g_cpu.brand[48] = '\0';
+        cpuinfo.brand[48] = '\0';
     }
 
-    // Core count detection
-    g_cpu.core_count = 1;
+    cpuinfo.core_count = 1;
 
     if (max_basic >= 0x0B) {
         cpuid(0x0B, 0, &a, &b, &c, &d);
-        if (b) g_cpu.core_count = b;
+        if (b) cpuinfo.core_count = b;
     } else if (max_basic >= 0x04) {
         cpuid(0x04, 0, &a, &b, &c, &d);
-        g_cpu.core_count = ((b >> 26) & 0x3F) + 1;
+        cpuinfo.core_count = ((b >> 26) & 0x3F) + 1;
     }
 
-	// Enable SSE
-	if (cpu_has_feature(CPU_FEAT_SSE)) {
-		cpu_enable_feature(CPU_FEAT_SSE);
-	}
+    if (cpu_has_feature(CPU_FEAT_SSE)) {
+        cpu_enable_feature(CPU_FEAT_SSE);
+    }
 
-	// Enable AVX if supported
-	if (cpu_has_feature(CPU_FEAT_AVX)) {
-		cpu_enable_feature(CPU_FEAT_AVX);
-	}
+    if (cpu_has_feature(CPU_FEAT_AVX)) {
+        cpu_enable_feature(CPU_FEAT_AVX);
+    }
 
-    // Enable SMEP if supported
     if (cpu_has_feature(CPU_FEAT_SMEP)) {
         cpu_enable_feature(CPU_FEAT_SMEP);
     }
 
-    // Enable SMAP if supported
     if (cpu_has_feature(CPU_FEAT_SMAP)) {
         cpu_enable_feature(CPU_FEAT_SMAP);
     }
 
     // Set active GS_BASE to our cpu_local structure for Ring 0.
     // Set KERNEL_GS_BASE to 0 (will be used to store User GS during Ring 0 execution).
-    write_msr(MSR_GS_BASE, (uint64_t)&g_cpu_local);
+    write_msr(MSR_GS_BASE, (uint64_t)&cpu_local);
     write_msr(MSR_KERNEL_GS_BASE, 0);
 
-    // Log gathered CPU information
-    LOGF("[CPU] Vendor: %s\n", g_cpu.vendor);
-    LOGF("[CPU] Brand:  %s\n", g_cpu.brand);
-    LOGF("[CPU] Family: %u  Model: %u  Stepping: %u\n",
-            g_cpu.family, g_cpu.model, g_cpu.stepping);
-    LOGF("[CPU] Cores:  %u\n", g_cpu.core_count);
-    LOGF("[CPU] Features: 0x%lX\n", g_cpu.features);
+    LOGF("[CPU] Vendor: %s\n", cpuinfo.vendor);
+    LOGF("[CPU] Brand:  %s\n", cpuinfo.brand);
+    LOGF("[CPU] Family: %u  Model: %u  Stepping: %u\n", cpuinfo.family, cpuinfo.model, cpuinfo.stepping);
+    LOGF("[CPU] Cores:  %u\n", cpuinfo.core_count);
+    LOGF("[CPU] Features: 0x%lX\n", cpuinfo.features);
 }
 
 /*
@@ -215,7 +200,7 @@ void cpu_init(void)
  */
 const CPUInfo* cpu_get_info(void)
 {
-    return &g_cpu;
+    return &cpuinfo;
 }
 
 /*
@@ -223,7 +208,7 @@ const CPUInfo* cpu_get_info(void)
  */
 bool cpu_has_feature(cpu_feature_t feature)
 {
-    return (g_cpu.features & feature) != 0;
+    return (cpuinfo.features & feature) != 0;
 }
 
 /*

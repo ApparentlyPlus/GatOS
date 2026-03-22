@@ -180,9 +180,9 @@ multiboot_elf_sections_t* multiboot_get_elf_sections(multiboot_parser_t* parser)
 multiboot_acpi_t* multiboot_get_acpi_rsdp(multiboot_parser_t* parser);
 
 // Utilities
-void multiboot_get_kernel_range(uintptr_t* start, uintptr_t* end);
+void mb_kernel_range(uintptr_t* start, uintptr_t* end);
 int multiboot_is_page_used(multiboot_parser_t* parser, uintptr_t start, size_t page_size);
 
 // Debug output
-void multiboot_dump_info(multiboot_parser_t* parser);
+void mb_dump(multiboot_parser_t* parser);
 void multiboot_dump_memory_map(multiboot_parser_t* parser);

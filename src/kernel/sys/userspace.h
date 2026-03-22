@@ -4,7 +4,7 @@
  * This file provides macros and definitions to facilitate the transition
  * from kernel execution to userspace (Ring 3).
  *
- * Author: ApparentlyPlus
+ * Author: u/ApparentlyPlus
  */
 
 #pragma once

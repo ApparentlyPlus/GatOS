@@ -1,7 +1,7 @@
 /*
  * msr.h - Model Specific Register definitions for x86_64
  *
- * Author: ApparentlyPlus
+ * Author: u/ApparentlyPlus
  */
 
 #pragma once

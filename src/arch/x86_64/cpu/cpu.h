@@ -5,7 +5,7 @@
  * feature detection, and core count. Designed for x86/x86_64 processors.
  * This is still primitive and will be expanded in future releases.
  *
- * Author: ApparentlyPlus
+ * Author: u/ApparentlyPlus
  */
 
 #pragma once
@@ -49,7 +49,7 @@ typedef struct {
     uint64_t user_stack;   // offset 8
 } __attribute__((packed)) cpu_local_t;
 
-extern cpu_local_t g_cpu_local;
+extern cpu_local_t cpu_local;
 
 // Public API
 void cpu_init(void);

@@ -17,7 +17,7 @@ typedef struct {
 } psf1_font_t;
 
 // Standard VGA 8x16 font embedded in the kernel
-extern uint8_t g_vga_font_data[];
+extern uint8_t vga_font_data[];
 
 // Helper to initialize the font structure
 void font_init(void);

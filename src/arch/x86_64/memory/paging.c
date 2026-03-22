@@ -20,7 +20,7 @@
  * Covers up to 512 * 2MB = 1GB, enough for any display at any resolution
  * Only 4 KB in BSS, nuts
  */
-static uint64_t g_fb_pd[PAGE_ENTRIES] __attribute__((aligned(PAGE_SIZE)));
+static uint64_t fb_pd[PAGE_ENTRIES] __attribute__((aligned(PAGE_SIZE)));
 
 uint64_t KSTART = (uint64_t)&KPHYS_START;
 uint64_t KEND   = (uint64_t)&KPHYS_END;
@@ -80,7 +80,7 @@ void unmap_identity(){
  * cleanup_page_tables:
  * Removes unused page table entries, keeps only the given range in higher half
  */
-void cleanup_kernel_page_tables(uintptr_t start, uintptr_t end) {
+void cleanup_kpt(uintptr_t start, uintptr_t end) {
     uint64_t* PML4 = getPML4();
     uint64_t* PDPT = PML4 + PAGE_ENTRIES * PREALLOC_PML4s;
     uint64_t* PD = PDPT + PAGE_ENTRIES * PREALLOC_PDPTs;
@@ -231,19 +231,19 @@ void build_physmap() {
     }
 
     // Map framebuffer MMIO via static BSS PD using 2MB huge pages
-    // Each PD entry covers 2MB, g_fb_pd alone (4 KB) handles any resolution.
+    // Each PD entry covers 2MB, fb_pd alone (4 KB) handles any resolution.
     if (physmapStruct.fb_phys && physmapStruct.fb_phys >= physmapStruct.total_RAM) {
         uint64_t fb_end = physmapStruct.fb_phys + physmapStruct.fb_size;
         uint64_t pdpt_s = (physmapStruct.fb_phys >> 30) & 0x1FF;
         uint64_t pdpt_e = ((fb_end - 1) >> 30) & 0x1FF;
         if (pdpt_s == pdpt_e) {
-            kmemset(g_fb_pd, 0, sizeof(g_fb_pd));
+            kmemset(fb_pd, 0, sizeof(fb_pd));
             uint64_t base2m = physmapStruct.fb_phys & ~(uint64_t)(0x1FFFFF);
             uint64_t end2m  = (fb_end + 0x1FFFFF)  & ~(uint64_t)(0x1FFFFF);
             for (uint64_t pa2m = base2m; pa2m < end2m; pa2m += 0x200000)
-                g_fb_pd[(pa2m >> 21) & 0x1FF] =
+                fb_pd[(pa2m >> 21) & 0x1FF] =
                     pa2m | (PAGE_PRESENT | PAGE_WRITABLE | PAGE_HUGE | PAGE_PWT | PAGE_PCD);
-            PDPTs[0][pdpt_s] = KERNEL_V2P(g_fb_pd) | (PAGE_PRESENT | PAGE_WRITABLE);
+            PDPTs[0][pdpt_s] = KERNEL_V2P(fb_pd) | (PAGE_PRESENT | PAGE_WRITABLE);
         }
     } else if (physmapStruct.fb_phys && physmapStruct.fb_phys < physmapStruct.total_RAM) {
         // if fb within RAM, fix cache attrs in existing 4KB PTs

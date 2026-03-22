@@ -14,18 +14,18 @@
 #pragma region Statistics
 
 // Framebuffer hardware
-static uint8_t* g_fb_addr   = NULL;
-static uint64_t g_fb_phys   = 0;
-static uint32_t g_fb_width  = 0;
-static uint32_t g_fb_height = 0;
-static uint32_t g_fb_pitch  = 0;
-static uint32_t g_fb_bpp    = 0;
-static size_t   g_fb_size   = 0;
+static uint8_t* fb      = NULL;
+static uint64_t fb_phys = 0;
+static uint32_t fb_w    = 0;
+static uint32_t fb_h    = 0;
+static uint32_t fb_pitch = 0;
+static uint32_t fb_bpp  = 0;
+static size_t   fb_sz   = 0;
 
-static size_t g_font_width  = 8;
-static size_t g_font_height = 16;
-static size_t g_max_cols    = 0;
-static size_t g_max_rows    = 0;
+static size_t fw   = 8;
+static size_t fh   = 16;
+static size_t cols = 0;
+static size_t rows = 0;
 
 #define PADDING_Y 2
 
@@ -36,12 +36,12 @@ static const uint32_t VGA_PALETTE[16] = {
     0xFFFF5555, 0xFFFF55FF, 0xFFFFFF55, 0xFFFFFFFF
 };
 
-// Panic cursor/color (fb dims/addr shared with regular console via g_fb_*)
-static uint32_t g_crash_cx  = 0;
-static uint32_t g_crash_cy  = 0;
-static uint8_t  g_crash_fg  = CONSOLE_COLOR_WHITE;
-static uint8_t  g_crash_bg  = CONSOLE_COLOR_RED;
-static char     g_crash_buf[2048];
+// Panic cursor/color (fb dims/addr shared with regular console via fb_*)
+static uint32_t ccx  = 0;
+static uint32_t ccy  = 0;
+static uint8_t  cfg  = CONSOLE_COLOR_WHITE;
+static uint8_t  cbg  = CONSOLE_COLOR_RED;
+static char     cbuf[2048];
 
 #pragma region Hardware Drawing
 
@@ -49,9 +49,9 @@ static char     g_crash_buf[2048];
  * put_pixel - Writes one pixel at (x, y) to the framebuffer
  */
 static inline void put_pixel(uint32_t x, uint32_t y, uint32_t color) {
-    if (x >= g_fb_width || y >= g_fb_height) return;
-    uint8_t* dst = g_fb_addr + y * g_fb_pitch + x * (g_fb_bpp / 8);
-    if (g_fb_bpp == 32) *(uint32_t*)dst = color;
+    if (x >= fb_w || y >= fb_h) return;
+    uint8_t* dst = fb + y * fb_pitch + x * (fb_bpp / 8);
+    if (fb_bpp == 32) *(uint32_t*)dst = color;
     else { dst[0] = color & 0xFF; dst[1] = (color >> 8) & 0xFF; dst[2] = (color >> 16) & 0xFF; }
 }
 
@@ -59,9 +59,9 @@ static inline void put_pixel(uint32_t x, uint32_t y, uint32_t color) {
  * draw_glyph - Renders a PSF1 glyph at pixel coordinates (px, py)
  */
 static void draw_glyph(uint8_t* glyph, size_t px, size_t py, uint32_t fg, uint32_t bg) {
-    for (size_t y = 0; y < g_font_height; y++) {
+    for (size_t y = 0; y < fh; y++) {
         uint8_t row = glyph[y];
-        for (size_t x = 0; x < g_font_width; x++)
+        for (size_t x = 0; x < fw; x++)
             put_pixel(px + x, py + y, ((row >> (7 - x)) & 1) ? fg : bg);
     }
 }
@@ -81,15 +81,15 @@ static uint8_t* get_glyph(uint32_t cp) {
  * render_cursor - Draws (on=true) or erases (on=false) the block cursor
  */
 static void render_cursor(console_t* con, bool on) {
-    if (!g_fb_addr) return;
-    extern tty_t* g_active_tty;
-    if (!g_active_tty || g_active_tty->console != con) return;
-    size_t px = con->cursor_x * g_font_width;
-    size_t py = con->cursor_y * (g_font_height + PADDING_Y);
+    if (!fb) return;
+    extern tty_t* active_tty;
+    if (!active_tty || active_tty->console != con) return;
+    size_t px = con->cursor_x * fw;
+    size_t py = con->cursor_y * (fh + PADDING_Y);
     if (on) {
         uint32_t color = VGA_PALETTE[con->fg_color];
-        for (size_t y = 0; y < g_font_height; y++)
-            for (size_t x = 0; x < g_font_width; x++)
+        for (size_t y = 0; y < fh; y++)
+            for (size_t x = 0; x < fw; x++)
                 put_pixel(px + x, py + y, color);
     } else {
         console_char_t c = con->buffer[con->cursor_y * con->width + con->cursor_x];
@@ -103,20 +103,19 @@ static void render_cursor(console_t* con, bool on) {
  * refresh_locked - Redraws the full console to the framebuffer (lock must be held)
  */
 static void refresh_locked(console_t* con) {
-    if (!g_fb_addr) return;
-    extern tty_t* g_active_tty;
-    if (!g_active_tty || g_active_tty->console != con) return;
+    if (!fb) return;
+    extern tty_t* active_tty;
+    if (!active_tty || active_tty->console != con) return;
     for (size_t y = 0; y < con->height; y++)
         for (size_t x = 0; x < con->width; x++) {
             console_char_t c = con->buffer[y * con->width + x];
-            draw_glyph(get_glyph(c.codepoint), x * g_font_width, y * (g_font_height + PADDING_Y),
-                       VGA_PALETTE[c.fg], VGA_PALETTE[c.bg]);
+            draw_glyph(get_glyph(c.codepoint), x * fw, y * (fh + PADDING_Y), VGA_PALETTE[c.fg], VGA_PALETTE[c.bg]);
         }
     if (con->cursor_enabled) render_cursor(con, true);
 }
 
 /*
- * scroll - Scrolls the content area (below header) up by one line.
+ * scroll - Scrolls the content area (below header) up by one line
  * Uses a pixel-level memmove on the framebuffer instead of a full redraw.
  */
 static void scroll(console_t* con) {
@@ -125,11 +124,8 @@ static void scroll(console_t* con) {
     size_t rows  = con->height - first;
     if (!rows) return;
 
-    // Update backbuffer
     if (rows > 1)
-        kmemmove(con->buffer + first * con->width,
-                 con->buffer + (first + 1) * con->width,
-                 (rows - 1) * con->width * sizeof(console_char_t));
+        kmemmove(con->buffer + first * con->width, con->buffer + (first + 1) * con->width, (rows - 1) * con->width * sizeof(console_char_t));
     for (size_t x = 0; x < con->width; x++) {
         size_t idx = (con->height - 1) * con->width + x;
         con->buffer[idx] = (console_char_t){ ' ', con->fg_color, con->bg_color };
@@ -137,29 +133,27 @@ static void scroll(console_t* con) {
     con->cursor_y--;
     if (con->cursor_y < first) con->cursor_y = first;
 
-    // Scroll the framebuffer with a single pixel memmove instead of full redraw
-    if (g_fb_addr) {
-        extern tty_t* g_active_tty;
-        if (g_active_tty && g_active_tty->console == con) {
-            uint32_t row_h    = (uint32_t)(g_font_height + PADDING_Y);
+    if (fb) {
+        extern tty_t* active_tty;
+        if (active_tty && active_tty->console == con) {
+            uint32_t row_h    = (uint32_t)(fh + PADDING_Y);
             size_t first_px   = first * row_h;
-            size_t src_off    = (first_px + row_h) * g_fb_pitch;
-            size_t dst_off    = first_px * g_fb_pitch;
-            size_t move_bytes = (rows - 1) * row_h * g_fb_pitch;
+            size_t src_off    = (first_px + row_h) * fb_pitch;
+            size_t dst_off    = first_px * fb_pitch;
+            size_t move_bytes = (rows - 1) * row_h * fb_pitch;
 
             if (move_bytes > 0)
-                kmemmove(g_fb_addr + dst_off, g_fb_addr + src_off, move_bytes);
+                kmemmove(fb + dst_off, fb + src_off, move_bytes);
 
-            // Clear the last row
             uint32_t bg_color    = VGA_PALETTE[con->bg_color];
-            size_t last_row_off  = (con->height - 1) * row_h * g_fb_pitch;
-            size_t last_row_len  = row_h * g_fb_pitch;
-            if (g_fb_bpp == 32) {
-                uint32_t* p = (uint32_t*)(g_fb_addr + last_row_off);
+            size_t last_row_off  = (con->height - 1) * row_h * fb_pitch;
+            size_t last_row_len  = row_h * fb_pitch;
+            if (fb_bpp == 32) {
+                uint32_t* p = (uint32_t*)(fb + last_row_off);
                 for (size_t i = 0; i < last_row_len / 4; i++) p[i] = bg_color;
             } else {
                 for (uint32_t y = 0; y < row_h; y++)
-                    for (uint32_t x = 0; x < g_fb_width; x++)
+                    for (uint32_t x = 0; x < fb_w; x++)
                         put_pixel(x, (uint32_t)((con->height - 1) * row_h) + y, bg_color);
             }
         }
@@ -170,8 +164,8 @@ static void scroll(console_t* con) {
  * emit_cp - Renders a Unicode codepoint or control character to the console
  */
 static void emit_cp(console_t* con, uint32_t cp) {
-    extern tty_t* g_active_tty;
-    bool active = (g_active_tty && g_active_tty->console == con);
+    extern tty_t* active_tty;
+    bool active = (active_tty && active_tty->console == con);
     if (active && con->cursor_enabled) render_cursor(con, false);
 
     if (cp == '\n')      { con->cursor_x = 0; con->cursor_y++; }
@@ -180,9 +174,7 @@ static void emit_cp(console_t* con, uint32_t cp) {
         if (con->cursor_x > 0) con->cursor_x--;
         size_t idx = con->cursor_y * con->width + con->cursor_x;
         con->buffer[idx].codepoint = ' ';
-        if (active) draw_glyph(get_glyph(' '), con->cursor_x * g_font_width,
-                               con->cursor_y * (g_font_height + PADDING_Y),
-                               VGA_PALETTE[con->fg_color], VGA_PALETTE[con->bg_color]);
+        if (active) draw_glyph(get_glyph(' '), con->cursor_x * fw, con->cursor_y * (fh + PADDING_Y), VGA_PALETTE[con->fg_color], VGA_PALETTE[con->bg_color]);
     } else if (cp == '\t') {
         con->cursor_x = (con->cursor_x + 4) & ~3;
     } else {
@@ -190,9 +182,7 @@ static void emit_cp(console_t* con, uint32_t cp) {
         if (con->cursor_y >= con->height) scroll(con);
         size_t idx = con->cursor_y * con->width + con->cursor_x;
         con->buffer[idx] = (console_char_t){ cp, con->fg_color, con->bg_color };
-        if (active) draw_glyph(get_glyph(cp), con->cursor_x * g_font_width,
-                               con->cursor_y * (g_font_height + PADDING_Y),
-                               VGA_PALETTE[con->fg_color], VGA_PALETTE[con->bg_color]);
+        if (active) draw_glyph(get_glyph(cp), con->cursor_x * fw, con->cursor_y * (fh + PADDING_Y), VGA_PALETTE[con->fg_color], VGA_PALETTE[con->bg_color]);
         con->cursor_x++;
     }
     if (con->cursor_y >= con->height) scroll(con);
@@ -205,7 +195,7 @@ static void emit_cp(console_t* con, uint32_t cp) {
  * con_init - Initializes a console instance (allocates backbuffer, resets state)
  */
 bool con_init(console_t* con) {
-    con->width = g_max_cols; con->height = g_max_rows;
+    con->width = cols; con->height = rows;
     con->cursor_x = 0; con->cursor_y = 0;
     con->fg_color = CONSOLE_COLOR_WHITE; con->bg_color = CONSOLE_COLOR_BLACK;
     con->utf8_bytes_needed = 0; con->utf8_codepoint = 0;
@@ -230,17 +220,17 @@ void con_clear(console_t* con, uint8_t background) {
             con->buffer[i] = (console_char_t){ ' ', con->fg_color, con->bg_color };
         }
     con->cursor_x = 0; con->cursor_y = con->header_rows;
-    extern tty_t* g_active_tty;
-    if (g_active_tty && g_active_tty->console == con) {
+    extern tty_t* active_tty;
+    if (active_tty && active_tty->console == con) {
         uint32_t bg_color = VGA_PALETTE[con->bg_color];
-        size_t start_py  = con->header_rows * (g_font_height + PADDING_Y);
-        if (g_fb_bpp == 32) {
-            size_t off = start_py * g_fb_pitch / 4;
-            uint32_t* p = (uint32_t*)g_fb_addr + off;
-            for (size_t i = 0; i < (g_fb_size / 4) - off; i++) p[i] = bg_color;
+        size_t start_py  = con->header_rows * (fh + PADDING_Y);
+        if (fb_bpp == 32) {
+            size_t off = start_py * fb_pitch / 4;
+            uint32_t* p = (uint32_t*)fb + off;
+            for (size_t i = 0; i < (fb_sz / 4) - off; i++) p[i] = bg_color;
         } else {
-            for (uint32_t y = (uint32_t)start_py; y < g_fb_height; y++)
-                for (uint32_t x = 0; x < g_fb_width; x++)
+            for (uint32_t y = (uint32_t)start_py; y < fb_h; y++)
+                for (uint32_t x = 0; x < fb_w; x++)
                     put_pixel(x, y, bg_color);
         }
         if (con->cursor_enabled) render_cursor(con, true);
@@ -269,17 +259,15 @@ void con_putc(console_t* con, char character) {
     } else if (con->ansi_state == 3) {
         if (byte == 'J') {
             con->ansi_state = 0;
-            extern tty_t* g_active_tty;
-            bool active = (g_active_tty && g_active_tty->console == con);
+            extern tty_t* active_tty;
+            bool active = (active_tty && active_tty->console == con);
             if (active && con->cursor_enabled) render_cursor(con, false);
             for (size_t y = con->header_rows; y < con->height; y++)
                 for (size_t x = 0; x < con->width; x++) {
                     size_t i = y * con->width + x;
                     if (con->buffer[i].codepoint != ' ' || con->buffer[i].bg != con->bg_color) {
                         con->buffer[i] = (console_char_t){ ' ', con->fg_color, con->bg_color };
-                        if (active) draw_glyph(get_glyph(' '), x * g_font_width,
-                                               y * (g_font_height + PADDING_Y),
-                                               VGA_PALETTE[con->fg_color], VGA_PALETTE[con->bg_color]);
+                        if (active) draw_glyph(get_glyph(' '), x * fw, y * (fh + PADDING_Y), VGA_PALETTE[con->fg_color], VGA_PALETTE[con->bg_color]);
                     }
                 }
             con->cursor_x = 0; con->cursor_y = con->header_rows;
@@ -309,7 +297,7 @@ void con_putc(console_t* con, char character) {
  * con_refresh - Redraws the entire console to the framebuffer
  */
 void con_refresh(console_t* con) {
-    if (!g_fb_addr) return;
+    if (!fb) return;
     bool flags = spinlock_acquire(&con->lock);
     refresh_locked(con);
     spinlock_release(&con->lock, flags);
@@ -363,13 +351,12 @@ void con_header_write(console_t* con, size_t row, const char* text, uint8_t fg, 
         con->buffer[row * con->width + x] = (console_char_t){ ' ', fg, bg };
     for (size_t c = 0; c < len && (pad + c) < con->width; c++)
         con->buffer[row * con->width + pad + c] = (console_char_t){ (uint8_t)text[c], fg, bg };
-    extern tty_t* g_active_tty;
-    if (g_active_tty && g_active_tty->console == con) {
-        size_t py = row * (g_font_height + PADDING_Y);
+    extern tty_t* active_tty;
+    if (active_tty && active_tty->console == con) {
+        size_t py = row * (fh + PADDING_Y);
         for (size_t x = 0; x < con->width; x++) {
             console_char_t ch = con->buffer[row * con->width + x];
-            draw_glyph(get_glyph(ch.codepoint), x * g_font_width, py,
-                       VGA_PALETTE[ch.fg], VGA_PALETTE[ch.bg]);
+            draw_glyph(get_glyph(ch.codepoint), x * fw, py, VGA_PALETTE[ch.fg], VGA_PALETTE[ch.bg]);
         }
     }
     spinlock_release(&con->lock, flags);
@@ -381,16 +368,16 @@ void con_header_write(console_t* con, size_t row, const char* text, uint8_t fg, 
  * con_crash_width - Returns the width of the crash console in characters
  */
 size_t con_crash_width(void){ 
-    return g_max_cols; 
+    return cols; 
 }
 
 /*
- * crash_pix - Writes one pixel directly to g_fb_addr (panic path, no locks)
+ * crash_pix - Writes one pixel directly to fb (panic path, no locks)
  */
 static inline void crash_pix(uint32_t x, uint32_t y, uint32_t color) {
-    if (!g_fb_addr || x >= g_fb_width || y >= g_fb_height) return;
-    uint8_t* dst = g_fb_addr + y * g_fb_pitch + x * (g_fb_bpp / 8);
-    if (g_fb_bpp == 32) *(uint32_t*)dst = color;
+    if (!fb || x >= fb_w || y >= fb_h) return;
+    uint8_t* dst = fb + y * fb_pitch + x * (fb_bpp / 8);
+    if (fb_bpp == 32) *(uint32_t*)dst = color;
     else { dst[0] = color & 0xFF; dst[1] = (color >> 8) & 0xFF; dst[2] = (color >> 16) & 0xFF; }
 }
 
@@ -398,63 +385,62 @@ static inline void crash_pix(uint32_t x, uint32_t y, uint32_t color) {
  * crash_scroll - Pixel-level scroll of the crash view by one text row
  */
 static void crash_scroll(void) {
-    uint32_t row_h   = (uint32_t)g_font_height + PADDING_Y;
-    size_t row_bytes = row_h * g_fb_pitch;
-    size_t total     = (size_t)g_fb_height * g_fb_pitch;
-    kmemmove(g_fb_addr, g_fb_addr + row_bytes, total - row_bytes);
-    uint32_t bg   = VGA_PALETTE[g_crash_bg];
-    uint8_t* last = g_fb_addr + total - row_bytes;
-    if (g_fb_bpp == 32) {
+    uint32_t row_h   = (uint32_t)fh + PADDING_Y;
+    size_t row_bytes = row_h * fb_pitch;
+    size_t total     = (size_t)fb_h * fb_pitch;
+    kmemmove(fb, fb + row_bytes, total - row_bytes);
+    uint32_t bg   = VGA_PALETTE[cbg];
+    uint8_t* last = fb + total - row_bytes;
+    if (fb_bpp == 32) {
         uint32_t* p = (uint32_t*)last;
         for (size_t i = 0; i < row_bytes / 4; i++) p[i] = bg;
     } else {
         for (uint32_t y = 0; y < row_h; y++)
-            for (uint32_t x = 0; x < g_fb_width; x++)
-                crash_pix(x, g_fb_height - row_h + y, bg);
+            for (uint32_t x = 0; x < fb_w; x++)
+                crash_pix(x, fb_h - row_h + y, bg);
     }
-    if (g_crash_cy > 0) g_crash_cy = (uint32_t)g_max_rows - 1;
+    if (ccy > 0) ccy = (uint32_t)rows - 1;
 }
 
 /*
  * crash_emit - Renders one ASCII byte directly to the framebuffer
  */
 static void crash_emit(uint8_t c) {
-    uint32_t row_h = (uint32_t)g_font_height + PADDING_Y;
-    if      (c == '\n') { g_crash_cx = 0; g_crash_cy++; }
-    else if (c == '\r') { g_crash_cx = 0; }
-    else if (c == '\t') { g_crash_cx = (g_crash_cx + 4) & ~3u; }
+    uint32_t row_h = (uint32_t)fh + PADDING_Y;
+    if      (c == '\n') { ccx = 0; ccy++; }
+    else if (c == '\r') { ccx = 0; }
+    else if (c == '\t') { ccx = (ccx + 4) & ~3u; }
     else {
-        if (g_crash_cx >= (uint32_t)g_max_cols) { g_crash_cx = 0; g_crash_cy++; }
-        if (g_crash_cy >= (uint32_t)g_max_rows) crash_scroll();
-        uint32_t px = g_crash_cx * 8;
-        uint32_t py = g_crash_cy * row_h;
+        if (ccx >= (uint32_t)cols) { ccx = 0; ccy++; }
+        if (ccy >= (uint32_t)rows) crash_scroll();
+        uint32_t px = ccx * 8;
+        uint32_t py = ccy * row_h;
         uint8_t* glyph = get_glyph(c);
         if (glyph)
-            for (uint32_t y = 0; y < (uint32_t)g_font_height; y++) {
+            for (uint32_t y = 0; y < (uint32_t)fh; y++) {
                 uint8_t bits = glyph[y];
                 for (uint32_t x = 0; x < 8; x++)
-                    crash_pix(px + x, py + y,
-                        ((bits >> (7 - x)) & 1) ? VGA_PALETTE[g_crash_fg] : VGA_PALETTE[g_crash_bg]);
+                    crash_pix(px + x, py + y, ((bits >> (7 - x)) & 1) ? VGA_PALETTE[cfg] : VGA_PALETTE[cbg]);
             }
-        g_crash_cx++;
+        ccx++;
     }
-    if (g_crash_cy >= (uint32_t)g_max_rows) crash_scroll();
+    if (ccy >= (uint32_t)rows) crash_scroll();
 }
 
 /*
  * con_crash_clear - Fills the framebuffer with bg color and resets the panic cursor
  */
 void con_crash_clear(uint8_t bg) {
-    if (!g_fb_addr) return;
-    g_crash_bg = bg & 0xF; g_crash_cx = 0; g_crash_cy = 0;
-    uint32_t color = VGA_PALETTE[g_crash_bg];
-    size_t total = (size_t)g_fb_height * g_fb_pitch;
-    if (g_fb_bpp == 32) {
-        uint32_t* p = (uint32_t*)g_fb_addr;
+    if (!fb) return;
+    cbg = bg & 0xF; ccx = 0; ccy = 0;
+    uint32_t color = VGA_PALETTE[cbg];
+    size_t total = (size_t)fb_h * fb_pitch;
+    if (fb_bpp == 32) {
+        uint32_t* p = (uint32_t*)fb;
         for (size_t i = 0; i < total / 4; i++) p[i] = color;
     } else {
-        for (uint32_t y = 0; y < g_fb_height; y++)
-            for (uint32_t x = 0; x < g_fb_width; x++)
+        for (uint32_t y = 0; y < fb_h; y++)
+            for (uint32_t x = 0; x < fb_w; x++)
                 crash_pix(x, y, color);
     }
 }
@@ -463,7 +449,7 @@ void con_crash_clear(uint8_t bg) {
  * con_crash_puts - Outputs a null-terminated string directly to the framebuffer
  */
 void con_crash_puts(const char* s) {
-    if (!g_fb_addr || !s) return;
+    if (!fb || !s) return;
     while (*s) crash_emit((uint8_t)*s++);
 }
 
@@ -471,12 +457,12 @@ void con_crash_puts(const char* s) {
  * con_crash_printf - Formatted direct output to the framebuffer
  */
 void con_crash_printf(const char* fmt, ...) {
-    if (!g_fb_addr) return;
+    if (!fb) return;
     va_list args;
     va_start(args, fmt);
-    kvsnprintf(g_crash_buf, sizeof(g_crash_buf), fmt, args);
+    kvsnprintf(cbuf, sizeof(cbuf), fmt, args);
     va_end(args);
-    con_crash_puts(g_crash_buf);
+    con_crash_puts(cbuf);
 }
 
 #pragma region Globals
@@ -486,54 +472,54 @@ void con_crash_printf(const char* fmt, ...) {
  */
 void console_init(multiboot_parser_t* parser) {
     font_init();
-    multiboot_framebuffer_t* fb = multiboot_get_framebuffer(parser);
-    if (!fb) return;
-    g_fb_phys   = fb->addr;
-    g_fb_width  = fb->width;  g_fb_height = fb->height;
-    g_fb_pitch  = fb->pitch;  g_fb_bpp    = fb->bpp;
-    g_fb_size   = g_fb_height * g_fb_pitch;
-    g_fb_addr   = (uint8_t*)PHYSMAP_P2V(g_fb_phys);
-    g_font_height = font_get_current()->header->charsize;
-    g_max_cols = g_fb_width / g_font_width;
-    g_max_rows = g_fb_height / (g_font_height + PADDING_Y);
-    kmemset(g_fb_addr, 0, g_fb_size);
+    multiboot_framebuffer_t* mbfb = multiboot_get_framebuffer(parser);
+    if (!mbfb) return;
+    fb_phys   = mbfb->addr;
+    fb_w  = mbfb->width;  fb_h = mbfb->height;
+    fb_pitch  = mbfb->pitch;  fb_bpp    = mbfb->bpp;
+    fb_sz   = fb_h * fb_pitch;
+    fb   = (uint8_t*)PHYSMAP_P2V(fb_phys);
+    fh = font_get_current()->header->charsize;
+    cols = fb_w / fw;
+    rows = fb_h / (fh + PADDING_Y);
+    kmemset(fb, 0, fb_sz);
 }
 
 /*
  * console_print_char - Global accessor: prints a character to the active TTY
  */
 void console_print_char(char character) {
-    extern tty_t* g_active_tty;
-    if (g_active_tty && g_active_tty->console)
-        con_putc(g_active_tty->console, character);
+    extern tty_t* active_tty;
+    if (active_tty && active_tty->console)
+        con_putc(active_tty->console, character);
 }
 
 /*
  * console_set_color - Global accessor: sets colors on the active TTY
  */
 void console_set_color(uint8_t foreground, uint8_t background) {
-    extern tty_t* g_active_tty;
-    if (g_active_tty && g_active_tty->console)
-        con_set_color(g_active_tty->console, foreground, background);
+    extern tty_t* active_tty;
+    if (active_tty && active_tty->console)
+        con_set_color(active_tty->console, foreground, background);
 }
 
 /*
  * console_enable_cursor - Global accessor: toggles the cursor on the active TTY
  */
 void console_enable_cursor(bool enabled) {
-    extern tty_t* g_active_tty;
-    if (g_active_tty && g_active_tty->console)
-        con_enable_cursor(g_active_tty->console, enabled);
+    extern tty_t* active_tty;
+    if (active_tty && active_tty->console)
+        con_enable_cursor(active_tty->console, enabled);
 }
 
 /*
  * console_clear - Global accessor: clears the active TTY's display
  */
 void console_clear(uint8_t background) {
-    extern tty_t* g_active_tty;
-    if (g_active_tty && g_active_tty->console)
-        con_clear(g_active_tty->console, background);
+    extern tty_t* active_tty;
+    if (active_tty && active_tty->console)
+        con_clear(active_tty->console, background);
 }
 
-size_t console_get_width()  { return g_max_cols; }
-size_t console_get_height() { return g_max_rows; }
+size_t console_get_width()  { return cols; }
+size_t console_get_height() { return rows; }

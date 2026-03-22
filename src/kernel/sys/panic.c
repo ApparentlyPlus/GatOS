@@ -57,7 +57,7 @@ static void panic_log(const char* msg, cpu_context_t* ctx)
 }
 
 /*
- * panic_c - Core panic handler: logs to serial, then renders the crash screen.
+ * panic_c - Core panic handler: logs to serial, then renders the crash screen
  */
 void panic_c(const char* message, cpu_context_t* context)
 {

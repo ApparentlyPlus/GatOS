@@ -17,7 +17,7 @@
 #include <stdint.h>
 
 /*
- * donut - Renders a spinning ASCII donut in the console using only syscalls.
+ * donut - Renders a spinning ASCII donut in the console using only syscalls
  */
 void donut(void) {
     syscall_tty_ctrl(TTY_CTRL_CURSOR, 0); // Hide cursor for better aesthetics
@@ -94,7 +94,7 @@ void donut(void) {
 }
 
 /*
- * demo_threadA - Prints sqrt(i) for i in [1, 10], then exits.
+ * demo_threadA - Prints sqrt(i) for i in [1, 10], then exits
  */
 void demo_threadA(void* arg) {
     (void)arg;
@@ -105,7 +105,7 @@ void demo_threadA(void* arg) {
 }
 
 /*
- * demo_threadB - Iterates, then exercises mmap/munmap to demonstrate an intentional page fault on access after unmap.
+ * demo_threadB - Iterates, then exercises mmap/munmap to demonstrate an intentional page fault on access after unmap
  */
 void demo_threadB(void* arg) {
     (void)arg;

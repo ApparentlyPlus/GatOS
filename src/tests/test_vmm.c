@@ -27,32 +27,32 @@ typedef enum { TALLOC, TVMM } ttype_t;
 typedef struct { ttype_t type; vmm_t* vmm; void* addr; size_t sz; bool on; } vmtr_t;
 
 #define MT 2048
-static vmtr_t g_tr[MT];
-static int    g_tidx         = 0;
-static int    g_tests_total  = 0;
-static int    g_tests_passed = 0;
+static vmtr_t tr[MT];
+static int    tidx         = 0;
+static int    ntests  = 0;
+static int    npass = 0;
 
 #pragma region Tracker
 
 static void tr_reset(void) {
-    for (int i = 0; i < MT; i++) g_tr[i].on = false;
-    g_tidx = 0;
+    for (int i = 0; i < MT; i++) tr[i].on = false;
+    tidx = 0;
 }
 
 static void tr_alloc(vmm_t* v, void* a, size_t s) {
-    if (g_tidx < MT) g_tr[g_tidx++] = (vmtr_t){TALLOC, v, a, s, true};
+    if (tidx < MT) tr[tidx++] = (vmtr_t){TALLOC, v, a, s, true};
 }
 
 static void tr_vmm(vmm_t* v) {
-    if (g_tidx < MT) g_tr[g_tidx++] = (vmtr_t){TVMM, v, NULL, 0, true};
+    if (tidx < MT) tr[tidx++] = (vmtr_t){TVMM, v, NULL, 0, true};
 }
 
 static void tr_free(void) {
     for (int i = 0; i < MT; i++)
-        if (g_tr[i].on && g_tr[i].type == TALLOC) { vmm_free(g_tr[i].vmm, g_tr[i].addr); g_tr[i].on = false; }
+        if (tr[i].on && tr[i].type == TALLOC) { vmm_free(tr[i].vmm, tr[i].addr); tr[i].on = false; }
     for (int i = 0; i < MT; i++)
-        if (g_tr[i].on && g_tr[i].type == TVMM) { vmm_destroy(g_tr[i].vmm); g_tr[i].on = false; }
-    g_tidx = 0;
+        if (tr[i].on && tr[i].type == TVMM) { vmm_destroy(tr[i].vmm); tr[i].on = false; }
+    tidx = 0;
 }
 
 /* Walk page tables manually */
@@ -400,7 +400,7 @@ static bool t_kern_persist(void) {
     tr_reset();
     vmm_t* u = vmm_create(USER_BASE, USER_END); tr_vmm(u);
     /* Kernel variable must be mapped in the user VMM's table */
-    uint64_t kvar = (uint64_t)&g_tests_total;
+    uint64_t kvar = (uint64_t)&ntests;
     TEST_ASSERT(pte_present(u->pt_root, (void*)kvar));
     tr_free(); return true;
 }
@@ -450,7 +450,7 @@ static bool t_buf_zero_sz(void) {
     tr_reset();
     vmm_t* v = vmm_kernel_get(); void* p;
     TEST_ASSERT_STATUS(vmm_alloc(v, PG, VM_FLAG_WRITE, NULL, &p), VMM_OK); tr_alloc(v,p,PG);
-    /* Zero-size check on a valid pointer — implementation defined, must not crash */
+    /* Zero-size check on a valid pointer - implementation defined, must not crash */
     (void)vmm_check_buffer(v, p, 0, VM_FLAG_WRITE);
     tr_free(); return true;
 }
@@ -458,7 +458,7 @@ static bool t_buf_zero_sz(void) {
 static bool t_buf_bad_flags(void) {
     tr_reset();
     vmm_t* v = vmm_kernel_get(); void* p;
-    /* Allocate read-only (VM_FLAG_NONE), check for write — must fail */
+    /* Allocate read-only (VM_FLAG_NONE), check for write - must fail */
     TEST_ASSERT_STATUS(vmm_alloc(v, PG, VM_FLAG_NONE, NULL, &p), VMM_OK); tr_alloc(v,p,PG);
     TEST_ASSERT(!vmm_check_buffer(v, p, PG, VM_FLAG_WRITE));
     tr_free(); return true;
@@ -564,7 +564,7 @@ static bool t_frag(void) {
     }
     for (int i = 1; i < FRAG; i += 2) {
         vmm_free(v, ptrs[i]);
-        for (int t = 0; t < g_tidx; t++) if (g_tr[t].addr == ptrs[i]) g_tr[t].on = false;
+        for (int t = 0; t < tidx; t++) if (tr[t].addr == ptrs[i]) tr[t].on = false;
     }
     for (int i = 0; i < 64; i++) {
         void* p;
@@ -640,18 +640,18 @@ static bool t_swiss_cheese(void) {
 #pragma region Runner
 
 static void run_test(const char* name, bool (*fn)(void)) {
-    g_tests_total++;
+    ntests++;
     LOGF("[TEST] %-40s ", name);
     if (!vmm_verify_integrity(vmm_kernel_get())) { LOGF("[SKIP] (VMM corrupted)\n"); return; }
     bool pass = fn();
-    if (g_tidx > 0) { LOGF("[WARN] leak (cleaning) ... "); tr_free(); }
-    if (pass) { g_tests_passed++; LOGF("[PASS]\n"); }
+    if (tidx > 0) { LOGF("[WARN] leak (cleaning) ... "); tr_free(); }
+    if (pass) { npass++; LOGF("[PASS]\n"); }
     else       { LOGF("[FAIL]\n"); }
 }
 
 void test_vmm(void) {
-    g_tests_total  = 0;
-    g_tests_passed = 0;
+    ntests  = 0;
+    npass = 0;
 
     LOGF("\n--- BEGIN VMM TEST ---\n");
 
@@ -700,18 +700,18 @@ void test_vmm(void) {
     run_test("swiss cheese destroy",           t_swiss_cheese);
 
     LOGF("--- END VMM TEST ---\n");
-    LOGF("VMM Test Results: %d/%d\n\n", g_tests_passed, g_tests_total);
+    LOGF("VMM Test Results: %d/%d\n\n", npass, ntests);
 
     #ifdef TEST_BUILD
     #include <kernel/drivers/console.h>
     #include <klibc/stdio.h>
-    if (g_tests_passed != g_tests_total) {
+    if (npass != ntests) {
         console_set_color(CONSOLE_COLOR_RED, CONSOLE_COLOR_BLACK);
-        kprintf("[-] Some VMM tests failed (%d/%d passed).\n", g_tests_passed, g_tests_total);
+        kprintf("[-] Some VMM tests failed (%d/%d passed).\n", npass, ntests);
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     } else {
         console_set_color(CONSOLE_COLOR_GREEN, CONSOLE_COLOR_BLACK);
-        kprintf("[+] All VMM tests passed! (%d/%d)\n", g_tests_passed, g_tests_total);
+        kprintf("[+] All VMM tests passed! (%d/%d)\n", npass, ntests);
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     }
     #endif

@@ -15,33 +15,33 @@
 
 #pragma region Harness
 
-static int g_tests_total  = 0;
-static int g_tests_passed = 0;
+static int ntests  = 0;
+static int npass = 0;
 
 /* Caches registered during a test (for cleanup) */
 #define MAX_TR_CACHES 16
-static slab_cache_t* g_tr_caches[MAX_TR_CACHES];
-static int           g_tr_n = 0;
+static slab_cache_t* tr_caches[MAX_TR_CACHES];
+static int           tr_n = 0;
 
 static void tr_reg(slab_cache_t* c) {
-    if (c && g_tr_n < MAX_TR_CACHES)
-        g_tr_caches[g_tr_n++] = c;
+    if (c && tr_n < MAX_TR_CACHES)
+        tr_caches[tr_n++] = c;
 }
 
 static void tr_free(void) {
-    for (int i = 0; i < g_tr_n; i++) {
-        if (g_tr_caches[i]) slab_cache_destroy(g_tr_caches[i]);
+    for (int i = 0; i < tr_n; i++) {
+        if (tr_caches[i]) slab_cache_destroy(tr_caches[i]);
     }
-    g_tr_n = 0;
+    tr_n = 0;
 }
 
 static void run_test(const char* name, bool (*fn)(void)) {
-    g_tests_total++;
+    ntests++;
     LOGF("[TEST] %-40s ", name);
     if (!slab_is_initialized()) { LOGF("[SKIP] (slab not init)\n"); return; }
     bool pass = fn();
-    if (g_tr_n > 0) { LOGF("[WARN] leak (cleaning) ... "); tr_free(); }
-    if (pass) { g_tests_passed++; LOGF("[PASS]\n"); }
+    if (tr_n > 0) { LOGF("[WARN] leak (cleaning) ... "); tr_free(); }
+    if (pass) { npass++; LOGF("[PASS]\n"); }
     else       { LOGF("[FAIL]\n"); }
 }
 #pragma endregion
@@ -49,15 +49,15 @@ static void run_test(const char* name, bool (*fn)(void)) {
 #pragma region Helpers
 
 /* Unique counter so each test gets a fresh cache name */
-static int g_cache_seq = 0;
+static int cache_seq = 0;
 
 static slab_cache_t* mk_cache(const char* prefix, size_t obj_size, size_t align) {
     static char name[SLAB_CACHE_NAME_LEN];
-    /* compose e.g. "ts_alloc_3" — stays within SLAB_CACHE_NAME_LEN */
+    /* compose e.g. "ts_alloc_3" - stays within SLAB_CACHE_NAME_LEN */
     int n = 0;
     while (prefix[n] && n < 20) { name[n] = prefix[n]; n++; }
     name[n++] = '_';
-    int seq = ++g_cache_seq;
+    int seq = ++cache_seq;
     if (seq >= 100) { name[n++] = '0' + seq / 100; seq %= 100; }
     if (seq >= 10)  { name[n++] = '0' + seq / 10;  seq %= 10;  }
     name[n++] = '0' + seq;
@@ -172,7 +172,7 @@ static bool t_destroy_null(void) {
 }
 
 static bool t_cache_lim(void) {
-    /* Slab is dynamically allocated — verify stats accurately track many caches */
+    /* Slab is dynamically allocated - verify stats accurately track many caches */
     slab_stats_t before; slab_get_stats(&before);
     int created = 0;
     for (int i = 0; i < 8; i++) {
@@ -299,7 +299,7 @@ static bool t_dbl_free(void) {
 }
 
 static bool t_cycle(void) {
-    /* Allocate and free the same slot 1000 times — no leak */
+    /* Allocate and free the same slot 1000 times - no leak */
     slab_cache_t* c = mk_cache("ts_cyc", 48, 8);
     TEST_ASSERT(c != NULL);
     for (int i = 0; i < 1000; i++) {
@@ -530,7 +530,7 @@ static bool t_seq(void) {
 }
 
 static bool t_batch_rev(void) {
-    /* Alloc 128, free in reverse order — exercises freelist reorder */
+    /* Alloc 128, free in reverse order - exercises freelist reorder */
     slab_cache_t* c = mk_cache("ts_bfr", 64, 8);
     TEST_ASSERT(c != NULL);
     void* ptrs[128];
@@ -568,8 +568,8 @@ static bool t_recreate(void) {
 #pragma region Runner
 
 void test_slab(void) {
-    g_tests_total  = 0;
-    g_tests_passed = 0;
+    ntests  = 0;
+    npass = 0;
 
     LOGF("--- BEGIN SLAB ALLOCATOR TEST ---\n");
 
@@ -635,18 +635,18 @@ void test_slab(void) {
     run_test("realloc_pattern",         t_recreate);
 
     LOGF("--- END SLAB ALLOCATOR TEST ---\n");
-    LOGF("Slab Test Results: %d/%d\n\n", g_tests_passed, g_tests_total);
+    LOGF("Slab Test Results: %d/%d\n\n", npass, ntests);
 
     #ifdef TEST_BUILD
     #include <kernel/drivers/console.h>
     #include <klibc/stdio.h>
-    if (g_tests_passed != g_tests_total) {
+    if (npass != ntests) {
         console_set_color(CONSOLE_COLOR_RED, CONSOLE_COLOR_BLACK);
-        kprintf("[-] Some Slab tests failed (%d/%d passed).\n", g_tests_passed, g_tests_total);
+        kprintf("[-] Some Slab tests failed (%d/%d passed).\n", npass, ntests);
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     } else {
         console_set_color(CONSOLE_COLOR_GREEN, CONSOLE_COLOR_BLACK);
-        kprintf("[+] All Slab tests passed! (%d/%d)\n", g_tests_passed, g_tests_total);
+        kprintf("[+] All Slab tests passed! (%d/%d)\n", npass, ntests);
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     }
     #endif

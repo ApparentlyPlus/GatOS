@@ -20,21 +20,21 @@
 #include <stdint.h>
 #include <stddef.h>
 
-static int g_tests_total  = 0;
-static int g_tests_passed = 0;
+static int ntests  = 0;
+static int npass = 0;
 
 #pragma region Calibration
 
-static uint64_t g_tsc_khz        = 0; /* TSC ticks per millisecond          */
-static uint64_t g_ms_overhead_ms = 0; /* worst-case extra ms per sleep_ms() */
-static uint64_t g_us_overhead_us = 0; /* worst-case extra us per sleep_us() */
-static bool     g_calibrated     = false;
+static uint64_t tsc_khz        = 0; /* TSC ticks per millisecond          */
+static uint64_t ms_ovhd = 0; /* worst-case extra ms per sleep_ms() */
+static uint64_t us_ovhd = 0; /* worst-case extra us per sleep_us() */
+static bool     calibrated     = false;
 
 #define CAL_ITERS 10
 
 /* Derive machine-specific timing parameters. Called once before any test. */
 static void calibrate(void) {
-    if (g_calibrated) return;
+    if (calibrated) return;
 
     /* TSC frequency via uptime (use 20ms window for stable reading) */
     {
@@ -45,7 +45,7 @@ static void calibrate(void) {
         uint64_t ns1 = get_uptime_ns();
         uint64_t elapsed_ns = ns1 - ns0;
         if (elapsed_ns > 0)
-            g_tsc_khz = (t1 - t0) * 1000000ULL / elapsed_ns;
+            tsc_khz = (t1 - t0) * 1000000ULL / elapsed_ns;
     }
 
     /* sleep_ms(1) overshoot */
@@ -58,7 +58,7 @@ static void calibrate(void) {
             uint64_t over = (b - a > 1) ? (b - a - 1) : 0;
             if (over > max) max = over;
         }
-        g_ms_overhead_ms = max * 3 + 5; /* 3× margin + 5ms absolute floor */
+        ms_ovhd = max * 3 + 5; /* 3× margin + 5ms absolute floor */
     }
 
     /* sleep_us(500) overshoot */
@@ -72,20 +72,20 @@ static void calibrate(void) {
             uint64_t over_us = over_ns / 1000ULL;
             if (over_us > max) max = over_us;
         }
-        g_us_overhead_us = max * 3 + 2000; /* 3× margin + 2ms floor */
+        us_ovhd = max * 3 + 2000; /* 3× margin + 2ms floor */
     }
 
-    LOGF("[CAL] TSC freq    : %lu kHz\n",  g_tsc_khz);
-    LOGF("[CAL] ms overhead : %lu ms\n",   g_ms_overhead_ms);
-    LOGF("[CAL] us overhead : %lu us\n",   g_us_overhead_us);
-    g_calibrated = true;
+    LOGF("[CAL] TSC freq    : %lu kHz\n",  tsc_khz);
+    LOGF("[CAL] ms overhead : %lu ms\n",   ms_ovhd);
+    LOGF("[CAL] us overhead : %lu us\n",   us_ovhd);
+    calibrated = true;
 }
 #pragma endregion
 
 #pragma region HPET
 
 static bool t_hpet_avail(void) {
-    /* Availability is reported; either outcome is valid — just must not crash */
+    /* Availability is reported; either outcome is valid - just must not crash */
     (void)hpet_is_available();
     return true;
 }
@@ -169,9 +169,9 @@ static bool t_tsc_range(void) {
 static bool t_tsc_freq(void) {
     calibrate();
     /* Frequency must be >100 MHz and <10 GHz (physically impossible today) */
-    TEST_ASSERT(g_tsc_khz > 0);
-    TEST_ASSERT(g_tsc_khz < 10000000ULL);
-    LOGF("[INFO] TSC %lu kHz\n", g_tsc_khz);
+    TEST_ASSERT(tsc_khz > 0);
+    TEST_ASSERT(tsc_khz < 10000000ULL);
+    LOGF("[INFO] TSC %lu kHz\n", tsc_khz);
     return true;
 }
 #pragma endregion
@@ -244,7 +244,7 @@ static bool t_ms_hi(void) {
     uint64_t a = get_uptime_ms();
     sleep_ms(100);
     uint64_t b = get_uptime_ms();
-    uint64_t upper = 100 + g_ms_overhead_ms * 100; /* per-ms overhead × count */
+    uint64_t upper = 100 + ms_ovhd * 100; /* per-ms overhead × count */
     LOGF("[INFO] sleep_ms(100)=%lu ms (cap:%lu)\n", (b-a), upper);
     TEST_ASSERT((b - a) <= upper);
     return true;
@@ -275,7 +275,7 @@ static bool t_ms_zero_fast(void) {
 }
 
 static bool t_ms_various(void) {
-    /* Test 1, 5, 10, 50 ms — all must be within calibrated bounds */
+    /* Test 1, 5, 10, 50 ms - all must be within calibrated bounds */
     calibrate();
     static const uint64_t targets[] = {1, 5, 10, 50};
     for (int i = 0; i < 4; i++) {
@@ -284,7 +284,7 @@ static bool t_ms_various(void) {
         sleep_ms(t);
         uint64_t b = get_uptime_ms();
         uint64_t lo = (t * 90) / 100;
-        uint64_t hi = t + g_ms_overhead_ms * t + 10;
+        uint64_t hi = t + ms_ovhd * t + 10;
         LOGF("[%lums:%lu] ", t, b - a);
         TEST_ASSERT((b - a) >= lo);
         TEST_ASSERT((b - a) <= hi);
@@ -311,7 +311,7 @@ static bool t_us_hi(void) {
     sleep_us(500);
     uint64_t b = get_uptime_ns();
     uint64_t delta_us = (b - a) / 1000ULL;
-    uint64_t upper = 500 + g_us_overhead_us;
+    uint64_t upper = 500 + us_ovhd;
     LOGF("[INFO] sleep_us(500)=%lu us (cap:%lu)\n", delta_us, upper);
     TEST_ASSERT(delta_us <= upper);
     return true;
@@ -324,7 +324,7 @@ static bool t_us_zero(void) {
 }
 
 static bool t_us_small(void) {
-    /* sleep_us(1) — must not crash and must return in reasonable time */
+    /* sleep_us(1) - must not crash and must return in reasonable time */
     uint64_t a = get_uptime_ms();
     for (int i = 0; i < 100; i++) sleep_us(1);
     uint64_t b = get_uptime_ms();
@@ -349,7 +349,7 @@ static bool t_drift_hi(void) {
     uint64_t a = get_uptime_ms();
     for (int i = 0; i < 50; i++) sleep_ms(2);
     uint64_t b = get_uptime_ms();
-    uint64_t upper = 100 + g_ms_overhead_ms * 50 + 10;
+    uint64_t upper = 100 + ms_ovhd * 50 + 10;
     LOGF("[INFO] drift(50×2ms)=%lu ms (cap:%lu)\n", (b - a), upper);
     TEST_ASSERT((b - a) <= upper);
     return true;
@@ -360,7 +360,7 @@ static bool t_drift_10x(void) {
     uint64_t a = get_uptime_ms();
     for (int i = 0; i < 10; i++) sleep_ms(10);
     uint64_t b = get_uptime_ms();
-    uint64_t upper = 100 + g_ms_overhead_ms * 10 + 10;
+    uint64_t upper = 100 + ms_ovhd * 10 + 10;
     TEST_ASSERT((b - a) >= 95);
     TEST_ASSERT((b - a) <= upper);
     return true;
@@ -369,71 +369,71 @@ static bool t_drift_10x(void) {
 
 #pragma region LAPIC
 
-static volatile uint32_t g_irq_count = 0;
+static volatile uint32_t irq_cnt = 0;
 
 static cpu_context_t* irq_cb(cpu_context_t* ctx) {
-    g_irq_count++;
+    irq_cnt++;
     return ctx;
 }
 
 static bool t_os_fires(void) {
     calibrate();
     const uint8_t vec = 0xE0;
-    g_irq_count = 0;
+    irq_cnt = 0;
     irq_register(vec, irq_cb);
     lapic_timer_oneshot(5000, vec);
     /* Wait up to 100ms (20× target) */
-    for (int i = 0; i < 100 && g_irq_count == 0; i++) sleep_ms(1);
+    for (int i = 0; i < 100 && irq_cnt == 0; i++) sleep_ms(1);
     lapic_timer_stop();
     irq_unregister(vec);
-    TEST_ASSERT(g_irq_count == 1);
+    TEST_ASSERT(irq_cnt == 1);
     return true;
 }
 
 static bool t_os_noextra(void) {
     calibrate();
     const uint8_t vec = 0xE0;
-    g_irq_count = 0;
+    irq_cnt = 0;
     irq_register(vec, irq_cb);
     lapic_timer_oneshot(5000, vec);
     sleep_ms(60); /* well past delivery */
     lapic_timer_stop();
     irq_unregister(vec);
-    TEST_ASSERT(g_irq_count == 1);
+    TEST_ASSERT(irq_cnt == 1);
     return true;
 }
 
 static bool t_os_window(void) {
     calibrate();
     const uint8_t vec = 0xE0;
-    g_irq_count = 0;
+    irq_cnt = 0;
     irq_register(vec, irq_cb);
     uint64_t t0 = get_uptime_ms();
     lapic_timer_oneshot(10000, vec); /* 10ms */
-    for (int i = 0; i < 200 && g_irq_count == 0; i++) sleep_ms(1);
+    for (int i = 0; i < 200 && irq_cnt == 0; i++) sleep_ms(1);
     uint64_t t1 = get_uptime_ms();
     lapic_timer_stop();
     irq_unregister(vec);
-    TEST_ASSERT(g_irq_count >= 1);
-    TEST_ASSERT((t1 - t0) <= 200 + g_ms_overhead_ms * 200);
+    TEST_ASSERT(irq_cnt >= 1);
+    TEST_ASSERT((t1 - t0) <= 200 + ms_ovhd * 200);
     return true;
 }
 
 static bool t_per_count(void) {
     calibrate();
     const uint8_t vec = 0xE1;
-    g_irq_count = 0;
+    irq_cnt = 0;
     const uint32_t period_us = 10000; /* 10ms */
     irq_register(vec, irq_cb);
     lapic_timer_periodic(period_us, vec);
     uint64_t t0 = get_uptime_ms();
-    for (int i = 0; i < 1000 && g_irq_count < 5; i++) {
+    for (int i = 0; i < 1000 && irq_cnt < 5; i++) {
         sleep_ms(1);
     }
     uint64_t t1 = get_uptime_ms();
     lapic_timer_stop();
     irq_unregister(vec);
-    uint32_t cnt = g_irq_count;
+    uint32_t cnt = irq_cnt;
     uint64_t elapsed = t1 - t0;
     LOGF("[INFO] periodic: %u irqs in %lu ms\n", cnt, elapsed);
     TEST_ASSERT(cnt >= 5);
@@ -443,17 +443,17 @@ static bool t_per_count(void) {
 static bool t_per_stop(void) {
     calibrate();
     const uint8_t vec = 0xE1;
-    g_irq_count = 0;
+    irq_cnt = 0;
     irq_register(vec, irq_cb);
     lapic_timer_periodic(5000, vec);
-    for (int i = 0; i < 500 && g_irq_count == 0; i++) {
+    for (int i = 0; i < 500 && irq_cnt == 0; i++) {
         sleep_ms(1);
     }
     lapic_timer_stop();
-    uint32_t at_stop = g_irq_count;
+    uint32_t at_stop = irq_cnt;
     sleep_ms(50);
     irq_unregister(vec);
-    uint32_t after_stop = g_irq_count;
+    uint32_t after_stop = irq_cnt;
     LOGF("[INFO] stop: %u before, %u after\n", at_stop, after_stop);
     TEST_ASSERT(at_stop >= 1);
     TEST_ASSERT(after_stop <= at_stop + 1); /* at most 1 in-flight */
@@ -463,21 +463,21 @@ static bool t_per_stop(void) {
 static bool t_per_rearm(void) {
     calibrate();
     const uint8_t vec = 0xE1;
-    g_irq_count = 0;
+    irq_cnt = 0;
     irq_register(vec, irq_cb);
     lapic_timer_periodic(10000, vec);
-    for (int i = 0; i < 500 && g_irq_count == 0; i++) {
+    for (int i = 0; i < 500 && irq_cnt == 0; i++) {
         sleep_ms(1);
     }
     lapic_timer_stop();
-    uint32_t first_run = g_irq_count;
-    g_irq_count = 0;
+    uint32_t first_run = irq_cnt;
+    irq_cnt = 0;
     lapic_timer_periodic(10000, vec);
-    for (int i = 0; i < 500 && g_irq_count == 0; i++) {
+    for (int i = 0; i < 500 && irq_cnt == 0; i++) {
         sleep_ms(1);
     }
     lapic_timer_stop();
-    uint32_t second_run = g_irq_count;
+    uint32_t second_run = irq_cnt;
     irq_unregister(vec);
     LOGF("[INFO] rearm: %u then %u\n", first_run, second_run);
     TEST_ASSERT(first_run >= 1);
@@ -489,15 +489,15 @@ static bool t_per_rearm(void) {
 #pragma region Runner
 
 static void run_test(const char* name, bool (*fn)(void)) {
-    g_tests_total++;
+    ntests++;
     LOGF("[TEST] %-40s ", name);
-    if (fn()) { g_tests_passed++; LOGF("[PASS]\n"); }
+    if (fn()) { npass++; LOGF("[PASS]\n"); }
     else       { LOGF("[FAIL]\n"); }
 }
 
 void test_timers(void) {
-    g_tests_total  = 0;
-    g_tests_passed = 0;
+    ntests  = 0;
+    npass = 0;
 
     LOGF("\n--- BEGIN TIMER SUBSYSTEM TEST ---\n");
 
@@ -536,18 +536,18 @@ void test_timers(void) {
     run_test("LAPIC Periodic Rearm",         t_per_rearm);
 
     LOGF("--- END TIMER SUBSYSTEM TEST ---\n");
-    LOGF("Timer Test Results: %d/%d\n\n", g_tests_passed, g_tests_total);
+    LOGF("Timer Test Results: %d/%d\n\n", npass, ntests);
 
     #ifdef TEST_BUILD
     #include <kernel/drivers/console.h>
     #include <klibc/stdio.h>
-    if (g_tests_passed != g_tests_total) {
+    if (npass != ntests) {
         console_set_color(CONSOLE_COLOR_RED, CONSOLE_COLOR_BLACK);
-        kprintf("[-] Some timer tests failed (%d/%d passed).\n", g_tests_passed, g_tests_total);
+        kprintf("[-] Some timer tests failed (%d/%d passed).\n", npass, ntests);
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     } else {
         console_set_color(CONSOLE_COLOR_GREEN, CONSOLE_COLOR_BLACK);
-        kprintf("[+] All timer tests passed! (%d/%d)\n", g_tests_passed, g_tests_total);
+        kprintf("[+] All timer tests passed! (%d/%d)\n", npass, ntests);
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     }
     #endif

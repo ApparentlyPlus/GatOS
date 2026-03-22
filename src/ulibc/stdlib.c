@@ -79,8 +79,8 @@ typedef struct {
     size_t   arena_count;
 } heap_t;
 
-static heap_t g_heap;
-static ulock_t g_heap_lock; // zero-initialized in .user_bss (unlocked)
+static heap_t uheap;
+static ulock_t uheap_lock; // zero-initialized in .user_bss (unlocked)
 
 #pragma region Utility
 
@@ -124,21 +124,21 @@ static void fl_remove(block_t *b) {
     }
 
     if (b->prev_free) b->prev_free->next_free = b->next_free;
-    else              g_heap.free_list = b->next_free;
+    else              uheap.free_list = b->next_free;
     if (b->next_free) b->next_free->prev_free = b->prev_free;
     b->next_free = b->prev_free = NULL;
 }
 
 static void fl_insert(block_t *b) {
     b->next_free = b->prev_free = NULL;
-    if (!g_heap.free_list) { g_heap.free_list = b; return; }
-    if (b->size <= g_heap.free_list->size) {
-        b->next_free = g_heap.free_list;
-        g_heap.free_list->prev_free = b;
-        g_heap.free_list = b;
+    if (!uheap.free_list) { uheap.free_list = b; return; }
+    if (b->size <= uheap.free_list->size) {
+        b->next_free = uheap.free_list;
+        uheap.free_list->prev_free = b;
+        uheap.free_list = b;
         return;
     }
-    block_t *cur = g_heap.free_list;
+    block_t *cur = uheap.free_list;
     while (cur->next_free && cur->next_free->size < b->size)
         cur = cur->next_free;
     b->next_free = cur->next_free;
@@ -182,7 +182,7 @@ static block_t *coalesce(block_t *b) {
         // reclaim the absorbed block's header+footer as usable free space
         size_t oh = sizeof(block_t) + sizeof(bfooter_t);
         if (b->arena) b->arena->total_free += oh;
-        g_heap.total_free += oh;
+        uheap.total_free += oh;
         b->size       += nxt->total_size;
         b->total_size += nxt->total_size;
         bfooter_t *f = get_footer(b);
@@ -198,7 +198,7 @@ static block_t *coalesce(block_t *b) {
         fl_remove(prv);
         size_t oh = sizeof(block_t) + sizeof(bfooter_t);
         if (prv->arena) prv->arena->total_free += oh;
-        g_heap.total_free += oh;
+        uheap.total_free += oh;
         prv->size       += b->total_size;
         prv->total_size += b->total_size;
         bfooter_t *f = get_footer(prv);
@@ -226,7 +226,7 @@ static void split_block(block_t *b, size_t size) {
         fl_remove(b);
         // the new header+footer overhead is consumed from free space
         if (b->arena) b->arena->total_free -= oh;
-        g_heap.total_free -= oh;
+        uheap.total_free -= oh;
     } else {
         // splitting a used block (realloc shrink): carve out new free payload
         size_t new_free = remaining - oh;
@@ -234,8 +234,8 @@ static void split_block(block_t *b, size_t size) {
             b->arena->total_alloc -= remaining;
             b->arena->total_free  += new_free;
         }
-        g_heap.total_alloc -= remaining;
-        g_heap.total_free  += new_free;
+        uheap.total_alloc -= remaining;
+        uheap.total_free  += new_free;
     }
 
     b->size       = size;
@@ -303,17 +303,17 @@ static arena_t *arena_create(size_t min_body) {
     arena->total_alloc = 0;
 
     // Append to arena list
-    if (!g_heap.arenas) {
-        g_heap.arenas = arena;
+    if (!uheap.arenas) {
+        uheap.arenas = arena;
     } else {
-        arena_t *tail = g_heap.arenas;
+        arena_t *tail = uheap.arenas;
         while (tail->next) tail = tail->next;
         tail->next = arena;
         arena->prev = tail;
     }
 
-    g_heap.total_free += payload;
-    g_heap.arena_count++;
+    uheap.total_free += payload;
+    uheap.arena_count++;
 
     fl_insert(b);
     return arena;
@@ -323,18 +323,18 @@ static void arena_destroy(arena_t *arena) {
     if (!arena || arena->magic != ARENA_MAGIC) return;
 
     // Remove all of this arena's blocks from the global free list
-    block_t *cur = g_heap.free_list;
+    block_t *cur = uheap.free_list;
     while (cur) {
         block_t *nxt = cur->next_free;
         if (cur->arena == arena) fl_remove(cur);
         cur = nxt;
     }
 
-    g_heap.total_free -= arena->total_free;
-    g_heap.arena_count--;
+    uheap.total_free -= arena->total_free;
+    uheap.arena_count--;
 
     if (arena->prev) arena->prev->next = arena->next;
-    else             g_heap.arenas = arena->next;
+    else             uheap.arenas = arena->next;
     if (arena->next) arena->next->prev = arena->prev;
 
     arena->magic = 0;
@@ -343,9 +343,9 @@ static void arena_destroy(arena_t *arena) {
 
 static void try_shrink(arena_t *arena) {
     if (!arena || arena->magic != ARENA_MAGIC) return;
-    if (g_heap.arena_count <= 1) return;
+    if (uheap.arena_count <= 1) return;
     if (arena->total_alloc > 0) return;
-    if (g_heap.total_free < g_heap.total_alloc * SHRINK_THRESHOLD) return;
+    if (uheap.total_free < uheap.total_alloc * SHRINK_THRESHOLD) return;
 
     // Arena is empty when its free payload equals body - block overhead
     size_t body = arena->size - ARENA_HDR_SIZE;
@@ -359,8 +359,8 @@ static void try_shrink(arena_t *arena) {
 #pragma region Heap init
 
 static void heap_init(void) {
-    if (g_heap.magic == HEAP_MAGIC) return;
-    g_heap.magic = HEAP_MAGIC;
+    if (uheap.magic == HEAP_MAGIC) return;
+    uheap.magic = HEAP_MAGIC;
     arena_create(MIN_ARENA_BODY);
 }
 
@@ -378,7 +378,7 @@ static void *heap_alloc(size_t size, bool zero) {
     if (size < MIN_BLOCK_SIZE) size = MIN_BLOCK_SIZE;
 
     // First-fit from sorted free list
-    block_t *b = g_heap.free_list;
+    block_t *b = uheap.free_list;
     while (b && b->size < size) b = b->next_free;
 
     if (!b) {
@@ -386,7 +386,7 @@ static void *heap_alloc(size_t size, bool zero) {
         size_t needed = size + sizeof(block_t) + sizeof(bfooter_t);
         size_t body   = needed > MIN_ARENA_BODY ? needed : MIN_ARENA_BODY;
         if (!arena_create(body)) return NULL;
-        b = g_heap.free_list;
+        b = uheap.free_list;
         while (b && b->size < size) b = b->next_free;
         if (!b) return NULL;
     }
@@ -401,9 +401,9 @@ static void *heap_alloc(size_t size, bool zero) {
         b->arena->total_free  -= b->size;
         b->arena->total_alloc += b->size;
     }
-    g_heap.total_free  -= b->size;
-    g_heap.total_alloc += b->size;
-    g_heap.alloc_count++;
+    uheap.total_free  -= b->size;
+    uheap.total_alloc += b->size;
+    uheap.alloc_count++;
 
     void *ptr = get_user_ptr(b);
     if (zero) memset(ptr, 0, b->size);
@@ -424,9 +424,9 @@ static void heap_free(void *ptr) {
         b->arena->total_alloc -= b->size;
         b->arena->total_free  += b->size;
     }
-    g_heap.total_alloc -= b->size;
-    g_heap.total_free  += b->size;
-    g_heap.alloc_count--;
+    uheap.total_alloc -= b->size;
+    uheap.total_free  += b->size;
+    uheap.alloc_count--;
 
     fl_insert(b);
     b = coalesce(b);
@@ -439,26 +439,26 @@ static void heap_free(void *ptr) {
 
 void *malloc(size_t size) {
     if (!size) return NULL;
-    ulock_acquire(&g_heap_lock);
+    ulock_acquire(&uheap_lock);
     void *p = heap_alloc(size, false);
-    ulock_release(&g_heap_lock);
+    ulock_release(&uheap_lock);
     return p;
 }
 
 void free(void *ptr) {
     if (!ptr) return;
-    ulock_acquire(&g_heap_lock);
+    ulock_acquire(&uheap_lock);
     heap_free(ptr);
-    ulock_release(&g_heap_lock);
+    ulock_release(&uheap_lock);
 }
 
 void *calloc(size_t nmemb, size_t size) {
     if (!nmemb || !size) return NULL;
     size_t total = nmemb * size;
     if (total / nmemb != size) return NULL;  // overflow
-    ulock_acquire(&g_heap_lock);
+    ulock_acquire(&uheap_lock);
     void *p = heap_alloc(total, true);
-    ulock_release(&g_heap_lock);
+    ulock_release(&uheap_lock);
     return p;
 }
 
@@ -466,17 +466,17 @@ void *realloc(void *ptr, size_t size) {
     if (!ptr) return malloc(size);
     if (!size) { free(ptr); return NULL; }
 
-    ulock_acquire(&g_heap_lock);
+    ulock_acquire(&uheap_lock);
 
     block_t *b = get_header(ptr);
     if (!block_valid(b) || b->magic != BLOCK_MAGIC_USED) {
-        ulock_release(&g_heap_lock);
+        ulock_release(&uheap_lock);
         return NULL;
     }
 
     size_t aligned = align_up(size, BLOCK_ALIGN);
     if (aligned < size) {
-        ulock_release(&g_heap_lock);
+        ulock_release(&uheap_lock);
         return NULL;
     }
     if (aligned < MIN_BLOCK_SIZE) aligned = MIN_BLOCK_SIZE;
@@ -486,7 +486,7 @@ void *realloc(void *ptr, size_t size) {
         size_t oh = sizeof(block_t) + sizeof(bfooter_t);
         if (b->size - aligned >= MIN_BLOCK_SIZE + oh)
             split_block(b, aligned);
-        ulock_release(&g_heap_lock);
+        ulock_release(&uheap_lock);
         return ptr;
     }
 
@@ -501,15 +501,15 @@ void *realloc(void *ptr, size_t size) {
                 b->arena->total_free  -= nxt->size;
                 b->arena->total_alloc += nxt->size + oh;
             }
-            g_heap.total_free  -= nxt->size;
-            g_heap.total_alloc += nxt->size + oh;
+            uheap.total_free  -= nxt->size;
+            uheap.total_alloc += nxt->size + oh;
             b->size       = combined;
             b->total_size += nxt->total_size;
             bfooter_t *f = get_footer(b);
             f->header = b; f->magic = BLOCK_MAGIC_USED;
             f->rz_pre = f->rz_post = BLOCK_RED_ZONE;
             split_block(b, aligned);
-            ulock_release(&g_heap_lock);
+            ulock_release(&uheap_lock);
             return ptr;
         }
     }
@@ -517,13 +517,13 @@ void *realloc(void *ptr, size_t size) {
     // Fallback: allocate elsewhere, copy, free old.
     // Save copy_size before releasing the lock (b->size must not be read after).
     size_t copy_size = b->size < size ? b->size : size;
-    void *new_ptr = heap_alloc(size, false); // called while lock is held — fine
-    ulock_release(&g_heap_lock);
+    void *new_ptr = heap_alloc(size, false); // called while lock is held - fine
+    ulock_release(&uheap_lock);
     if (!new_ptr) return NULL;
     memcpy(new_ptr, ptr, copy_size);
-    ulock_acquire(&g_heap_lock);
+    ulock_acquire(&uheap_lock);
     heap_free(ptr);
-    ulock_release(&g_heap_lock);
+    ulock_release(&uheap_lock);
     return new_ptr;
 }
 

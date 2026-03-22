@@ -105,13 +105,13 @@ struct heap {
 };
 
 // Global kernel heap
-static heap_t* g_kernel_heap = NULL;
-static bool g_kernel_heap_initializing = false;
-static spinlock_t g_heap_init_lock = {0}; // Static zero init for first boot
+static heap_t* kheap = NULL;
+static bool kheap_initing = false;
+static spinlock_t heap_lock = {0}; // Static zero init for first boot
 
 // Slab caches
-static slab_cache_t* g_heap_cache = NULL;
-static slab_cache_t* g_arena_cache = NULL;
+static slab_cache_t* heap_cache = NULL;
+static slab_cache_t* arena_cache = NULL;
 
 #pragma region Utility Functions
 
@@ -227,57 +227,51 @@ static inline bool arena_validate(heap_arena_t* arena) {
 #pragma region Statistics Management
 
 /*
- * stats_block_mark_used - Update stats when marking a block as used
+ * stat_mark_used - Update stats when marking a block as used
  */
-static inline void stats_block_mark_used(heap_t* heap, heap_block_header_t* block) {
+static inline void stat_mark_used(heap_t* heap, heap_block_header_t* block) {
     if (!block->arena) return;
 
-    // Arena level
     block->arena->total_free -= block->size;
     block->arena->total_allocated += block->size;
 
-    // Heap level
     heap->total_free -= block->size;
     heap->total_allocated += block->size;
     heap->allocation_count++;
 }
 
 /*
- * stats_block_mark_free - Update stats when marking a block as free
+ * stat_mark_free - Update stats when marking a block as free
  */
-static inline void stats_block_mark_free(heap_t* heap, heap_block_header_t* block) {
+static inline void stat_mark_free(heap_t* heap, heap_block_header_t* block) {
     if (!block->arena) return;
 
-    // Arena level
     block->arena->total_allocated -= block->size;
     block->arena->total_free += block->size;
 
-    // Heap level
     heap->total_allocated -= block->size;
     heap->total_free += block->size;
     heap->allocation_count--;
 }
 
 /*
- * stats_block_absorb - Update stats when one block absorbs another
+ * stat_absorb - Update stats when one block absorbs another
  */
-static inline void stats_block_absorb(heap_t* heap, heap_block_header_t* survivor, heap_block_header_t* absorbed) {
+static inline void stat_absorb(heap_t* heap, heap_block_header_t* survivor, heap_block_header_t* absorbed) {
     // The absorbed block's header and footer are reclaimed as usable space.
     // This overhead is ADDED to the total free space.
     size_t overhead = sizeof(heap_block_header_t) + sizeof(heap_block_footer_t);
 
     if (survivor->arena) {
-        // Add the reclaimed overhead to the arena's free total.
         survivor->arena->total_free += overhead;
     }
-    // Add the reclaimed overhead to the heap's free total.
     heap->total_free += overhead;
 }
 
 /*
- * stats_block_split - Update stats when splitting a block
+ * stat_split - Update stats when splitting a block
  */
-static inline void stats_block_split(heap_t* heap, heap_block_header_t* block) {
+static inline void stat_split(heap_t* heap, heap_block_header_t* block) {
     size_t overhead = sizeof(heap_block_header_t) + sizeof(heap_block_footer_t);
 
     if (block->arena) {
@@ -287,9 +281,9 @@ static inline void stats_block_split(heap_t* heap, heap_block_header_t* block) {
 }
 
 /*
- * stats_arena_add - Update stats when adding a new arena
+ * stat_arena_add - Update stats when adding a new arena
  */
-static inline void stats_arena_add(heap_t* heap, heap_arena_t* arena,
+static inline void stat_arena_add(heap_t* heap, heap_arena_t* arena,
                                    size_t usable_size) {
     arena->total_free = usable_size;
     arena->total_allocated = 0;
@@ -300,9 +294,9 @@ static inline void stats_arena_add(heap_t* heap, heap_arena_t* arena,
 }
 
 /*
- * stats_arena_remove - Update stats when removing an arena
+ * stat_arena_rm - Update stats when removing an arena
  */
-static inline void stats_arena_remove(heap_t* heap, heap_arena_t* arena) {
+static inline void stat_arena_rm(heap_t* heap, heap_arena_t* arena) {
     heap->current_size -= arena->size;
     heap->total_free -= arena->total_free;
     heap->arena_count--;
@@ -313,9 +307,9 @@ static inline void stats_arena_remove(heap_t* heap, heap_arena_t* arena) {
 #pragma region Free List Management
 
 /*
- * remove_from_free_list - Unlink a block from the heap's free list
+ * freelist_remove - Unlink a block from the heap's free list
  */
-static void remove_from_free_list(heap_t* heap, heap_block_header_t* block) {
+static void freelist_remove(heap_t* heap, heap_block_header_t* block) {
     if (!heap || !block) return;
 
     if (block->prev_free && block->prev_free->next_free != block) {
@@ -328,7 +322,6 @@ static void remove_from_free_list(heap_t* heap, heap_block_header_t* block) {
     if (block->prev_free) {
         block->prev_free->next_free = block->next_free;
     } else {
-        // block was head of free list
         heap->free_list = block->next_free;
     }
 
@@ -342,12 +335,11 @@ static void remove_from_free_list(heap_t* heap, heap_block_header_t* block) {
 }
 
 /*
- * insert_into_free_list - Insert block into sorted-by-size free list
+ * freelist_insert - Insert block into sorted-by-size free list
  */
-static void insert_into_free_list(heap_t* heap, heap_block_header_t* block) {
+static void freelist_insert(heap_t* heap, heap_block_header_t* block) {
     if (!heap || !block) return;
 
-    // reset the freelist pointers before insertion
     block->next_free = NULL;
     block->prev_free = NULL;
 
@@ -356,7 +348,6 @@ static void insert_into_free_list(heap_t* heap, heap_block_header_t* block) {
         return;
     }
 
-    // If smaller or equal than first element, insert at head
     if (block->size <= heap->free_list->size) {
         block->next_free = heap->free_list;
         heap->free_list->prev_free = block;
@@ -364,7 +355,6 @@ static void insert_into_free_list(heap_t* heap, heap_block_header_t* block) {
         return;
     }
 
-    // Walk the list until we find a place to insert (first fit by size sort)
     heap_block_header_t* cursor = heap->free_list;
     while (cursor->next_free && cursor->next_free->size < block->size) {
         cursor = cursor->next_free;
@@ -385,9 +375,9 @@ static void insert_into_free_list(heap_t* heap, heap_block_header_t* block) {
 #pragma region Arena Management
 
 /*
- * find_arena_for_address - Find which arena an address belongs to
+ * find_arena - Find which arena an address belongs to
  */
-static heap_arena_t* find_arena_for_address(heap_t* heap, uintptr_t addr) {
+static heap_arena_t* find_arena(heap_t* heap, uintptr_t addr) {
     if (!heap) return NULL;
 
     heap_arena_t* a = heap->arenas;
@@ -408,9 +398,9 @@ static heap_arena_t* find_arena_for_address(heap_t* heap, uintptr_t addr) {
 }
 
 /*
- * get_next_block_in_arena - Get the block immediately after given block
+ * next_block - Get the block immediately after given block
  */
-static heap_block_header_t* get_next_block_in_arena(
+static heap_block_header_t* next_block(
     heap_block_header_t* block) {
     if (!block || !block->arena) return NULL;
 
@@ -424,9 +414,9 @@ static heap_block_header_t* get_next_block_in_arena(
 }
 
 /*
- * get_prev_block_in_arena - Get the block immediately preceding given block
+ * prev_block - Get the block immediately preceding given block
  */
-static heap_block_header_t* get_prev_block_in_arena(
+static heap_block_header_t* prev_block(
     heap_block_header_t* block) {
     if (!block || !block->arena) return NULL;
 
@@ -453,33 +443,28 @@ static heap_block_header_t* get_prev_block_in_arena(
 static heap_arena_t* create_arena(heap_t* heap, size_t size) {
     if (!heap || size == 0) return NULL;
 
-    // enforce minimum arena size
     if (size < heap->min_arena_size) {
         size = heap->min_arena_size;
     }
 
-    // page-align the arena size
     size = align_up(size, PAGE_SIZE);
 
-    // ensure we won't exceed heap's configured max_size
     if (heap->current_size + size > heap->max_size) {
         LOGF("[HEAP] Cannot create arena: would exceed max heap size\n");
         return NULL;
     }
 
-    // allocate a structure for the arena from the slab cache
     void* arena_struct_mem;
-    slab_status_t slab_status = slab_alloc(g_arena_cache, &arena_struct_mem);
+    slab_status_t slab_status = slab_alloc(arena_cache, &arena_struct_mem);
     if (slab_status != SLAB_OK) {
         LOGF("[HEAP] Failed to allocate arena structure\n");
         return NULL;
     }
 
     heap_arena_t* arena = (heap_arena_t*)arena_struct_mem;
-    // zero it out - conservative initialization
+    // conservative initialization
     kmemset(arena, 0, sizeof(heap_arena_t));
 
-    // Now allocate the address space for the arena via VMM
     void* arena_region = NULL;
     size_t vmm_flags = VM_FLAG_WRITE | (heap->is_kernel ? 0 : VM_FLAG_USER);
     if (heap->flags & HEAP_FLAG_EXECUTABLE) {
@@ -493,11 +478,10 @@ static heap_arena_t* create_arena(heap_t* heap, size_t size) {
     if (vmm_status != VMM_OK) {
         LOGF("[HEAP] Failed to allocate arena memory: vmm error %d\n",
              vmm_status);
-        slab_free(g_arena_cache, arena_struct_mem);
+        slab_free(arena_cache, arena_struct_mem);
         return NULL;
     }
 
-    // populate arena metadata
     arena->magic = ARENA_MAGIC;
     arena->start = (uintptr_t)arena_region;
     arena->end = arena->start + size;
@@ -505,7 +489,6 @@ static heap_arena_t* create_arena(heap_t* heap, size_t size) {
     arena->next = NULL;
     arena->prev = NULL;
 
-    // Create initial free block covering the whole arena
     heap_block_header_t* initial_block = (heap_block_header_t*)arena->start;
     size_t block_payload_size =
         size - sizeof(heap_block_header_t) - sizeof(heap_block_footer_t);
@@ -527,7 +510,6 @@ static heap_arena_t* create_arena(heap_t* heap, size_t size) {
 
     arena->first_block = initial_block;
 
-    // append the arena to the heap's arena list
     if (!heap->arenas) {
         heap->arenas = arena;
     } else {
@@ -539,11 +521,8 @@ static heap_arena_t* create_arena(heap_t* heap, size_t size) {
         arena->prev = tail;
     }
 
-    // update accounting
-    stats_arena_add(heap, arena, block_payload_size);
-
-    // Add the initial block to the free list
-    insert_into_free_list(heap, initial_block);
+    stat_arena_add(heap, arena, block_payload_size);
+    freelist_insert(heap, initial_block);
 
     LOGF("[HEAP] Created arena at 0x%lx - 0x%lx (size: %zu bytes)\n",
          arena->start, arena->end, size);
@@ -558,29 +537,25 @@ static void destroy_arena(heap_t* heap, heap_arena_t* arena) {
     if (!heap || !arena) return;
     if (!arena_validate(arena)) return;
 
-    // Remove any freelist nodes belonging to this arena
     heap_block_header_t* cur = heap->free_list;
     while (cur) {
         heap_block_header_t* next = cur->next_free;
 
         if (cur->arena == arena) {
-            remove_from_free_list(heap, cur);
+            freelist_remove(heap, cur);
         }
 
         cur = next;
     }
 
-    // Release VMM memory
     vmm_status_t status = vmm_free(heap->vmm, (void*)arena->start);
     if (status != VMM_OK) {
         LOGF("[HEAP WARNING] Failed to free arena memory: vmm error %d\n",
              status);
     }
 
-    // Adjust stats
-    stats_arena_remove(heap, arena);
+    stat_arena_rm(heap, arena);
 
-    // unlink from arena list
     if (arena->prev) {
         arena->prev->next = arena->next;
     } else {
@@ -591,9 +566,8 @@ static void destroy_arena(heap_t* heap, heap_arena_t* arena) {
         arena->next->prev = arena->prev;
     }
 
-    // poison the magic then free structure
     arena->magic = 0;
-    slab_free(g_arena_cache, arena);
+    slab_free(arena_cache, arena);
 }
 
 /*
@@ -633,59 +607,48 @@ static heap_block_header_t* coalesce_blocks(heap_t* heap,
     if (!heap || !block) return block;
     if (!heap_validate_block(block)) return block;
 
-    // try coalescing with next block repeatedly (merge forwards first)
-    heap_block_header_t* next = get_next_block_in_arena(block);
+    heap_block_header_t* next = next_block(block);
     if (next && next->magic == BLOCK_MAGIC_FREE && heap_validate_block(next)) {
-        // unlink both from free list before touching sizes
-        remove_from_free_list(heap, block);
-        remove_from_free_list(heap, next);
+        freelist_remove(heap, block);
+        freelist_remove(heap, next);
 
-        // update stats to reflect reclaimed overhead
-        stats_block_absorb(heap, block, next);
+        stat_absorb(heap, block, next);
 
-        // increase sizes; total_size already includes header/footer of next
         block->size += next->total_size;
         block->total_size += next->total_size;
 
-        // refresh footer to point at new, larger block
         heap_block_footer_t* footer = get_footer(block);
         footer->header = block;
         footer->magic = BLOCK_MAGIC_FREE;
         footer->red_zone_pre = BLOCK_RED_ZONE;
         footer->red_zone_post = BLOCK_RED_ZONE;
 
-        // re-insert the merged block
-        insert_into_free_list(heap, block);
+        freelist_insert(heap, block);
 
-        // try again (tail recursion converted into loop by repetition)
         return coalesce_blocks(heap, block);
     }
 
-    // try coalescing with previous block (merge backwards)
-    heap_block_header_t* prev = get_prev_block_in_arena(block);
+    heap_block_header_t* prev = prev_block(block);
     if (prev && prev->magic == BLOCK_MAGIC_FREE && heap_validate_block(prev)) {
-        remove_from_free_list(heap, block);
-        remove_from_free_list(heap, prev);
+        freelist_remove(heap, block);
+        freelist_remove(heap, prev);
 
-        // stats: prev absorbs block
-        stats_block_absorb(heap, prev, block);
+        stat_absorb(heap, prev, block);
 
         prev->size += block->total_size;
         prev->total_size += block->total_size;
 
-        // refresh footer
         heap_block_footer_t* footer = get_footer(prev);
         footer->header = prev;
         footer->magic = BLOCK_MAGIC_FREE;
         footer->red_zone_pre = BLOCK_RED_ZONE;
         footer->red_zone_post = BLOCK_RED_ZONE;
 
-        insert_into_free_list(heap, prev);
+        freelist_insert(heap, prev);
 
         return coalesce_blocks(heap, prev);
     }
 
-    // nothing to merge; return the block (possibly unchanged)
     return block;
 }
 
@@ -736,8 +699,8 @@ static void split_block(heap_t* heap, heap_block_header_t* block, size_t size) {
         // CASE 1: Splitting a FREE block (Allocation path)
         // We are consuming free space.
         // The overhead reduces the total free space available.
-        remove_from_free_list(heap, block);
-        stats_block_split(heap, block); 
+        freelist_remove(heap, block);
+        stat_split(heap, block); 
     } else {
         // CASE 2: Splitting a USED block (Realloc shrinking path)
         // We are creating NEW free space from used space.
@@ -790,11 +753,11 @@ static void split_block(heap_t* heap, heap_block_header_t* block, size_t size) {
     new_footer->magic = BLOCK_MAGIC_FREE;
 
     // put new block onto free list
-    insert_into_free_list(heap, new_block);
+    freelist_insert(heap, new_block);
 
     // if the original was free, re-insert the (now smaller) block too
     if (was_in_free_list) {
-        insert_into_free_list(heap, block);
+        freelist_insert(heap, block);
     }
 }
 
@@ -820,7 +783,6 @@ static void* heap_malloc_internal(heap_t* heap, size_t size, bool zero, bool urg
 
     bool should_zero = zero || (heap->flags & HEAP_FLAG_ZERO);
 
-    // Normalize size to alignment and enforce minimum payload
     size_t orig_size = size;
     size = heap_align_size(size);
     if (size == 0 && orig_size > 0) {
@@ -834,11 +796,8 @@ static void* heap_malloc_internal(heap_t* heap, size_t size, bool zero, bool urg
         size = MIN_BLOCK_SIZE;
     }
 
-    // First, try to find a free block
     heap_block_header_t* block = find_free_block(heap, size);
 
-    // If none, create a new arena large enough to contain the requested
-    // allocation
     if (!block) {
         size_t needed =
             size + sizeof(heap_block_header_t) + sizeof(heap_block_footer_t);
@@ -857,7 +816,6 @@ static void* heap_malloc_internal(heap_t* heap, size_t size, bool zero, bool urg
             return NULL;
         }
 
-        // after adding an arena, try finding a block again
         block = find_free_block(heap, size);
         if (!block) {
             if (urgent) {
@@ -867,24 +825,19 @@ static void* heap_malloc_internal(heap_t* heap, size_t size, bool zero, bool urg
         }
     }
 
-    // Try to split the block so we don't waste space
     split_block(heap, block, size);
 
-    // remove from free list (we're going to hand it to the caller)
-    remove_from_free_list(heap, block);
+    freelist_remove(heap, block);
 
-    // mark it used
     block->magic = BLOCK_MAGIC_USED;
     heap_block_footer_t* footer = get_footer(block);
     footer->magic = BLOCK_MAGIC_USED;
 
-    // stats update occurs here (FREE -> USED)
-    stats_block_mark_used(heap, block);
+    stat_mark_used(heap, block);
 
     void* user_ptr = get_user_ptr(block);
 
     if (should_zero) {
-        // zero user payload on allocation if requested (or heap flag)
         kmemset(user_ptr, 0, block->size);
     }
 
@@ -912,7 +865,6 @@ static void heap_free_internal(heap_t* heap, void* ptr) {
         return;
     }
 
-    // Mark block as free, clear freelist pointers for safety
     block->magic = BLOCK_MAGIC_FREE;
     block->next_free = NULL;
     block->prev_free = NULL;
@@ -920,15 +872,12 @@ static void heap_free_internal(heap_t* heap, void* ptr) {
     heap_block_footer_t* footer = get_footer(block);
     footer->magic = BLOCK_MAGIC_FREE;
 
-    // stats update (USED -> FREE)
-    stats_block_mark_free(heap, block);
+    stat_mark_free(heap, block);
 
-    // insert into free list and attempt coalescing to reduce fragmentation
-    insert_into_free_list(heap, block);
+    freelist_insert(heap, block);
 
     coalesce_blocks(heap, block);
 
-    // maybe the arena is now empty — try to free it
     if (block->arena) {
         try_shrink_arena(heap, block->arena);
     }
@@ -942,19 +891,18 @@ static void heap_free_internal(heap_t* heap, void* ptr) {
  * heap_kernel_init - Initialize the global kernel heap
  */
 heap_status_t heap_kernel_init(void) {
-    // Safely check if we need to initialize using the global init lock
-    bool init_flags = spinlock_acquire(&g_heap_init_lock);
+    bool init_flags = spinlock_acquire(&heap_lock);
 
-    if (g_kernel_heap) {
-        spinlock_release(&g_heap_init_lock, init_flags);
+    if (kheap) {
+        spinlock_release(&heap_lock, init_flags);
         return HEAP_ERR_ALREADY_INIT;
     }
-    if (g_kernel_heap_initializing) {
-        spinlock_release(&g_heap_init_lock, init_flags);
+    if (kheap_initing) {
+        spinlock_release(&heap_lock, init_flags);
         return HEAP_ERR_ALREADY_INIT;
     }
 
-    g_kernel_heap_initializing = true;
+    kheap_initing = true;
 
     vmm_t* kernel_vmm = vmm_kernel_get();
     if (!kernel_vmm) {
@@ -967,58 +915,55 @@ heap_status_t heap_kernel_init(void) {
         if (vmm_status != VMM_OK) {
             LOGF("[HEAP] Failed to initialize kernel VMM: error %d\n",
                  vmm_status);
-            g_kernel_heap_initializing = false;
-            spinlock_release(&g_heap_init_lock, init_flags);
+            kheap_initing = false;
+            spinlock_release(&heap_lock, init_flags);
             return HEAP_ERR_NOT_INIT;
         }
 
         kernel_vmm = vmm_kernel_get();
         if (!kernel_vmm) {
             LOGF("[HEAP] Kernel VMM still NULL after initialization\n");
-            g_kernel_heap_initializing = false;
-            spinlock_release(&g_heap_init_lock, init_flags);
+            kheap_initing = false;
+            spinlock_release(&heap_lock, init_flags);
             return HEAP_ERR_NOT_INIT;
         }
     }
 
-    // create slab caches lazily if needed
-    if (!g_heap_cache) {
-        g_heap_cache =
+    if (!heap_cache) {
+        heap_cache =
             slab_cache_create("heap_t", sizeof(heap_t), _Alignof(heap_t));
-        if (!g_heap_cache) {
+        if (!heap_cache) {
             LOGF("[HEAP] Failed to create heap slab cache\n");
-            g_kernel_heap_initializing = false;
-            spinlock_release(&g_heap_init_lock, init_flags);
+            kheap_initing = false;
+            spinlock_release(&heap_lock, init_flags);
             return HEAP_ERR_OOM;
         }
     }
 
-    if (!g_arena_cache) {
-        g_arena_cache = slab_cache_create("heap_arena_t", sizeof(heap_arena_t),
+    if (!arena_cache) {
+        arena_cache = slab_cache_create("heap_arena_t", sizeof(heap_arena_t),
                                           _Alignof(heap_arena_t));
-        if (!g_arena_cache) {
+        if (!arena_cache) {
             LOGF("[HEAP] Failed to create arena slab cache\n");
-            g_kernel_heap_initializing = false;
-            spinlock_release(&g_heap_init_lock, init_flags);
+            kheap_initing = false;
+            spinlock_release(&heap_lock, init_flags);
             return HEAP_ERR_OOM;
         }
     }
 
-    // allocate heap structure from slab
     void* heap_mem;
-    slab_status_t slab_status = slab_alloc(g_heap_cache, &heap_mem);
+    slab_status_t slab_status = slab_alloc(heap_cache, &heap_mem);
     if (slab_status != SLAB_OK) {
         LOGF("[HEAP] Failed to allocate heap structure: slab error %d\n",
              slab_status);
-        g_kernel_heap_initializing = false;
-        spinlock_release(&g_heap_init_lock, init_flags);
+        kheap_initing = false;
+        spinlock_release(&heap_lock, init_flags);
         return HEAP_ERR_OOM;
     }
 
     heap_t* heap = (heap_t*)heap_mem;
     kmemset(heap, 0, sizeof(heap_t));
 
-    // initialize heap metadata
     heap->magic = HEAP_MAGIC;
     heap->vmm = kernel_vmm;
     heap->is_kernel = true;
@@ -1034,23 +979,22 @@ heap_status_t heap_kernel_init(void) {
     heap->arena_count = 0;
     spinlock_init(&heap->lock, "kernel_heap");
 
-    // create the initial arena
     heap_arena_t* initial_arena = create_arena(heap, MIN_ARENA_SIZE);
     if (!initial_arena) {
         LOGF("[HEAP] Failed to create initial arena\n");
-        slab_free(g_heap_cache, heap_mem);
-        g_kernel_heap_initializing = false;
-        spinlock_release(&g_heap_init_lock, init_flags);
+        slab_free(heap_cache, heap_mem);
+        kheap_initing = false;
+        spinlock_release(&heap_lock, init_flags);
         return HEAP_ERR_VMM_FAIL;
     }
 
-    g_kernel_heap = heap;
-    g_kernel_heap_initializing = false;
+    kheap = heap;
+    kheap_initing = false;
 
     LOGF("[HEAP] Kernel heap initialized with arena at 0x%lx - 0x%lx\n",
          initial_arena->start, initial_arena->end);
 
-    spinlock_release(&g_heap_init_lock, init_flags);
+    spinlock_release(&heap_lock, init_flags);
     return HEAP_OK;
 }
 
@@ -1058,14 +1002,14 @@ heap_status_t heap_kernel_init(void) {
  * heap_kernel_get - Return pointer to the global kernel heap, lazily initializing it
  */
 heap_t* heap_kernel_get(void) {
-    if (!g_kernel_heap && !g_kernel_heap_initializing) {
+    if (!kheap && !kheap_initing) {
         heap_status_t status = heap_kernel_init();
         if (status != HEAP_OK) {
             LOGF("[HEAP] Auto-initialization failed: error %d\n", status);
             return NULL;
         }
     }
-    return g_kernel_heap;
+    return kheap;
 }
 
 /*
@@ -1137,7 +1081,6 @@ void* krealloc(void* ptr, size_t size) {
         return NULL;
     }
     if (aligned_size <= block->size) {
-        // shrink in place, maybe split to avoid wasting space
         if (block->size - aligned_size >= MIN_BLOCK_SIZE +
                                               sizeof(heap_block_header_t) +
                                               sizeof(heap_block_footer_t)) {
@@ -1147,12 +1090,11 @@ void* krealloc(void* ptr, size_t size) {
         return ptr;
     }
 
-    // try to expand into adjacent free block
-    heap_block_header_t* next = get_next_block_in_arena(block);
+    heap_block_header_t* next = next_block(block);
     if (next && next->magic == BLOCK_MAGIC_FREE && heap_validate_block(next)) {
         size_t combined_size = block->size + next->total_size;
         if (combined_size >= aligned_size) {
-            remove_from_free_list(heap, next);
+            freelist_remove(heap, next);
 
             // Manual stats update for Used-Absorbs-Free
             size_t reclaimed_overhead = sizeof(heap_block_header_t) + sizeof(heap_block_footer_t);
@@ -1173,7 +1115,6 @@ void* krealloc(void* ptr, size_t size) {
             footer->red_zone_pre = BLOCK_RED_ZONE;
             footer->red_zone_post = BLOCK_RED_ZONE;
 
-            // now possibly split to exact requested size
             split_block(heap, block, aligned_size);
 
             spinlock_release(&heap->lock, flags);
@@ -1181,7 +1122,6 @@ void* krealloc(void* ptr, size_t size) {
         }
     }
 
-    // fallback: allocate a new region and copy data
     // NOTE: heap_malloc_internal avoids re-acquiring the lock
     void* new_ptr = heap_malloc_internal(heap, size, false, false);
     if (!new_ptr) {
@@ -1190,10 +1130,7 @@ void* krealloc(void* ptr, size_t size) {
         return NULL;
     }
 
-    // careful copy: only copy the min of old/new sizes
     kmemcpy(new_ptr, ptr, block->size < size ? block->size : size);
-    
-    // Similarly, use internal free
     heap_free_internal(heap, ptr);
 
     spinlock_release(&heap->lock, flags);
@@ -1206,7 +1143,6 @@ void* krealloc(void* ptr, size_t size) {
 void* kcalloc(size_t nmemb, size_t size) {
     if (nmemb == 0 || size == 0) return NULL;
 
-    // check multiplication overflow
     size_t total = nmemb * size;
     if (total / nmemb != size) {
         LOGF("[HEAP] kcalloc: overflow detected (nmemb=%zu, size=%zu)\n", nmemb,
@@ -1220,7 +1156,6 @@ void* kcalloc(size_t nmemb, size_t size) {
         return NULL;
     }
 
-    // request zeroed memory
     bool flags = spinlock_acquire(&heap->lock);
     void* result = heap_malloc_internal(heap, total, true, false);
     spinlock_release(&heap->lock, flags);
@@ -1249,28 +1184,26 @@ heap_t* heap_create(vmm_t* vmm, size_t min_size, size_t max_size, uint32_t flags
     min_size = align_up(min_size, PAGE_SIZE);
     max_size = align_up(max_size, PAGE_SIZE);
 
-    // ensure slab caches exist
-    if (!g_heap_cache) {
-        g_heap_cache =
+    if (!heap_cache) {
+        heap_cache =
             slab_cache_create("heap_t", sizeof(heap_t), _Alignof(heap_t));
-        if (!g_heap_cache) {
+        if (!heap_cache) {
             LOGF("[HEAP] heap_create: failed to create slab cache\n");
             return NULL;
         }
     }
 
-    if (!g_arena_cache) {
-        g_arena_cache = slab_cache_create("heap_arena_t", sizeof(heap_arena_t),
+    if (!arena_cache) {
+        arena_cache = slab_cache_create("heap_arena_t", sizeof(heap_arena_t),
                                           _Alignof(heap_arena_t));
-        if (!g_arena_cache) {
+        if (!arena_cache) {
             LOGF("[HEAP] heap_create: failed to create arena slab cache\n");
             return NULL;
         }
     }
 
-    // allocate heap struct
     void* heap_mem;
-    slab_status_t slab_status = slab_alloc(g_heap_cache, &heap_mem);
+    slab_status_t slab_status = slab_alloc(heap_cache, &heap_mem);
     if (slab_status != SLAB_OK) {
         LOGF(
             "[HEAP] heap_create: failed to allocate heap structure: slab error "
@@ -1297,14 +1230,13 @@ heap_t* heap_create(vmm_t* vmm, size_t min_size, size_t max_size, uint32_t flags
     hh->arena_count = 0;
     spinlock_init(&hh->lock, "user_heap");
 
-    // Lock the heap while creating the initial arena
     bool hh_flags = spinlock_acquire(&hh->lock);
     heap_arena_t* initial_arena = create_arena(hh, min_size);
     spinlock_release(&hh->lock, hh_flags);
 
     if (!initial_arena) {
         LOGF("[HEAP] heap_create: failed to create initial arena\n");
-        slab_free(g_heap_cache, heap_mem);
+        slab_free(heap_cache, heap_mem);
         return NULL;
     }
 
@@ -1321,12 +1253,11 @@ void heap_destroy(heap_t* heap) {
         return;
     }
 
-    if (heap == g_kernel_heap) {
+    if (heap == kheap) {
         LOGF("[HEAP ERROR] Cannot destroy kernel heap\n");
         return;
     }
 
-    // Lock to prevent concurrent use during teardown
     bool flags = spinlock_acquire(&heap->lock);
 
     heap_arena_t* arena = heap->arenas;
@@ -1340,7 +1271,7 @@ void heap_destroy(heap_t* heap) {
         }
 
         arena->magic = 0;
-        slab_free(g_arena_cache, arena);
+        slab_free(arena_cache, arena);
 
         arena = next;
     }
@@ -1348,7 +1279,7 @@ void heap_destroy(heap_t* heap) {
     heap->magic = 0;
     spinlock_release(&heap->lock, flags);
 
-    slab_free(g_heap_cache, heap);
+    slab_free(heap_cache, heap);
 }
 
 /*
@@ -1422,12 +1353,11 @@ void* heap_realloc(heap_t* heap, void* ptr, size_t size) {
         return ptr;
     }
 
-    // try to absorb next block if it's free
-    heap_block_header_t* next = get_next_block_in_arena(block);
+    heap_block_header_t* next = next_block(block);
     if (next && next->magic == BLOCK_MAGIC_FREE && heap_validate_block(next)) {
         size_t combined_size = block->size + next->total_size;
         if (combined_size >= aligned_size) {
-            remove_from_free_list(heap, next);
+            freelist_remove(heap, next);
 
             // Manual stats update for Used-Absorbs-Free
             size_t reclaimed_overhead = sizeof(heap_block_header_t) + sizeof(heap_block_footer_t);
@@ -1454,7 +1384,6 @@ void* heap_realloc(heap_t* heap, void* ptr, size_t size) {
         }
     }
 
-    // allocate new and copy old data (using internal malloc)
     void* new_ptr = heap_malloc_internal(heap, size, false, urgent);
     if (!new_ptr) {
         if (urgent) {
@@ -1465,8 +1394,6 @@ void* heap_realloc(heap_t* heap, void* ptr, size_t size) {
     }
 
     kmemcpy(new_ptr, ptr, block->size < size ? block->size : size);
-    
-    // internal free
     heap_free_internal(heap, ptr);
 
     spinlock_release(&heap->lock, flags);
@@ -1530,7 +1457,6 @@ heap_status_t heap_check_integrity(heap_t* heap) {
 
         uintptr_t current_addr = arena->start;
 
-        // Walk blocks in this arena summing free/used counts
         while (current_addr < arena->end) {
             heap_block_header_t* block = (heap_block_header_t*)current_addr;
 

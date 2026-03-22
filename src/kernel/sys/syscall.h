@@ -3,7 +3,7 @@
  *
  * Defines the syscall numbers and initialization function.
  *
- * Author: ApparentlyPlus
+ * Author: u/ApparentlyPlus
  */
 
 #pragma once

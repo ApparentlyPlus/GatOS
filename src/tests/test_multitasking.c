@@ -3,7 +3,7 @@
  *
  * Tests every public function: process_create/destroy, thread_create,
  * thread_create_bootstrap, thread_destroy, process_get_all,
- * process_terminate_by_tty, process_header_update, sched_active,
+ * procs_kill_tty, process_header_update, sched_active,
  * sched_current, sched_add, sched_yield.
  * Covers PID/TID uniqueness, context layout, stack alignment, name truncation,
  * global process list, and shared TTY.
@@ -23,8 +23,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
-static int g_tests_total  = 0;
-static int g_tests_passed = 0;
+static int ntests  = 0;
+static int npass = 0;
 
 #pragma region Helpers
 
@@ -227,7 +227,7 @@ static bool t_kt_ss(void) {
 static bool t_kt_arg(void) {
     process_t* p = process_create("t_ktarg", NULL);
     thread_t* t = thread_create(p, "kt_arg", kentry, (void*)0xBEEF, false, 0);
-    /* thread_entry_wrapper(entry, arg): entry→rdi, arg→rsi */
+    /* thread_wrap(entry, arg): entry→rdi, arg→rsi */
     TEST_ASSERT(t->context->rsi == 0xBEEF);
     process_destroy(p);
     return true;
@@ -398,13 +398,13 @@ static bool t_hdr_update_thr(void) {
 }
 #pragma endregion
 
-#pragma region process_terminate_by_tty
+#pragma region procs_kill_tty
 
 static bool t_term_tty(void) {
     process_t* p = process_create("t_termtty", NULL);
     tty_t* t = p->tty;
     /* Must not crash; process may or may not be destroyed here */
-    process_terminate_by_tty(t);
+    procs_kill_tty(t);
     return true;
 }
 #pragma endregion
@@ -425,16 +425,16 @@ static bool t_bootstrap(void) {
 #pragma region Runner
 
 static void run_test(const char* name, bool (*fn)(void)) {
-    g_tests_total++;
+    ntests++;
     LOGF("[TEST] %-40s ", name);
     bool pass = fn();
-    if (pass) { g_tests_passed++; LOGF("[PASS]\n"); }
+    if (pass) { npass++; LOGF("[PASS]\n"); }
     else       { LOGF("[FAIL]\n"); }
 }
 
 void test_multitasking(void) {
-    g_tests_total  = 0;
-    g_tests_passed = 0;
+    ntests  = 0;
+    npass = 0;
 
     LOGF("\n--- BEGIN MULTITASKING TEST ---\n");
 
@@ -479,18 +479,18 @@ void test_multitasking(void) {
     run_test("thread_create_bootstrap",       t_bootstrap);
 
     LOGF("--- END MULTITASKING TEST ---\n");
-    LOGF("Multitasking Test Results: %d/%d\n\n", g_tests_passed, g_tests_total);
+    LOGF("Multitasking Test Results: %d/%d\n\n", npass, ntests);
 
     #ifdef TEST_BUILD
     #include <kernel/drivers/console.h>
     #include <klibc/stdio.h>
-    if (g_tests_passed != g_tests_total) {
+    if (npass != ntests) {
         console_set_color(CONSOLE_COLOR_RED, CONSOLE_COLOR_BLACK);
-        kprintf("[-] Multitasking tests failed (%d/%d passed).\n", g_tests_passed, g_tests_total);
+        kprintf("[-] Multitasking tests failed (%d/%d passed).\n", npass, ntests);
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     } else {
         console_set_color(CONSOLE_COLOR_GREEN, CONSOLE_COLOR_BLACK);
-        kprintf("[+] Multitasking tests passed! (%d/%d)\n", g_tests_passed, g_tests_total);
+        kprintf("[+] Multitasking tests passed! (%d/%d)\n", npass, ntests);
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     }
     #endif

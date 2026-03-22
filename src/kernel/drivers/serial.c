@@ -19,13 +19,13 @@ uint16_t get_port_base(serial_port_t port) {
 void serial_init_port(serial_port_t port) {
     uint16_t port_base = get_port_base(port);
     
-    outb(port_base + 1, 0x00);    // Disable interrupts
-    outb(port_base + 3, 0x80);    // Enable DLAB (set baud rate divisor)
-    outb(port_base + 0, 0x03);    // Set divisor to 3 (38400 baud)
     outb(port_base + 1, 0x00);
-    outb(port_base + 3, 0x03);    // 8 bits, no parity, one stop bit
-    outb(port_base + 2, 0xC7);    // Enable FIFO, clear them, 14-byte threshold
-    outb(port_base + 4, 0x0B);    // IRQs enabled, RTS/DSR set
+    outb(port_base + 3, 0x80);
+    outb(port_base + 0, 0x03);
+    outb(port_base + 1, 0x00);
+    outb(port_base + 3, 0x03);
+    outb(port_base + 2, 0xC7);
+    outb(port_base + 4, 0x0B);
 }
 
 /*
@@ -49,7 +49,7 @@ int serial_is_ready_port(serial_port_t port) {
  */
 void serial_write_char_port(serial_port_t port, char c) {
     uint16_t port_base = get_port_base(port);
-    while (!serial_is_ready_port(port)); // Wait until THR is empty
+    while (!serial_is_ready_port(port));
     outb(port_base, (uint8_t)c);
 }
 
@@ -59,7 +59,7 @@ void serial_write_char_port(serial_port_t port, char c) {
 void serial_write_port(serial_port_t port, const char* str) {
     while (*str) {
         if (*str == '\n') {
-            serial_write_char_port(port, '\r'); // Add carriage return
+            serial_write_char_port(port, '\r');
         }
         serial_write_char_port(port, *str++);
     }

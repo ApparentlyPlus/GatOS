@@ -17,18 +17,18 @@
 #include <klibc/stdio.h>
 #include <klibc/string.h>
 
-static tty_t* g_dtty;
-static tty_t* g_prev;
+static tty_t* dtty;
+static tty_t* prev_tty;
 
 #pragma region Layout
 
 /*
- * layout_t - All column/field widths derived from con->width.
+ * layout_t - All column/field widths derived from con->width
  *
- *   gap     = W/55, min 2          — uniform inter-column spacing
- *   key_w   = W/10, min 12         — key label width (kv / kv2)
- *   val2_w  = W/2 - key_w - 5      — left-value field in kv2 (right pair starts at W/2)
- *   bar_w   = W/8,  min 10         — bar interior width
+ *   gap     = W/55, min 2          - uniform inter-column spacing
+ *   key_w   = W/10, min 12         - key label width (kv / kv2)
+ *   val2_w  = W/2 - key_w - 5      - left-value field in kv2 (right pair starts at W/2)
+ *   bar_w   = W/8,  min 10         - bar interior width
  *   pid_w   = 4
  *   name_w  = W/5,  min 14
  *   thr_w   = 3
@@ -86,7 +86,7 @@ static uint8_t pct_color(int pct) {
 }
 
 /*
- * section - Colored title followed by a dim horizontal rule to end of line.
+ * section - Colored title followed by a dim horizontal rule to end of line
  *   "  TITLE ─────────────────────────────────────"
  */
 static void section(console_t* con, const layout_t* L, const char* name) {
@@ -108,7 +108,7 @@ static void section(console_t* con, const layout_t* L, const char* name) {
 #pragma region Key Value Helpers
 
 /*
- * kv - Key in dim gray, value in white.
+ * kv - Key in dim gray, value in white
  *   "  key          : value"
  */
 static void kv(console_t* con, const layout_t* L, const char* k, const char* v) {
@@ -122,7 +122,7 @@ static void kv(console_t* con, const layout_t* L, const char* k, const char* v) 
 }
 
 /*
- * kv2 - Two key-value pairs on one line; right pair starts at column W/2.
+ * kv2 - Two key-value pairs on one line; right pair starts at column W/2
  */
 static void kv2(console_t* con, const layout_t* L,
                 const char* k1, const char* v1,
@@ -143,7 +143,7 @@ static void kv2(console_t* con, const layout_t* L,
 }
 
 /*
- * kv2c - kv2 with explicit colors for each value (for traffic-light feedback).
+ * kv2c - kv2 with explicit colors for each value (for traffic-light feedback)
  */
 static void kv2c(console_t* con, const layout_t* L,
                  const char* k1, const char* v1, uint8_t c1,
@@ -164,7 +164,7 @@ static void kv2c(console_t* con, const layout_t* L,
 }
 
 /*
- * bar - Draws a labeled progress bar.
+ * bar - Draws a labeled progress bar
  *   "  label        : [####..........] pct%"
  */
 static void bar(console_t* con, const layout_t* L,
@@ -186,7 +186,7 @@ static void bar(console_t* con, const layout_t* L,
 }
 
 /*
- * fmtsz - Formats a size in bytes to a human-readable string.
+ * fmtsz - Formats a size in bytes to a human-readable string
  */
 static char* fmtsz(char* buf, size_t n, uint64_t b) {
     if      (b < (1ULL << 10)) ksnprintf(buf, n, "%lu B",   b);
@@ -198,7 +198,7 @@ static char* fmtsz(char* buf, size_t n, uint64_t b) {
 #pragma region Dashboard Sections
 
 /*
- * draw_cpu - CPU vendor, brand, core count, and feature flags.
+ * draw_cpu - CPU vendor, brand, core count, and feature flags
  */
 static void draw_cpu(console_t* con, const layout_t* L) {
     char b[32];
@@ -236,7 +236,7 @@ static void draw_cpu(console_t* con, const layout_t* L) {
 }
 
 /*
- * draw_mem - Physical memory stats + kernel heap stats with pressure bar.
+ * draw_mem - Physical memory stats + kernel heap stats with pressure bar
  */
 static void draw_mem(console_t* con, const layout_t* L) {
     char ta[24], ua[24], fa[24], xa[24];
@@ -289,7 +289,7 @@ static void draw_mem(console_t* con, const layout_t* L) {
 #pragma region Process/Thread Section
 
 /*
- * state_str / state_color - Human-readable label and traffic-light color per state.
+ * state_str / state_color - Human-readable label and traffic-light color per state
  */
 static const char* state_str(thread_state_t s) {
     switch (s) {
@@ -314,7 +314,7 @@ static uint8_t state_color(thread_state_t s) {
 }
 
 /*
- * draw_procs - Scaled process + thread table.
+ * draw_procs - Scaled process + thread table
  */
 static void draw_procs(console_t* con, const layout_t* L) {
     char buf[512], mem[16], virt_s[16], detail[48];
@@ -406,7 +406,7 @@ static void draw_procs(console_t* con, const layout_t* L) {
 #pragma region Main Draw
 
 static void dash_draw(void) {
-    console_t* con = g_dtty->console;
+    console_t* con = dtty->console;
 
     /* Update sticky header with current uptime */
     uint64_t ms = get_uptime_ms();
@@ -417,8 +417,8 @@ static void dash_draw(void) {
               h, m, s);
     con_header_write(con, 0, hdr, CONSOLE_COLOR_WHITE, CONSOLE_COLOR_MAGENTA);
 
-    tty_t* active = g_active_tty;
-    g_active_tty  = NULL;
+    tty_t* active = active_tty;
+    active_tty  = NULL;
 
     con_clear(con, CONSOLE_COLOR_BLACK);
     cl(con, CONSOLE_COLOR_LIGHT_GRAY, CONSOLE_COLOR_BLACK);
@@ -438,7 +438,7 @@ static void dash_draw(void) {
     cl(con, CONSOLE_COLOR_DARK_GRAY, CONSOLE_COLOR_BLACK);
     emit(con, " CTRL+SHIFT+ESC to close or ALT+TAB to cycle");
 
-    g_active_tty = active;
+    active_tty = active;
     con_refresh(con);
 }
 
@@ -447,7 +447,7 @@ static void dash_draw(void) {
 static void dash_thread_fn(void* arg) {
     (void)arg;
     while (1) {
-        if (g_active_tty == g_dtty) {
+        if (active_tty == dtty) {
             dash_draw();
             sleep_ms(2000);
         } else {
@@ -459,32 +459,32 @@ static void dash_thread_fn(void* arg) {
 #pragma region Dashboard API
 
 bool is_dash_tty(void) {
-    return g_active_tty == g_dtty;
+    return active_tty == dtty;
 }
 
 void dash_toggle(void) {
-    if (g_active_tty == g_dtty) {
-        tty_switch(g_prev ? g_prev : g_kernel_tty);
-        g_prev = NULL;
+    if (active_tty == dtty) {
+        tty_switch(prev_tty ? prev_tty : kernel_tty);
+        prev_tty = NULL;
     } else {
-        g_prev = g_active_tty;
-        tty_switch(g_dtty);
+        prev_tty = active_tty;
+        tty_switch(dtty);
     }
 }
 
 void dash_init(void) {
-    g_dtty = tty_create();
-    if (!g_dtty) return;
+    dtty = tty_create();
+    if (!dtty) return;
 
-    g_dtty->hidden = true;
+    dtty->hidden = true;
 
-    con_header_init(g_dtty->console, 1);
-    con_header_write(g_dtty->console, 0,
+    con_header_init(dtty->console, 1);
+    con_header_write(dtty->console, 0,
                      "  GatOS Kernel Dashboard",
                      CONSOLE_COLOR_WHITE, CONSOLE_COLOR_MAGENTA);
-    con_enable_cursor(g_dtty->console, false);
+    con_enable_cursor(dtty->console, false);
 
-    process_t* proc = process_create("dashboard", g_dtty);
+    process_t* proc = process_create("dashboard", dtty);
     if (!proc) return;
 
     thread_t* t = thread_create(proc, "dash", dash_thread_fn, NULL, false, 0);

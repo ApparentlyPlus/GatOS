@@ -116,7 +116,7 @@ typedef struct {
 
 
 void _putchar(char character){
-    tty_t* target_tty = g_active_tty;
+    tty_t* target_tty = active_tty;
 
     // Route to the calling thread's own TTY if the scheduler is running
     if (sched_active()) {
@@ -916,23 +916,23 @@ int fctprintf(void (*out)(char character, void* arg), void* arg, const char* for
 ///////////////////////////////////////////////////////////////////////////////
 // Input Implementation
 
-static int g_next_char = -1;
+static int next_char = -1;
 
 int _getchar(void) {
-    if (g_next_char != -1) {
-        int ch = g_next_char;
-        g_next_char = -1;
+    if (next_char != -1) {
+        int ch = next_char;
+        next_char = -1;
         return ch;
     }
-    // Always read from the kernel's own fixed TTY, not g_active_tty.
-    // g_active_tty may be switched to a user process TTY; the kernel loop
+    // Always read from the kernel's own fixed TTY, not active_tty.
+    // active_tty may be switched to a user process TTY; the kernel loop
     // must not compete with userspace for input.
-    if (!g_kernel_tty) return 0;
-    return (int)tty_read_char(g_kernel_tty);
+    if (!kernel_tty) return 0;
+    return (int)tty_read_char(kernel_tty);
 }
 
 static void _ungetchar(int ch) {
-    g_next_char = ch;
+    next_char = ch;
 }
 
 int vscanf_(const char* format, va_list va) {

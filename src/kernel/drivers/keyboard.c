@@ -29,11 +29,11 @@ static struct {
     uint32_t head;
     uint32_t tail;
     spinlock_t lock;
-} g_key_events;
+} key_events;
 
-static uint8_t g_current_modifiers = 0;
-static uint8_t g_current_locks = 0;
-static bool g_extended = false;
+static uint8_t modifiers = 0;
+static uint8_t locks = 0;
+static bool extended = false;
 
 #pragma endregion
 
@@ -65,7 +65,7 @@ static void update_leds(void) {
     i8042_write_data(0xED);
     i8042_wait_read();
     if (i8042_read_data() == 0xFA) {
-        i8042_write_data(g_current_locks & 0x07);
+        i8042_write_data(locks & 0x07);
     }
 }
 
@@ -73,18 +73,18 @@ static void update_leds(void) {
  * push_event - Adds a key event to the circular buffer (Thread-safe)
  */
 static void push_event(keycode_t key, bool pressed) {
-    bool flags = spinlock_acquire(&g_key_events.lock);
+    bool flags = spinlock_acquire(&key_events.lock);
 
-    uint32_t next = (g_key_events.head + 1) % EVENT_BUFFER_SIZE;
-    if (next != g_key_events.tail) {
-        g_key_events.buffer[g_key_events.head].keycode = key;
-        g_key_events.buffer[g_key_events.head].pressed = pressed;
-        g_key_events.buffer[g_key_events.head].modifiers = g_current_modifiers;
-        g_key_events.buffer[g_key_events.head].locks = g_current_locks;
-        g_key_events.head = next;
+    uint32_t next = (key_events.head + 1) % EVENT_BUFFER_SIZE;
+    if (next != key_events.tail) {
+        key_events.buffer[key_events.head].keycode = key;
+        key_events.buffer[key_events.head].pressed = pressed;
+        key_events.buffer[key_events.head].modifiers = modifiers;
+        key_events.buffer[key_events.head].locks = locks;
+        key_events.head = next;
     }
 
-    spinlock_release(&g_key_events.lock, flags);
+    spinlock_release(&key_events.lock, flags);
 }
 
 #pragma endregion
@@ -95,13 +95,12 @@ static void push_event(keycode_t key, bool pressed) {
  * keyboard_init - Initializes the event buffer and controller
  */
 void keyboard_init(void) {
-    kmemset(&g_key_events, 0, sizeof(g_key_events));
-    spinlock_init(&g_key_events.lock, "keyboard_events");
+    kmemset(&key_events, 0, sizeof(key_events));
+    spinlock_init(&key_events.lock, "keyboard_events");
     
     if (i8042_init()) {
         update_leds();
         
-        // Drain any pending bytes from initialization
         while (inb(0x64) & 0x01) {
             inb(0x60);
         }
@@ -114,17 +113,17 @@ void keyboard_init(void) {
  * keyboard_get_event - Pops an event from the buffer if available
  */
 bool keyboard_get_event(key_event_t* out_event) {
-    bool flags = spinlock_acquire(&g_key_events.lock);
+    bool flags = spinlock_acquire(&key_events.lock);
 
-    if (g_key_events.head == g_key_events.tail) {
-        spinlock_release(&g_key_events.lock, flags);
+    if (key_events.head == key_events.tail) {
+        spinlock_release(&key_events.lock, flags);
         return false;
     }
 
-    *out_event = g_key_events.buffer[g_key_events.tail];
-    g_key_events.tail = (g_key_events.tail + 1) % EVENT_BUFFER_SIZE;
+    *out_event = key_events.buffer[key_events.tail];
+    key_events.tail = (key_events.tail + 1) % EVENT_BUFFER_SIZE;
 
-    spinlock_release(&g_key_events.lock, flags);
+    spinlock_release(&key_events.lock, flags);
     return true;
 }
 
@@ -132,13 +131,12 @@ bool keyboard_get_event(key_event_t* out_event) {
  * keyboard_handler - Main IRQ handler logic (State machine)
  */
 cpu_context_t* keyboard_handler(cpu_context_t* ctx) {
-    // Check status port directly for speed
     if (!(inb(0x64) & 0x01)) return ctx;
 
     uint8_t scancode = inb(0x60);
 
     if (scancode == 0xE0) {
-        g_extended = true;
+        extended = true;
         return ctx;
     }
 
@@ -147,9 +145,9 @@ cpu_context_t* keyboard_handler(cpu_context_t* ctx) {
 
     keycode_t key = KEY_UNKNOWN;
 
-    if (g_extended) {
+    if (extended) {
         key = (keycode_t)(code | 0x80);
-        g_extended = false;
+        extended = false;
     } else if (code < sizeof(scancode_set1)/sizeof(scancode_set1[0])) {
         key = scancode_set1[code];
     }
@@ -159,30 +157,21 @@ cpu_context_t* keyboard_handler(cpu_context_t* ctx) {
     }
 
     switch (key) {
-        case KEY_LEFT_SHIFT:  pressed ? (g_current_modifiers |= MOD_LSHIFT) : (g_current_modifiers &= ~MOD_LSHIFT); break;
-        case KEY_RIGHT_SHIFT: pressed ? (g_current_modifiers |= MOD_RSHIFT) : (g_current_modifiers &= ~MOD_RSHIFT); break;
-        case KEY_LEFT_CTRL:   pressed ? (g_current_modifiers |= MOD_LCTRL)  : (g_current_modifiers &= ~MOD_LCTRL);  break;
-        case KEY_RIGHT_CTRL:  pressed ? (g_current_modifiers |= MOD_RCTRL)  : (g_current_modifiers &= ~MOD_RCTRL);  break;
-        case KEY_LEFT_ALT:    pressed ? (g_current_modifiers |= MOD_LALT)   : (g_current_modifiers &= ~MOD_LALT);   break;
-        case KEY_RIGHT_ALT:   pressed ? (g_current_modifiers |= MOD_RALT)   : (g_current_modifiers &= ~MOD_RALT);   break;
+        case KEY_LEFT_SHIFT:  pressed ? (modifiers |= MOD_LSHIFT) : (modifiers &= ~MOD_LSHIFT); break;
+        case KEY_RIGHT_SHIFT: pressed ? (modifiers |= MOD_RSHIFT) : (modifiers &= ~MOD_RSHIFT); break;
+        case KEY_LEFT_CTRL:   pressed ? (modifiers |= MOD_LCTRL)  : (modifiers &= ~MOD_LCTRL);  break;
+        case KEY_RIGHT_CTRL:  pressed ? (modifiers |= MOD_RCTRL)  : (modifiers &= ~MOD_RCTRL);  break;
+        case KEY_LEFT_ALT:    pressed ? (modifiers |= MOD_LALT)   : (modifiers &= ~MOD_LALT);   break;
+        case KEY_RIGHT_ALT:   pressed ? (modifiers |= MOD_RALT)   : (modifiers &= ~MOD_RALT);   break;
         
-        case KEY_CAPSLOCK:   if (pressed) { g_current_locks ^= LOCK_CAPS;   update_leds(); } break;
-        case KEY_NUMLOCK:    if (pressed) { g_current_locks ^= LOCK_NUM;    update_leds(); } break;
-        case KEY_SCROLLLOCK: if (pressed) { g_current_locks ^= LOCK_SCROLL; update_leds(); } break;
+        case KEY_CAPSLOCK:   if (pressed) { locks ^= LOCK_CAPS;   update_leds(); } break;
+        case KEY_NUMLOCK:    if (pressed) { locks ^= LOCK_NUM;    update_leds(); } break;
+        case KEY_SCROLLLOCK: if (pressed) { locks ^= LOCK_SCROLL; update_leds(); } break;
         
         default: break;
     }
 
-    // Dispatch to Input Hub (Handles hotkeys and TTY routing)
-    key_event_t event = {
-        .keycode = key,
-        .pressed = pressed,
-        .modifiers = g_current_modifiers,
-        .locks = g_current_locks
-    };
-    input_handle_key(event);
-
-    // Add to internal driver buffer
+    input_handle_key((key_event_t){ .keycode = key, .pressed = pressed, .modifiers = modifiers, .locks = locks });
     push_event(key, pressed);
 
     return ctx;

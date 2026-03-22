@@ -5,7 +5,7 @@
  * for threads and processes. It coordinates with the heap manager for 
  * both kernel and userspace allocations.
  *
- * Author: ApparentlyPlus
+ * Author: u/ApparentlyPlus
  */
 
 #include <kernel/sys/process.h>
@@ -20,13 +20,13 @@
 #include <klibc/string.h>
 #include <klibc/stdio.h>
 
-static pid_t g_next_pid = 1;
-static tid_t g_next_tid = 1;
+static pid_t next_pid = 1;
+static tid_t next_tid = 1;
 
-static process_t* g_processes = NULL;
+static process_t* proc_list = NULL;
 
 /*
- * userspace_start - Global entry point for all Ring 3 threads.
+ * userspace_start - Global entry point for all Ring 3 threads
  * It calls the entry function and then exits via SYS_EXIT.
  */
 userspace void userspace_start(void (*entry)(void*), void* arg) {
@@ -44,15 +44,14 @@ userspace void userspace_start(void (*entry)(void*), void* arg) {
 }
 
 /*
- * thread_entry_wrapper - Wrapper function that calls the thread's entry point
+ * thread_wrap - Wrapper function that calls the thread's entry point
  * and then gracefully exits the thread if the entry point returns.
  */
-static void thread_entry_wrapper(void (*entry)(void*), void* arg) {
+static void thread_wrap(void (*entry)(void*), void* arg) {
     if (entry) {
         entry(arg);
     }
-    
-    // If the thread returns, terminate it properly
+
     sched_exit();
 }
 
@@ -60,9 +59,9 @@ static void thread_entry_wrapper(void (*entry)(void*), void* arg) {
  * process_init - Initializes the process management subsystem
  */
 void process_init(void) {
-    g_next_pid = 1;
-    g_next_tid = 1;
-    g_processes = NULL;
+    next_pid = 1;
+    next_tid = 1;
+    proc_list = NULL;
     LOGF("[PROC] Process subsystem initialized.\n");
 }
 
@@ -72,7 +71,6 @@ void process_init(void) {
 void process_header_update(process_t* proc) {
     if (!proc || !proc->tty) return;
 
-    // Count all threads ever added
     size_t total = 0;
     size_t alive = 0;
     thread_t* t = proc->threads;
@@ -85,11 +83,7 @@ void process_header_update(process_t* proc) {
     const char* state = (total == 0 || alive > 0) ? "Running" : "Terminated";
 
     char hdr[128];
-    ksnprintf(
-        hdr, sizeof(hdr),
-        "Process: %s  |  PID: %u  |  Threads: %zu  |  State: %s",
-        proc->name, proc->pid, alive, state
-    );
+    ksnprintf(hdr, sizeof(hdr), "Process: %s  |  PID: %u  |  Threads: %zu  |  State: %s", proc->name, proc->pid, alive, state);
 
     tty_header_write(proc->tty, 1, hdr, CONSOLE_COLOR_CYAN, CONSOLE_COLOR_BLACK);
 }
@@ -102,68 +96,50 @@ process_t* process_create(const char* name, tty_t* existing_tty) {
     if (!proc) return NULL;
 
     kmemset(proc, 0, sizeof(process_t));
-    proc->pid = g_next_pid++;
+    proc->pid = next_pid++;
     kstrncpy(proc->name, name, MAX_PROCESS_NAME - 1);
 
-    // Create a unique address space for the process
-    // The alloc_base is set to USER_CODE_VIRT_ADDR so we can map the user sections
-    // using vmm_alloc_at, which will properly register them as vm_objects.
     proc->vmm = vmm_create(USER_CODE_VIRT_ADDR, 0x00007FFFFFFFF000);
     if (!proc->vmm) {
         kfree(proc);
         return NULL;
     }
 
-    // Map the kernel's userspace sections into the process's VMM at USER_CODE_VIRT_ADDR
-    // Every process sees the same code, but it only exists once in physical RAM.
-    uintptr_t user_text_phys = (uintptr_t)&USER_TEXT_LOAD_ADDR;
-    size_t user_text_size = align_up((uintptr_t)&USER_TEXT_END - (uintptr_t)&USER_TEXT_START, PAGE_SIZE);
-    if (user_text_size > 0) {
-        void* out_addr = NULL;
-        vmm_status_t map_status = vmm_alloc_at(proc->vmm, (void*)USER_CODE_VIRT_ADDR, 
-                                                user_text_size, 
-                                                VM_FLAG_USER | VM_FLAG_EXEC | VM_FLAG_MMIO, 
-                                                (void*)user_text_phys, &out_addr);
-        if (map_status != VMM_OK) goto map_fail;
+    uintptr_t t_phys = (uintptr_t)&USER_TEXT_LOAD_ADDR;
+    size_t tsz = align_up((uintptr_t)&USER_TEXT_END - (uintptr_t)&USER_TEXT_START, PAGE_SIZE);
+    if (tsz > 0) {
+        void* out = NULL;
+        vmm_status_t st = vmm_alloc_at(proc->vmm, (void*)USER_CODE_VIRT_ADDR, tsz, VM_FLAG_USER | VM_FLAG_EXEC | VM_FLAG_MMIO, (void*)t_phys, &out);
+        if (st != VMM_OK) goto map_fail;
     }
 
-    uintptr_t user_rodata_phys = (uintptr_t)&USER_RODATA_LOAD_ADDR;
-    size_t user_rodata_size = align_up((uintptr_t)&USER_RODATA_END - (uintptr_t)&USER_RODATA_START, PAGE_SIZE);
-    if (user_rodata_size > 0) {
-        void* out_addr = NULL;
-        uintptr_t user_rodata_virt = (uintptr_t)&USER_RODATA_START;
-        vmm_status_t map_status = vmm_alloc_at(proc->vmm, (void*)user_rodata_virt, 
-                                                user_rodata_size, 
-                                                VM_FLAG_USER | VM_FLAG_MMIO, 
-                                                (void*)user_rodata_phys, &out_addr);
-        if (map_status != VMM_OK) goto map_fail;
+    uintptr_t ro_phys = (uintptr_t)&USER_RODATA_LOAD_ADDR;
+    size_t rosz = align_up((uintptr_t)&USER_RODATA_END - (uintptr_t)&USER_RODATA_START, PAGE_SIZE);
+    if (rosz > 0) {
+        void* out = NULL;
+        uintptr_t ro_virt = (uintptr_t)&USER_RODATA_START;
+        vmm_status_t st = vmm_alloc_at(proc->vmm, (void*)ro_virt, rosz, VM_FLAG_USER | VM_FLAG_MMIO, (void*)ro_phys, &out);
+        if (st != VMM_OK) goto map_fail;
     }
 
-    uintptr_t user_data_phys = (uintptr_t)&USER_DATA_LOAD_ADDR;
-    size_t user_data_size = align_up((uintptr_t)&USER_DATA_END - (uintptr_t)&USER_DATA_START, PAGE_SIZE);
-    if (user_data_size > 0) {
-        void* out_addr = NULL;
-        uintptr_t user_data_virt = (uintptr_t)&USER_DATA_START;
-        vmm_status_t map_status = vmm_alloc_at(proc->vmm, (void*)user_data_virt, 
-                                                user_data_size, 
-                                                VM_FLAG_USER | VM_FLAG_WRITE | VM_FLAG_MMIO, 
-                                                (void*)user_data_phys, &out_addr);
-        if (map_status != VMM_OK) goto map_fail;
+    uintptr_t d_phys = (uintptr_t)&USER_DATA_LOAD_ADDR;
+    size_t dsz = align_up((uintptr_t)&USER_DATA_END - (uintptr_t)&USER_DATA_START, PAGE_SIZE);
+    if (dsz > 0) {
+        void* out = NULL;
+        uintptr_t d_virt = (uintptr_t)&USER_DATA_START;
+        vmm_status_t st = vmm_alloc_at(proc->vmm, (void*)d_virt, dsz, VM_FLAG_USER | VM_FLAG_WRITE | VM_FLAG_MMIO, (void*)d_phys, &out);
+        if (st != VMM_OK) goto map_fail;
     }
 
-    uintptr_t user_bss_phys = (uintptr_t)&USER_BSS_LOAD_ADDR;
-    size_t user_bss_size = align_up((uintptr_t)&USER_BSS_END - (uintptr_t)&USER_BSS_START, PAGE_SIZE);
-    if (user_bss_size > 0) {
-        void* out_addr = NULL;
-        uintptr_t user_bss_virt = (uintptr_t)&USER_BSS_START;
-        vmm_status_t map_status = vmm_alloc_at(proc->vmm, (void*)user_bss_virt, 
-                                                user_bss_size, 
-                                                VM_FLAG_USER | VM_FLAG_WRITE | VM_FLAG_MMIO, 
-                                                (void*)user_bss_phys, &out_addr);
-        if (map_status != VMM_OK) goto map_fail;
+    uintptr_t b_phys = (uintptr_t)&USER_BSS_LOAD_ADDR;
+    size_t bsz = align_up((uintptr_t)&USER_BSS_END - (uintptr_t)&USER_BSS_START, PAGE_SIZE);
+    if (bsz > 0) {
+        void* out = NULL;
+        uintptr_t b_virt = (uintptr_t)&USER_BSS_START;
+        vmm_status_t st = vmm_alloc_at(proc->vmm, (void*)b_virt, bsz, VM_FLAG_USER | VM_FLAG_WRITE | VM_FLAG_MMIO, (void*)b_phys, &out);
+        if (st != VMM_OK) goto map_fail;
     }
 
-    // Setup TTY
     if (existing_tty) {
         proc->tty = existing_tty;
     } else {
@@ -174,9 +150,8 @@ process_t* process_create(const char* name, tty_t* existing_tty) {
         process_header_update(proc);
     }
 
-    // Add to global process list
-    proc->next = g_processes;
-    g_processes = proc;
+    proc->next = proc_list;
+    proc_list = proc;
 
     LOGF("[PROC] Created process '%s' (PID: %u) with shared code mapping\n", proc->name, proc->pid);
     return proc;
@@ -195,7 +170,7 @@ thread_t* thread_create(process_t* process, const char* name, void (*entry)(void
     if (!thread) return NULL;
 
     kmemset(thread, 0, sizeof(thread_t));
-    thread->tid = g_next_tid++;
+    thread->tid = next_tid++;
     thread->process = process;
     thread->state = THREAD_STATE_READY;
     kstrncpy(thread->name, name, MAX_THREAD_NAME - 1);
@@ -206,8 +181,8 @@ thread_t* thread_create(process_t* process, const char* name, void (*entry)(void
      * x87/MMX/XMM registers are zero. We only need to write the two control
      * words that have non-zero reset values:
      *
-     *   FCW  (offset  0) = 0x037F — x87: all exceptions masked, 64-bit precision
-     *   MXCSR(offset 24) = 0x1F80 — SSE: all exceptions masked
+     *   FCW  (offset  0) = 0x037F - x87: all exceptions masked, 64-bit precision
+     *   MXCSR(offset 24) = 0x1F80 - SSE: all exceptions masked
      *
      * This avoids fninit + fxsave, which would capture the calling context's
      * live XMM registers and potentially leak kernel FPU state into the thread.
@@ -215,7 +190,6 @@ thread_t* thread_create(process_t* process, const char* name, void (*entry)(void
     *(uint16_t *)(&thread->fpu_state[0])  = 0x037F;
     *(uint32_t *)(&thread->fpu_state[24]) = 0x1F80;
 
-    // Allocate kernel stack from kernel heap
     thread->kernel_stack = kmalloc(KERNEL_STACK_SIZE);
     if (!thread->kernel_stack) {
         kfree(thread);
@@ -267,7 +241,7 @@ thread_t* thread_create(process_t* process, const char* name, void (*entry)(void
     } else {
         thread->context->iret_cs = KERNEL_CS;
         thread->context->iret_ss = KERNEL_DS;
-        thread->context->iret_rip = (uint64_t)thread_entry_wrapper;
+        thread->context->iret_rip = (uint64_t)thread_wrap;
         thread->context->iret_rsp = stack_top - sizeof(cpu_context_t);
         
         thread->context->rdi = (uint64_t)entry;
@@ -291,12 +265,11 @@ thread_t* thread_create_bootstrap(process_t* process, const char* name) {
     if (!thread) return NULL;
 
     kmemset(thread, 0, sizeof(thread_t));
-    thread->tid = g_next_tid++;
+    thread->tid = next_tid++;
     thread->process = process;
     thread->state = THREAD_STATE_RUNNING; 
     kstrncpy(thread->name, name, MAX_THREAD_NAME - 1);
 
-    // Save current FPU state
     __asm__ volatile (
         "fxsave %0 \n"
         : "=m"(thread->fpu_state)
@@ -321,12 +294,10 @@ void thread_destroy(thread_t* thread) {
 
     LOGF("[PROC] Destroying thread '%s' (TID: %u)\n", thread->name, thread->tid);
 
-    // If it has a user stack, free it from the process VMM
     if (thread->user_stack && thread->process && thread->process->vmm) {
         vmm_free(thread->process->vmm, thread->user_stack);
     }
 
-    // Free kernel stack
     if (thread->kernel_stack) {
         kfree(thread->kernel_stack);
     }
@@ -342,9 +313,8 @@ void process_destroy(process_t* process) {
 
     LOGF("[PROC] Destroying process '%s' (PID: %u)\n", process->name, process->pid);
 
-    sched_remove_process(process);
+    sched_drop_proc(process);
 
-    // Destroy all threads
     thread_t* thread = process->threads;
     while (thread) {
         thread_t* next = thread->next;
@@ -356,8 +326,7 @@ void process_destroy(process_t* process) {
         vmm_destroy(process->vmm);
     }
 
-    // Remove from global list
-    process_t** prev = &g_processes;
+    process_t** prev = &proc_list;
     while (*prev) {
         if (*prev == process) {
             *prev = process->next;
@@ -373,16 +342,16 @@ void process_destroy(process_t* process) {
  * process_get_all - Returns the head of the global process list
  */
 process_t* process_get_all(void) {
-    return g_processes;
+    return proc_list;
 }
 
 /*
- * process_terminate_by_tty - Marks all threads of processes using the given TTY as DEAD
+ * procs_kill_tty - Marks all threads of processes using the given TTY as DEAD
  */
-void process_terminate_by_tty(tty_t* tty) {
+void procs_kill_tty(tty_t* tty) {
     if (!tty) return;
 
-    process_t* proc = g_processes;
+    process_t* proc = proc_list;
     while (proc) {
         if (proc->tty == tty) {
             thread_t* thread = proc->threads;

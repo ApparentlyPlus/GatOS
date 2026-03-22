@@ -21,27 +21,27 @@
 #define MAX_TRACK 4096
 typedef struct { uint64_t addr; size_t size; bool on; } pmtr_t;
 
-static pmtr_t g_tr[MAX_TRACK];
-static int    g_tidx         = 0;
-static int    g_tests_total  = 0;
-static int    g_tests_passed = 0;
+static pmtr_t tr[MAX_TRACK];
+static int    tidx         = 0;
+static int    ntests  = 0;
+static int    npass = 0;
 
 #pragma region Tracker
 
 static void tr_reset(void) {
-    for (int i = 0; i < MAX_TRACK; i++) g_tr[i].on = false;
-    g_tidx = 0;
+    for (int i = 0; i < MAX_TRACK; i++) tr[i].on = false;
+    tidx = 0;
 }
 
 static void tr_add(uint64_t a, size_t s) {
-    if (g_tidx < MAX_TRACK) g_tr[g_tidx++] = (pmtr_t){a, s, true};
+    if (tidx < MAX_TRACK) tr[tidx++] = (pmtr_t){a, s, true};
     else LOGF("[WARN] PMM tracker full\n");
 }
 
 static void tr_free(void) {
     for (int i = 0; i < MAX_TRACK; i++)
-        if (g_tr[i].on) { pmm_free(g_tr[i].addr, g_tr[i].size); g_tr[i].on = false; }
-    g_tidx = 0;
+        if (tr[i].on) { pmm_free(tr[i].addr, tr[i].size); tr[i].on = false; }
+    tidx = 0;
 }
 #pragma endregion
 
@@ -290,7 +290,7 @@ static bool t_reserved(void) {
 static bool t_mark_free(void) {
     /* Just test it doesn't crash and returns something sensible */
     uint64_t base = pmm_managed_base();
-    /* Call on a very small already-free region — implementation must handle */
+    /* Call on a very small already-free region - implementation must handle */
     pmm_status_t s = pmm_mark_free_range(base, base); /* zero-size edge */
     /* Any non-crash result is acceptable */
     (void)s;
@@ -312,12 +312,12 @@ static bool t_order_churn(void) {
             *p = (uint32_t)s;
         }
         if (i % 10 == 0) {
-            for (int j = 0; j < g_tidx; j += 2) {
-                if (g_tr[j].on) {
-                    uint32_t* p = (uint32_t*)PHYSMAP_P2V(g_tr[j].addr);
-                    if (*p != (uint32_t)g_tr[j].size) { LOGF("[FAIL] churn corruption\n"); tr_free(); return false; }
-                    pmm_free(g_tr[j].addr, g_tr[j].size);
-                    g_tr[j].on = false;
+            for (int j = 0; j < tidx; j += 2) {
+                if (tr[j].on) {
+                    uint32_t* p = (uint32_t*)PHYSMAP_P2V(tr[j].addr);
+                    if (*p != (uint32_t)tr[j].size) { LOGF("[FAIL] churn corruption\n"); tr_free(); return false; }
+                    pmm_free(tr[j].addr, tr[j].size);
+                    tr[j].on = false;
                 }
             }
         }
@@ -340,10 +340,10 @@ static bool t_all_orders(void) {
             if (a & (s - 1)) { LOGF("[FAIL] order %llu not aligned\n", s); tr_free(); return false; }
         } else break;
     }
-    for (int i = g_tidx - 1; i >= 0; i--) {
-        if (g_tr[i].on) { pmm_free(g_tr[i].addr, g_tr[i].size); g_tr[i].on = false; }
+    for (int i = tidx - 1; i >= 0; i--) {
+        if (tr[i].on) { pmm_free(tr[i].addr, tr[i].size); tr[i].on = false; }
     }
-    g_tidx = 0;
+    tidx = 0;
     TEST_ASSERT(pmm_verify_integrity());
     return true;
 }
@@ -355,7 +355,7 @@ static bool t_exhaustion(void) {
     tr_reset();
     size_t s = (size_t)pmm_min_block_size();
     uint64_t a;
-    while (g_tidx < MAX_TRACK) {
+    while (tidx < MAX_TRACK) {
         if (pmm_alloc(s, &a) == PMM_ERR_OOM) break;
         tr_add(a, s);
     }
@@ -389,14 +389,14 @@ static bool t_sandwich(void) {
     bool contig = (b==a+sz && c==b+sz && d==c+sz);
     if (!contig) { tr_free(); return true; }
 
-    pmm_free(a,sz); g_tr[0].on=false;
-    pmm_free(c,sz); g_tr[2].on=false;
-    pmm_free(b,sz); g_tr[1].on=false; /* triggers merge */
+    pmm_free(a,sz); tr[0].on=false;
+    pmm_free(c,sz); tr[2].on=false;
+    pmm_free(b,sz); tr[1].on=false; /* triggers merge */
 
     uint64_t merged;
     if (pmm_alloc(sz*2, &merged) != PMM_OK) {
         LOGF("[FAIL] coalesce: can't re-alloc merged block\n");
-        g_tr[3].on=false; pmm_free(d,sz);
+        tr[3].on=false; pmm_free(d,sz);
         return false;
     }
     tr_add(merged, sz*2);
@@ -407,18 +407,18 @@ static bool t_sandwich(void) {
 #pragma region Runner
 
 static void run_test(const char* name, bool (*fn)(void)) {
-    g_tests_total++;
+    ntests++;
     LOGF("[TEST] %-40s ", name);
     if (!pmm_verify_integrity()) { LOGF("[SKIP] (PMM corrupted)\n"); return; }
     bool pass = fn();
-    if (g_tidx > 0) { LOGF("[WARN] leak (cleaning) ... "); tr_free(); }
-    if (pass) { g_tests_passed++; LOGF("[PASS]\n"); }
+    if (tidx > 0) { LOGF("[WARN] leak (cleaning) ... "); tr_free(); }
+    if (pass) { npass++; LOGF("[PASS]\n"); }
     else       { LOGF("[FAIL]\n"); }
 }
 
 void test_pmm(void) {
-    g_tests_total  = 0;
-    g_tests_passed = 0;
+    ntests  = 0;
+    npass = 0;
 
     LOGF("\n--- BEGIN PMM TEST ---\n");
 
@@ -451,18 +451,18 @@ void test_pmm(void) {
     run_test("sandwich coalesce",             t_sandwich);
 
     LOGF("--- END PMM TEST ---\n");
-    LOGF("PMM Test Results: %d/%d\n\n", g_tests_passed, g_tests_total);
+    LOGF("PMM Test Results: %d/%d\n\n", npass, ntests);
 
     #ifdef TEST_BUILD
     #include <kernel/drivers/console.h>
     #include <klibc/stdio.h>
-    if (g_tests_passed != g_tests_total) {
+    if (npass != ntests) {
         console_set_color(CONSOLE_COLOR_RED, CONSOLE_COLOR_BLACK);
-        kprintf("[-] Some PMM tests failed (%d/%d passed).\n", g_tests_passed, g_tests_total);
+        kprintf("[-] Some PMM tests failed (%d/%d passed).\n", npass, ntests);
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     } else {
         console_set_color(CONSOLE_COLOR_GREEN, CONSOLE_COLOR_BLACK);
-        kprintf("[+] All PMM tests passed! (%d/%d)\n", g_tests_passed, g_tests_total);
+        kprintf("[+] All PMM tests passed! (%d/%d)\n", npass, ntests);
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     }
     #endif
