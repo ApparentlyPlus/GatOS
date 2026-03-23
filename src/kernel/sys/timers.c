@@ -208,7 +208,7 @@ static void timer_calibrate_all(void) {
     uint64_t lapic_ticks_per_ms = (lapic_start - lapic_end) / CALIBRATE_MS;
     tsc_tpm = (tsc_end - tsc_start) / CALIBRATE_MS;
 
-    lapic_timer_set_calibration(lapic_ticks_per_ms);
+    lapic_set_tpm(lapic_ticks_per_ms);
 
     LOGF("[TIMER] LAPIC: %lu ticks/ms, TSC: %lu ticks/ms\n", 
          lapic_ticks_per_ms, tsc_tpm);

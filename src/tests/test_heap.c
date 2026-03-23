@@ -2,8 +2,8 @@
  * test_heap.c - Kernel Heap Manager Validation Suite (White-Box)
  *
  * Tests every public heap function: heap_kernel_init, heap_kernel_get,
- * kmalloc, kfree, krealloc, kcalloc, heap_check_integrity,
- * heap_get_alloc_size, heap_stats, heap_align_size, heap_validate_block.
+ * kmalloc, kfree, krealloc, kcalloc, heap_check,
+ * heap_alloc_sz, heap_stats, heap_align_size, heap_validate_blk.
  *
  * Machine-adaptive: large allocation stress targets 25% of available
  * heap space rather than a hardcoded byte count.
@@ -211,7 +211,7 @@ static bool t_dbl_free(void) {
     void* p = kmalloc(32); tr_add(p);
     kfree(p); track[0].active = false;
     kfree(p); /* should warn, not crash */
-    TEST_ASSERT_STATUS(heap_check_integrity(heap_kernel_get()), HEAP_OK);
+    TEST_ASSERT_STATUS(heap_check(heap_kernel_get()), HEAP_OK);
     return true;
 }
 #pragma endregion
@@ -308,7 +308,7 @@ static bool t_realloc_hole(void) {
 static bool t_get_sz(void) {
     tr_reset();
     void* p = kmalloc(100); tr_add(p);
-    size_t sz = heap_get_alloc_size(heap_kernel_get(), p);
+    size_t sz = heap_alloc_sz(heap_kernel_get(), p);
     TEST_ASSERT(sz >= 100);
     tr_free(); return true;
 }
@@ -327,12 +327,12 @@ static bool t_align_sz(void) {
 }
 #pragma endregion
 
-#pragma region heap_validate_block
+#pragma region heap_validate_blk
 
 static bool t_validate_ok(void) {
     tr_reset();
     void* p = kmalloc(48); tr_add(p);
-    TEST_ASSERT(heap_validate_block((heap_block_header_t*)hdr(p)));
+    TEST_ASSERT(heap_validate_blk((blk_hdr_t*)hdr(p)));
     tr_free(); return true;
 }
 
@@ -342,7 +342,7 @@ static bool t_validate_bad(void) {
     heap_test_hdr_t* h = hdr(p);
     uint32_t saved = h->magic;
     h->magic = 0xBAD1BAD1;
-    TEST_ASSERT(!heap_validate_block((heap_block_header_t*)h));
+    TEST_ASSERT(!heap_validate_blk((blk_hdr_t*)h));
     h->magic = saved;
     tr_free(); return true;
 }
@@ -384,7 +384,7 @@ static bool t_coalesce_fwd(void) {
     kfree(B); track[1].active = false;
     TEST_ASSERT(hA->magic == BLOCK_MAGIC_FREE);
     TEST_ASSERT(hA->total_size >= sA + sB);
-    TEST_ASSERT_STATUS(heap_check_integrity(heap_kernel_get()), HEAP_OK);
+    TEST_ASSERT_STATUS(heap_check(heap_kernel_get()), HEAP_OK);
     tr_free(); return true;
 }
 
@@ -453,7 +453,7 @@ static bool t_hdr_corrupt(void) {
     heap_test_hdr_t* h = hdr(p);
     uint32_t saved = h->magic;
     h->magic = 0xDEADBEEF;
-    heap_status_t s = heap_check_integrity(heap_kernel_get());
+    heap_status_t s = heap_check(heap_kernel_get());
     h->magic = saved;
     TEST_ASSERT_STATUS(s, HEAP_ERR_CORRUPTED);
     tr_free(); return true;
@@ -466,7 +466,7 @@ static bool t_ftr_corrupt(void) {
     heap_test_ftr_t* f = ftr(h);
     uint32_t saved = f->magic;
     f->magic = 0xBADF00D1;
-    heap_status_t s = heap_check_integrity(heap_kernel_get());
+    heap_status_t s = heap_check(heap_kernel_get());
     f->magic = saved;
     TEST_ASSERT_STATUS(s, HEAP_ERR_CORRUPTED);
     tr_free(); return true;
@@ -478,7 +478,7 @@ static bool t_rz_corrupt(void) {
     heap_test_hdr_t* h = hdr(p);
     uint32_t saved = h->red_zone_post;
     h->red_zone_post = 0;
-    heap_status_t s = heap_check_integrity(heap_kernel_get());
+    heap_status_t s = heap_check(heap_kernel_get());
     h->red_zone_post = saved;
     TEST_ASSERT_STATUS(s, HEAP_ERR_CORRUPTED);
     tr_free(); return true;
@@ -541,7 +541,7 @@ static bool t_stress_churn(void) {
             pool[idx] = NULL;
         }
         if (i % 500 == 0)
-            if (heap_check_integrity(heap_kernel_get()) != HEAP_OK) return false;
+            if (heap_check(heap_kernel_get()) != HEAP_OK) return false;
     }
     for (int i = 0; i < SC; i++) if (pool[i]) kfree(pool[i]);
     return true;

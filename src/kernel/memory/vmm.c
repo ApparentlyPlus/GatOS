@@ -27,7 +27,7 @@
 #define VM_OBJECT_RED_ZONE 0xDEADC0DE
 
 // Extended vm_object with validation
-typedef struct vm_object_internal {
+typedef struct vmo_ext {
     uint32_t magic;
     uint32_t red_zone_pre;
     vm_object public;
@@ -35,7 +35,7 @@ typedef struct vm_object_internal {
     size_t   pg_size;
     uint64_t phys_base;
     avl_node_t vma_node;
-} vm_object_internal;
+} vmo_ext;
 
 // Extended VMM with validation
 typedef struct {
@@ -44,9 +44,9 @@ typedef struct {
     bool is_kernel;
     avl_tree_t vma_tree; // VMA tree, sorted by base address
     spinlock_t lock;
-} vmm_internal;
+} vmm_ctx;
 
-static vmm_internal* kernel_vmm = NULL;
+static vmm_ctx* kernel_vmm = NULL;
 static vmm_t* current_vmm = NULL;
 static slab_cache_t* vmm_cache = NULL;
 static slab_cache_t* vmo_cache = NULL;
@@ -56,7 +56,7 @@ static slab_cache_t* vmo_cache = NULL;
 /*
  * vmm_validate - Validate VMM structure integrity
  */
-static inline bool vmm_validate(vmm_internal* vmm) {
+static inline bool vmm_validate(vmm_ctx* vmm) {
     if (!vmm) return false;
 
     if (vmm->magic != VMM_MAGIC) {
@@ -71,7 +71,7 @@ static inline bool vmm_validate(vmm_internal* vmm) {
 /*
  * vm_object_validate - Validate vm_object structure integrity
  */
-static inline bool vm_object_validate(vm_object_internal* obj) {
+static inline bool vm_object_validate(vmo_ext* obj) {
     if (!obj) return false;
 
     if (obj->magic != VM_OBJECT_MAGIC) {
@@ -103,8 +103,8 @@ static inline bool vm_object_validate(vm_object_internal* obj) {
  * vma_cmp - Compare two VMA nodes
  */
 static int vma_cmp(const avl_node_t* a, const avl_node_t* b) {
-    uintptr_t ba = AVL_ENTRY(a, vm_object_internal, vma_node)->public.base;
-    uintptr_t bb = AVL_ENTRY(b, vm_object_internal, vma_node)->public.base;
+    uintptr_t ba = AVL_ENTRY(a, vmo_ext, vma_node)->public.base;
+    uintptr_t bb = AVL_ENTRY(b, vmo_ext, vma_node)->public.base;
     if (ba < bb) return -1;
     if (ba > bb) return  1;
     return 0;
@@ -113,16 +113,16 @@ static int vma_cmp(const avl_node_t* a, const avl_node_t* b) {
 /*
  * vma_insert - Insert obj into the VMM's VMA tree and maintain public.next / public.objects
  */
-static void vma_insert(vmm_internal* vmm, vm_object_internal* obj) {
+static void vma_insert(vmm_ctx* vmm, vmo_ext* obj) {
     avl_insert(&vmm->vma_tree, &obj->vma_node);
 
     avl_node_t* nx = avl_next(&obj->vma_node);
     avl_node_t* pv = avl_prev(&obj->vma_node);
 
-    obj->public.next = nx ? &AVL_ENTRY(nx, vm_object_internal, vma_node)->public : NULL;
+    obj->public.next = nx ? &AVL_ENTRY(nx, vmo_ext, vma_node)->public : NULL;
 
     if (pv)
-        AVL_ENTRY(pv, vm_object_internal, vma_node)->public.next = &obj->public;
+        AVL_ENTRY(pv, vmo_ext, vma_node)->public.next = &obj->public;
     else
         vmm->public.objects = &obj->public;
 }
@@ -130,11 +130,11 @@ static void vma_insert(vmm_internal* vmm, vm_object_internal* obj) {
 /*
  * vma_remove - Remove obj from the VMM's VMA tree and repair public.next / public.objects
  */
-static void vma_remove(vmm_internal* vmm, vm_object_internal* obj) {
+static void vma_remove(vmm_ctx* vmm, vmo_ext* obj) {
     avl_node_t* pv = avl_prev(&obj->vma_node);
 
     if (pv)
-        AVL_ENTRY(pv, vm_object_internal, vma_node)->public.next = obj->public.next;
+        AVL_ENTRY(pv, vmo_ext, vma_node)->public.next = obj->public.next;
     else
         vmm->public.objects = obj->public.next;
 
@@ -144,22 +144,22 @@ static void vma_remove(vmm_internal* vmm, vm_object_internal* obj) {
 /*
  * vma_find_exact - Find the VMA with exact base address
  */
-static vm_object_internal* vma_find_exact(vmm_internal* vmm, uintptr_t base) {
-    vm_object_internal key = {0};
+static vmo_ext* vma_find_exact(vmm_ctx* vmm, uintptr_t base) {
+    vmo_ext key = {0};
     key.public.base = base;
     avl_node_t* n = avl_find(&vmm->vma_tree, &key.vma_node);
-    return n ? AVL_ENTRY(n, vm_object_internal, vma_node) : NULL;
+    return n ? AVL_ENTRY(n, vmo_ext, vma_node) : NULL;
 }
 
 /*
  * vma_find_containing - Find the VMA containing addr (base <= addr < base+length)
  */
-static vm_object_internal* vma_find_containing(vmm_internal* vmm, uintptr_t addr) {
-    vm_object_internal key = {0};
+static vmo_ext* vma_find_containing(vmm_ctx* vmm, uintptr_t addr) {
+    vmo_ext key = {0};
     key.public.base = addr;
     avl_node_t* n = avl_floor(&vmm->vma_tree, &key.vma_node);
     if (!n) return NULL;
-    vm_object_internal* obj = AVL_ENTRY(n, vm_object_internal, vma_node);
+    vmo_ext* obj = AVL_ENTRY(n, vmo_ext, vma_node);
     if (addr < obj->public.base + obj->public.length) return obj;
     return NULL;
 }
@@ -167,16 +167,16 @@ static vm_object_internal* vma_find_containing(vmm_internal* vmm, uintptr_t addr
 /*
  * vma_find_gap - Find a gap of at least 'length' bytes in the VMM's address space, aligned to 'virt_align'
  */
-static uintptr_t vma_find_gap(vmm_internal* vmm, size_t length, size_t virt_align) {
+static uintptr_t vma_find_gap(vmm_ctx* vmm, size_t length, size_t virt_align) {
     uintptr_t cand = align_up(vmm->public.alloc_base, virt_align);
 
     while (cand && cand + length > cand && cand + length <= vmm->public.alloc_end) {
-        vm_object_internal key = {0};
+        vmo_ext key = {0};
         key.public.base = cand;
 
         avl_node_t* fn = avl_floor(&vmm->vma_tree, &key.vma_node);
         if (fn) {
-            vm_object_internal* f = AVL_ENTRY(fn, vm_object_internal, vma_node);
+            vmo_ext* f = AVL_ENTRY(fn, vmo_ext, vma_node);
             uintptr_t fend = f->public.base + f->public.length;
             if (cand < fend) { cand = align_up(fend, virt_align); continue; }
         }
@@ -185,7 +185,7 @@ static uintptr_t vma_find_gap(vmm_internal* vmm, size_t length, size_t virt_alig
         if (!cn)
             break;
 
-        vm_object_internal* c = AVL_ENTRY(cn, vm_object_internal, vma_node);
+        vmo_ext* c = AVL_ENTRY(cn, vmo_ext, vma_node);
         if (cand + length <= c->public.base)
             break;
 
@@ -200,18 +200,18 @@ static uintptr_t vma_find_gap(vmm_internal* vmm, size_t length, size_t virt_alig
 /* 
  * vma_overlaps - Returns true if [start, start+length) overlaps any existing VMA
  */
-static bool vma_overlaps(vmm_internal* vmm, uintptr_t start, size_t length) {
-    vm_object_internal key = {0};
+static bool vma_overlaps(vmm_ctx* vmm, uintptr_t start, size_t length) {
+    vmo_ext key = {0};
     key.public.base = start;
 
     avl_node_t* fn = avl_floor(&vmm->vma_tree, &key.vma_node);
     if (fn) {
-        vm_object_internal* f = AVL_ENTRY(fn, vm_object_internal, vma_node);
+        vmo_ext* f = AVL_ENTRY(fn, vmo_ext, vma_node);
         if (f->public.base + f->public.length > start) return true;
     }
     avl_node_t* cn = avl_ceil(&vmm->vma_tree, &key.vma_node);
     if (cn) {
-        vm_object_internal* c = AVL_ENTRY(cn, vm_object_internal, vma_node);
+        vmo_ext* c = AVL_ENTRY(cn, vmo_ext, vma_node);
         if (c->public.base < start + length) return true;
     }
     return false;
@@ -220,11 +220,11 @@ static bool vma_overlaps(vmm_internal* vmm, uintptr_t start, size_t length) {
 /*
  * vmm_get_instance - Get VMM instance (NULL means kernel VMM)
  */
-static inline vmm_internal* vmm_get_instance(vmm_t* vmm) {
+static inline vmm_ctx* vmm_get_instance(vmm_t* vmm) {
     if (vmm) {
-        // public is embedded inside vmm_internal; recover the outer struct
-        vmm_internal* internal =
-            (vmm_internal*)((uint8_t*)vmm - offsetof(vmm_internal, public));
+        // public is embedded inside vmm_ctx; recover the outer struct
+        vmm_ctx* internal =
+            (vmm_ctx*)((uint8_t*)vmm - offsetof(vmm_ctx, public));
         if (!vmm_validate(internal)) return NULL;
         return internal;
     }
@@ -254,7 +254,7 @@ static inline uint64_t vmm_convert_vm_flags(size_t vm_flags,
         pt_flags |= PAGE_USER;
     }
 
-    if (!(vm_flags & VM_FLAG_EXEC) && cpu_is_feature_enabled(CPU_FEAT_NX)) {
+    if (!(vm_flags & VM_FLAG_EXEC) && cpu_is_feature_enabled(CF_NX)) {
          pt_flags |= PAGE_NO_EXECUTE;
     }
 
@@ -277,9 +277,9 @@ uint64_t vmm_alloc_page_table(void) {
 }
 
 /*
- * vmm_get_or_create_table - Get or create a page table entry
+ * vmm_ensure_table - Get or create a page table entry
  */
-uint64_t* vmm_get_or_create_table(uint64_t* parent_table, size_t index,
+uint64_t* vmm_ensure_table(uint64_t* parent_table, size_t index,
                                   bool create, bool set_user) {
     uint64_t entry = parent_table[index];
 
@@ -319,14 +319,14 @@ vmm_status_t arch_map_page(uint64_t pt_root, uint64_t phys, void* virt,
     bool set_user = is_user_vmm && (pt_flags & PAGE_USER);
 
     uint64_t* pdpt =
-        vmm_get_or_create_table(pml4, PML4_INDEX(virt), true, set_user);
+        vmm_ensure_table(pml4, PML4_INDEX(virt), true, set_user);
     if (!pdpt) return VMM_ERR_NO_MEMORY;
 
     uint64_t* pd =
-        vmm_get_or_create_table(pdpt, PDPT_INDEX(virt), true, set_user);
+        vmm_ensure_table(pdpt, PDPT_INDEX(virt), true, set_user);
     if (!pd) return VMM_ERR_NO_MEMORY;
 
-    uint64_t* pt = vmm_get_or_create_table(pd, PD_INDEX(virt), true, set_user);
+    uint64_t* pt = vmm_ensure_table(pd, PD_INDEX(virt), true, set_user);
     if (!pt) return VMM_ERR_NO_MEMORY;
 
     size_t pt_index = PT_INDEX(virt);
@@ -348,10 +348,10 @@ static vmm_status_t arch_map_huge_page(uint64_t pt_root, uint64_t phys, void* vi
     uint64_t* pml4 = (uint64_t*)PHYSMAP_P2V(pt_root);
     bool set_user = is_user_vmm && (pt_flags & PAGE_USER);
 
-    uint64_t* pdpt = vmm_get_or_create_table(pml4, PML4_INDEX(virt), true, set_user);
+    uint64_t* pdpt = vmm_ensure_table(pml4, PML4_INDEX(virt), true, set_user);
     if (!pdpt) return VMM_ERR_NO_MEMORY;
 
-    uint64_t* pd = vmm_get_or_create_table(pdpt, PDPT_INDEX(virt), true, set_user);
+    uint64_t* pd = vmm_ensure_table(pdpt, PDPT_INDEX(virt), true, set_user);
     if (!pd) return VMM_ERR_NO_MEMORY;
 
     size_t pd_index = PD_INDEX(virt);
@@ -370,11 +370,11 @@ uint64_t arch_unmap_page(uint64_t pt_root, void* virt) {
     uint64_t* pml4 = (uint64_t*)PHYSMAP_P2V(pt_root);
 
     uint64_t* pdpt =
-        vmm_get_or_create_table(pml4, PML4_INDEX(virt), false, false);
+        vmm_ensure_table(pml4, PML4_INDEX(virt), false, false);
     if (!pdpt) return 0;
 
     uint64_t* pd =
-        vmm_get_or_create_table(pdpt, PDPT_INDEX(virt), false, false);
+        vmm_ensure_table(pdpt, PDPT_INDEX(virt), false, false);
     if (!pd) return 0;
 
     uint64_t pde = pd[PD_INDEX(virt)];
@@ -397,7 +397,7 @@ uint64_t arch_unmap_page(uint64_t pt_root, void* virt) {
         return phys;
     }
 
-    uint64_t* pt = vmm_get_or_create_table(pd, PD_INDEX(virt), false, false);
+    uint64_t* pt = vmm_ensure_table(pd, PD_INDEX(virt), false, false);
     if (!pt) return 0;
 
     size_t pt_index = PT_INDEX(virt);
@@ -441,14 +441,14 @@ vmm_status_t arch_update_page_flags(uint64_t pt_root, void* virt,
     uint64_t* pml4 = (uint64_t*)PHYSMAP_P2V(pt_root);
 
     uint64_t* pdpt =
-        vmm_get_or_create_table(pml4, PML4_INDEX(virt), false, false);
+        vmm_ensure_table(pml4, PML4_INDEX(virt), false, false);
     if (!pdpt) return VMM_ERR_NOT_FOUND;
 
     uint64_t* pd =
-        vmm_get_or_create_table(pdpt, PDPT_INDEX(virt), false, false);
+        vmm_ensure_table(pdpt, PDPT_INDEX(virt), false, false);
     if (!pd) return VMM_ERR_NOT_FOUND;
 
-    uint64_t* pt = vmm_get_or_create_table(pd, PD_INDEX(virt), false, false);
+    uint64_t* pt = vmm_ensure_table(pd, PD_INDEX(virt), false, false);
     if (!pt) return VMM_ERR_NOT_FOUND;
 
     size_t pt_index = PT_INDEX(virt);
@@ -473,14 +473,14 @@ bool vmm_get_mapped_phys(uint64_t pt_root, void* virt, uint64_t* out_phys) {
     uint64_t* pml4 = (uint64_t*)PHYSMAP_P2V(pt_root);
 
     uint64_t* pdpt =
-        vmm_get_or_create_table(pml4, PML4_INDEX(virt), false, false);
+        vmm_ensure_table(pml4, PML4_INDEX(virt), false, false);
     if (!pdpt) return false;
 
     uint64_t* pd =
-        vmm_get_or_create_table(pdpt, PDPT_INDEX(virt), false, false);
+        vmm_ensure_table(pdpt, PDPT_INDEX(virt), false, false);
     if (!pd) return false;
 
-    uint64_t* pt = vmm_get_or_create_table(pd, PD_INDEX(virt), false, false);
+    uint64_t* pt = vmm_ensure_table(pd, PD_INDEX(virt), false, false);
     if (!pt) return false;
 
     uint64_t entry = pt[PT_INDEX(virt)];
@@ -498,13 +498,13 @@ bool vmm_get_mapped_phys(uint64_t pt_root, void* virt, uint64_t* out_phys) {
 /*
  * vmm_alloc_vm_object - Allocate a vm_object structure with validation
  */
-vm_object_internal* vmm_alloc_vm_object(void) {
+vmo_ext* vmm_alloc_vm_object(void) {
     void* obj;
     if (slab_alloc(vmo_cache, &obj) != SLAB_OK)
         return NULL;
 
-    vm_object_internal* internal = (vm_object_internal*)obj;
-    kmemset(internal, 0, sizeof(vm_object_internal));
+    vmo_ext* internal = (vmo_ext*)obj;
+    kmemset(internal, 0, sizeof(vmo_ext));
 
     internal->magic = VM_OBJECT_MAGIC;
     internal->red_zone_pre = VM_OBJECT_RED_ZONE;
@@ -518,7 +518,7 @@ vm_object_internal* vmm_alloc_vm_object(void) {
 /*
  * vmm_free_vm_object - Free a vm_object structure
  */
-void vmm_free_vm_object(vm_object_internal* obj) {
+void vmm_free_vm_object(vmo_ext* obj) {
     if (!obj) return;
 
     if (!vm_object_validate(obj)) {
@@ -584,7 +584,7 @@ static vmm_status_t vmm_copy_kernel_mappings(uint64_t dest_pt_root) {
  */
 vmm_status_t vmm_alloc(vmm_t* vmm_pub, size_t length, size_t flags, void* arg,
                        void** out_addr) {
-    vmm_internal* vmm = vmm_get_instance(vmm_pub);
+    vmm_ctx* vmm = vmm_get_instance(vmm_pub);
     if (!vmm) return VMM_ERR_NOT_INIT;
     if (length == 0) return VMM_ERR_INVALID;
     if (!out_addr) return VMM_ERR_INVALID;
@@ -620,7 +620,7 @@ vmm_status_t vmm_alloc(vmm_t* vmm_pub, size_t length, size_t flags, void* arg,
         return VMM_ERR_OOM;
     }
 
-    vm_object_internal* obj = vmm_alloc_vm_object();
+    vmo_ext* obj = vmm_alloc_vm_object();
     if (!obj) {
         spinlock_release(&vmm->lock, lock_flags);
         return VMM_ERR_NO_MEMORY;
@@ -701,7 +701,7 @@ vmm_status_t vmm_alloc(vmm_t* vmm_pub, size_t length, size_t flags, void* arg,
  */
 vmm_status_t vmm_alloc_at(vmm_t* vmm_pub, void* desired_addr, size_t length,
                           size_t flags, void* arg, void** out_addr) {
-    vmm_internal* vmm = vmm_get_instance(vmm_pub);
+    vmm_ctx* vmm = vmm_get_instance(vmm_pub);
     if (!vmm) return VMM_ERR_NOT_INIT;
     if (length == 0) return VMM_ERR_INVALID;
     if (!out_addr) return VMM_ERR_INVALID;
@@ -751,7 +751,7 @@ vmm_status_t vmm_alloc_at(vmm_t* vmm_pub, void* desired_addr, size_t length,
         return VMM_ERR_ALREADY_MAPPED;
     }
 
-    vm_object_internal* obj = vmm_alloc_vm_object();
+    vmo_ext* obj = vmm_alloc_vm_object();
     if (!obj) {
         spinlock_release(&vmm->lock, lock_flags);
         return VMM_ERR_NO_MEMORY;
@@ -823,13 +823,13 @@ vmm_status_t vmm_alloc_at(vmm_t* vmm_pub, void* desired_addr, size_t length,
  * vmm_free - Free a previously allocated virtual memory range
  */
 vmm_status_t vmm_free(vmm_t* vmm_pub, void* addr) {
-    vmm_internal* vmm = vmm_get_instance(vmm_pub);
+    vmm_ctx* vmm = vmm_get_instance(vmm_pub);
     if (!vmm) return VMM_ERR_NOT_INIT;
     if (!addr) return VMM_ERR_INVALID;
 
     bool lock_flags = spinlock_acquire(&vmm->lock);
 
-    vm_object_internal* cur = vma_find_exact(vmm, (uintptr_t)addr);
+    vmo_ext* cur = vma_find_exact(vmm, (uintptr_t)addr);
     if (!cur) {
         spinlock_release(&vmm->lock, lock_flags);
         return VMM_ERR_NOT_FOUND;
@@ -883,8 +883,8 @@ vmm_t* vmm_create(uintptr_t alloc_base, uintptr_t alloc_end) {
         return NULL;
     }
 
-    vmm_internal* vmm = (vmm_internal *)vmm_mem;
-    kmemset(vmm, 0, sizeof(vmm_internal));
+    vmm_ctx* vmm = (vmm_ctx *)vmm_mem;
+    kmemset(vmm, 0, sizeof(vmm_ctx));
 
     vmm->magic = VMM_MAGIC;
     vmm->is_kernel = false;
@@ -921,7 +921,7 @@ vmm_t* vmm_create(uintptr_t alloc_base, uintptr_t alloc_end) {
  * vmm_destroy - Destroy a VMM instance and free all resources
  */
 void vmm_destroy(vmm_t* vmm_pub) {
-    vmm_internal* vmm = vmm_get_instance(vmm_pub);
+    vmm_ctx* vmm = vmm_get_instance(vmm_pub);
     if (!vmm) return;
 
     if (vmm == kernel_vmm) {
@@ -934,7 +934,7 @@ void vmm_destroy(vmm_t* vmm_pub) {
 
     avl_node_t* n = avl_min(&vmm->vma_tree);
     while (n) {
-        vm_object_internal* cur = AVL_ENTRY(n, vm_object_internal, vma_node);
+        vmo_ext* cur = AVL_ENTRY(n, vmo_ext, vma_node);
         if (!vm_object_validate(cur)) {
             LOGF("[VMM ERROR] Corrupted vm_object during destroy\n");
             break;
@@ -975,7 +975,7 @@ void vmm_destroy(vmm_t* vmm_pub) {
  * vmm_switch - Switch to a different address space
  */
 void vmm_switch(vmm_t* vmm_pub) {
-    vmm_internal* vmm = vmm_get_instance(vmm_pub);
+    vmm_ctx* vmm = vmm_get_instance(vmm_pub);
     if (!vmm) return;
 
     PML4_switch(vmm->public.pt_root);
@@ -1013,18 +1013,18 @@ vmm_status_t vmm_kernel_init(uintptr_t alloc_base, uintptr_t alloc_end) {
         return VMM_ERR_NOT_INIT;
     }
 
-    if(cpu_has_feature(CPU_FEAT_NX)){
-        cpu_enable_feature(CPU_FEAT_NX);
+    if(cpu_has_feature(CF_NX)){
+        cpu_enable_feature(CF_NX);
     }
 
     // Kernel VMM is allocated from PMM directly for a stable physical address
     uint64_t vmm_phys = 0;
-    if (pmm_alloc(sizeof(vmm_internal), &vmm_phys) != PMM_OK) {
+    if (pmm_alloc(sizeof(vmm_ctx), &vmm_phys) != PMM_OK) {
         return VMM_ERR_NO_MEMORY;
     }
 
-    vmm_internal* vmm = (vmm_internal*)PHYSMAP_P2V(vmm_phys);
-    kmemset(vmm, 0, sizeof(vmm_internal));
+    vmm_ctx* vmm = (vmm_ctx*)PHYSMAP_P2V(vmm_phys);
+    kmemset(vmm, 0, sizeof(vmm_ctx));
 
     vmm->magic = VMM_MAGIC;
     vmm->is_kernel = true;
@@ -1039,8 +1039,8 @@ vmm_status_t vmm_kernel_init(uintptr_t alloc_base, uintptr_t alloc_end) {
     kernel_vmm = vmm;
     current_vmm = &kernel_vmm->public;
 
-    vmm_cache = slab_cache_create("vmm_internal", sizeof(vmm_internal), _Alignof(vmm_internal));
-    vmo_cache = slab_cache_create("vm_object_internal", sizeof(vm_object_internal), _Alignof(vm_object_internal));
+    vmm_cache = slab_cache_create("vmm_ctx", sizeof(vmm_ctx), _Alignof(vmm_ctx));
+    vmo_cache = slab_cache_create("vmo_ext", sizeof(vmo_ext), _Alignof(vmo_ext));
 
     if (!vmm_cache || !vmo_cache) {
         LOGF("[VMM] Failed to create slab caches\n");
@@ -1068,7 +1068,7 @@ vmm_t* vmm_kernel_get(void) {
  * vmm_get_alloc_base - Get the base of the allocatable range
  */
 uintptr_t vmm_get_alloc_base(vmm_t* vmm_pub) {
-    vmm_internal* vmm = vmm_get_instance(vmm_pub);
+    vmm_ctx* vmm = vmm_get_instance(vmm_pub);
     if (!vmm) return 0;
     return vmm->public.alloc_base;
 }
@@ -1077,7 +1077,7 @@ uintptr_t vmm_get_alloc_base(vmm_t* vmm_pub) {
  * vmm_get_alloc_end - Get the end of the allocatable range
  */
 uintptr_t vmm_get_alloc_end(vmm_t* vmm_pub) {
-    vmm_internal* vmm = vmm_get_instance(vmm_pub);
+    vmm_ctx* vmm = vmm_get_instance(vmm_pub);
     if (!vmm) return 0;
     return vmm->public.alloc_end;
 }
@@ -1086,7 +1086,7 @@ uintptr_t vmm_get_alloc_end(vmm_t* vmm_pub) {
  * vmm_get_alloc_size - Get the size of the allocatable range
  */
 size_t vmm_get_alloc_size(vmm_t* vmm_pub) {
-    vmm_internal* vmm = vmm_get_instance(vmm_pub);
+    vmm_ctx* vmm = vmm_get_instance(vmm_pub);
     if (!vmm) return 0;
     return vmm->public.alloc_end - vmm->public.alloc_base;
 }
@@ -1109,7 +1109,7 @@ bool vmm_table_is_empty(uint64_t* table) {
  * vmm_get_physical - Get the physical address mapped to a virtual address
  */
 bool vmm_get_physical(vmm_t* vmm_pub, void* virt, uint64_t* out_phys) {
-    vmm_internal* vmm = vmm_get_instance(vmm_pub);
+    vmm_ctx* vmm = vmm_get_instance(vmm_pub);
     if (!vmm) return false;
 
     bool lock_flags = spinlock_acquire(&vmm->lock);
@@ -1122,12 +1122,12 @@ bool vmm_get_physical(vmm_t* vmm_pub, void* virt, uint64_t* out_phys) {
  * vmm_find_mapped_object - Find vm_object containing a virtual address
  */
 vm_object* vmm_find_mapped_object(vmm_t* vmm_pub, void* addr) {
-    vmm_internal* vmm = vmm_get_instance(vmm_pub);
+    vmm_ctx* vmm = vmm_get_instance(vmm_pub);
     if (!vmm || !addr) return NULL;
 
     bool lock_flags = spinlock_acquire(&vmm->lock);
 
-    vm_object_internal* cur = vma_find_containing(vmm, (uintptr_t)addr);
+    vmo_ext* cur = vma_find_containing(vmm, (uintptr_t)addr);
     if (cur && !vm_object_validate(cur)) {
         LOGF("[VMM ERROR] Corrupted vm_object in list\n");
         spinlock_release(&vmm->lock, lock_flags);
@@ -1154,13 +1154,13 @@ bool vmm_check_flags(vmm_t* vmm_pub, void* addr, size_t required_flags) {
 static uint64_t vmm_walk_pte(uint64_t pt_root, void* virt) {
     uint64_t* pml4 = (uint64_t*)PHYSMAP_P2V(pt_root);
 
-    uint64_t* pdpt = vmm_get_or_create_table(pml4, PML4_INDEX(virt), false, false);
+    uint64_t* pdpt = vmm_ensure_table(pml4, PML4_INDEX(virt), false, false);
     if (!pdpt) return 0;
 
-    uint64_t* pd = vmm_get_or_create_table(pdpt, PDPT_INDEX(virt), false, false);
+    uint64_t* pd = vmm_ensure_table(pdpt, PDPT_INDEX(virt), false, false);
     if (!pd) return 0;
 
-    uint64_t* pt = vmm_get_or_create_table(pd, PD_INDEX(virt), false, false);
+    uint64_t* pt = vmm_ensure_table(pd, PD_INDEX(virt), false, false);
     if (!pt) return 0;
 
     return pt[PT_INDEX(virt)];
@@ -1171,7 +1171,7 @@ static uint64_t vmm_walk_pte(uint64_t pt_root, void* virt) {
  * the hardware page tables with the requested VM_FLAG_* permissions.
  */
 bool vmm_check_buffer(vmm_t* vmm_pub, const void* ptr, size_t size, size_t required_flags) {
-    vmm_internal* vmm = vmm_get_instance(vmm_pub);
+    vmm_ctx* vmm = vmm_get_instance(vmm_pub);
     if (!vmm || !ptr || size == 0) return false;
 
     uintptr_t start = (uintptr_t)ptr;
@@ -1181,7 +1181,7 @@ bool vmm_check_buffer(vmm_t* vmm_pub, const void* ptr, size_t size, size_t requi
     bool lock_flags = spinlock_acquire(&vmm->lock);
 
     uintptr_t current = start & ~(uintptr_t)(PAGE_SIZE - 1);
-    vm_object_internal* last_obj = NULL;
+    vmo_ext* last_obj = NULL;
 
     while (current < end) {
         if (!last_obj || current < last_obj->public.base ||
@@ -1234,7 +1234,7 @@ bool vmm_check_buffer(vmm_t* vmm_pub, const void* ptr, size_t size, size_t requi
  */
 vmm_status_t vmm_map_page(vmm_t* vmm_pub, uint64_t phys, void* virt,
                           size_t flags) {
-    vmm_internal* vmm = vmm_get_instance(vmm_pub);
+    vmm_ctx* vmm = vmm_get_instance(vmm_pub);
     if (!vmm) return VMM_ERR_NOT_INIT;
 
     if ((phys & (PAGE_SIZE - 1)) || ((uintptr_t)virt & (PAGE_SIZE - 1))) {
@@ -1256,7 +1256,7 @@ vmm_status_t vmm_map_page(vmm_t* vmm_pub, uint64_t phys, void* virt,
  * vmm_unmap_page - Unmaps a virtual page and handles cleanup
  */
 vmm_status_t vmm_unmap_page(vmm_t* vmm_pub, void* virt) {
-    vmm_internal* vmm = vmm_get_instance(vmm_pub);
+    vmm_ctx* vmm = vmm_get_instance(vmm_pub);
     if (!vmm) return VMM_ERR_NOT_INIT;
 
     bool lock_flags = spinlock_acquire(&vmm->lock);
@@ -1270,7 +1270,7 @@ vmm_status_t vmm_unmap_page(vmm_t* vmm_pub, void* virt) {
  */
 vmm_status_t vmm_map_range(vmm_t* vmm_pub, uint64_t phys, void* virt,
                            size_t length, size_t flags) {
-    vmm_internal* vmm = vmm_get_instance(vmm_pub);
+    vmm_ctx* vmm = vmm_get_instance(vmm_pub);
     if (!vmm) return VMM_ERR_NOT_INIT;
 
     length = align_up(length, PAGE_SIZE);
@@ -1304,7 +1304,7 @@ vmm_status_t vmm_map_range(vmm_t* vmm_pub, uint64_t phys, void* virt,
  * vmm_unmap_range - Unmaps a virtual range, starting at a specific virtual address
  */
 vmm_status_t vmm_unmap_range(vmm_t* vmm_pub, void* virt, size_t length) {
-    vmm_internal* vmm = vmm_get_instance(vmm_pub);
+    vmm_ctx* vmm = vmm_get_instance(vmm_pub);
     if (!vmm) return VMM_ERR_NOT_INIT;
 
     length = align_up(length, PAGE_SIZE);
@@ -1323,7 +1323,7 @@ vmm_status_t vmm_unmap_range(vmm_t* vmm_pub, void* virt, size_t length) {
  * vmm_resize - Resize an existing virtual memory region
  */
 vmm_status_t vmm_resize(vmm_t* vmm_pub, void* addr, size_t new_length) {
-    vmm_internal* vmm = vmm_get_instance(vmm_pub);
+    vmm_ctx* vmm = vmm_get_instance(vmm_pub);
     if (!vmm) return VMM_ERR_NOT_INIT;
     if (!addr) return VMM_ERR_INVALID;
     if (new_length == 0) return VMM_ERR_INVALID;
@@ -1332,7 +1332,7 @@ vmm_status_t vmm_resize(vmm_t* vmm_pub, void* addr, size_t new_length) {
 
     new_length = align_up(new_length, PAGE_SIZE);
 
-    vm_object_internal* cur = vma_find_exact(vmm, (uintptr_t)addr);
+    vmo_ext* cur = vma_find_exact(vmm, (uintptr_t)addr);
     if (!cur || !vm_object_validate(cur)) {
         LOGF("[VMM ERROR] vmm_resize: No object found at address 0x%lx\n",
              (uintptr_t)addr);
@@ -1358,7 +1358,7 @@ vmm_status_t vmm_resize(vmm_t* vmm_pub, void* addr, size_t new_length) {
         uintptr_t new_end = cur->public.base + new_length;
 
         avl_node_t* nx = avl_next(&cur->vma_node);
-        vm_object_internal* next_obj = nx ? AVL_ENTRY(nx, vm_object_internal, vma_node) : NULL;
+        vmo_ext* next_obj = nx ? AVL_ENTRY(nx, vmo_ext, vma_node) : NULL;
         if (next_obj) {
             if (new_end > next_obj->public.base) {
                 LOGF(
@@ -1451,13 +1451,13 @@ vmm_status_t vmm_resize(vmm_t* vmm_pub, void* addr, size_t new_length) {
  * which is significantly more efficient.
  */
 vmm_status_t vmm_protect(vmm_t* vmm_pub, void* addr, size_t new_flags) {
-    vmm_internal* vmm = vmm_get_instance(vmm_pub);
+    vmm_ctx* vmm = vmm_get_instance(vmm_pub);
     if (!vmm) return VMM_ERR_NOT_INIT;
     if (!addr) return VMM_ERR_INVALID;
 
     bool lock_flags = spinlock_acquire(&vmm->lock);
 
-    vm_object_internal* cur = vma_find_containing(vmm, (uintptr_t)addr);
+    vmo_ext* cur = vma_find_containing(vmm, (uintptr_t)addr);
     vm_object* obj = cur ? &cur->public : NULL;
 
     if (!obj) {
@@ -1497,7 +1497,7 @@ vmm_status_t vmm_protect(vmm_t* vmm_pub, void* addr, size_t new_flags) {
  * vmm_dump - Dumps the current VMM layout
  */
 void vmm_dump(vmm_t* vmm_pub) {
-    vmm_internal* vmm = vmm_get_instance(vmm_pub);
+    vmm_ctx* vmm = vmm_get_instance(vmm_pub);
     if (!vmm) return;
 
     bool lock_flags = spinlock_acquire(&vmm->lock);
@@ -1514,7 +1514,7 @@ void vmm_dump(vmm_t* vmm_pub) {
     int count = 0;
 
     while (it) {
-        vm_object_internal* current = AVL_ENTRY(it, vm_object_internal, vma_node);
+        vmo_ext* current = AVL_ENTRY(it, vmo_ext, vma_node);
         if (!vm_object_validate(current)) {
             LOGF("[CORRUPTED OBJECT AT INDEX %d]\n", count);
             break;
@@ -1536,7 +1536,7 @@ void vmm_dump(vmm_t* vmm_pub) {
  * vmm_stats - Get the number of pages handled by the VMM and the number of mapped pages
  */
 void vmm_stats(vmm_t* vmm_pub, size_t* out_total, size_t* out_resident) {
-    vmm_internal* vmm = vmm_get_instance(vmm_pub);
+    vmm_ctx* vmm = vmm_get_instance(vmm_pub);
     if (!vmm) return;
 
     bool lock_flags = spinlock_acquire(&vmm->lock);
@@ -1546,7 +1546,7 @@ void vmm_stats(vmm_t* vmm_pub, size_t* out_total, size_t* out_resident) {
 
     avl_node_t* it = avl_min(&vmm->vma_tree);
     while (it) {
-        vm_object_internal* current = AVL_ENTRY(it, vm_object_internal, vma_node);
+        vmo_ext* current = AVL_ENTRY(it, vmo_ext, vma_node);
         if (!vm_object_validate(current)) {
             LOGF("[VMM ERROR] Corrupted vm_object during stats\n");
             break;
@@ -1617,7 +1617,7 @@ void vmm_dump_pte_chain(uint64_t pt_root, void* virt) {
  * vmm_verify_integrity - Verify integrity of VMM and all vm_objects
  */
 bool vmm_verify_integrity(vmm_t* vmm_pub) {
-    vmm_internal* vmm = vmm_get_instance(vmm_pub);
+    vmm_ctx* vmm = vmm_get_instance(vmm_pub);
     if (!vmm) {
         LOGF("[VMM VERIFY] Failed to get VMM instance\n");
         return false;
@@ -1646,11 +1646,11 @@ bool vmm_verify_integrity(vmm_t* vmm_pub) {
     }
 
     avl_node_t* it = avl_min(&vmm->vma_tree);
-    vm_object_internal* prev = NULL;
+    vmo_ext* prev = NULL;
     int count = 0;
 
     while (it) {
-        vm_object_internal* current = AVL_ENTRY(it, vm_object_internal, vma_node);
+        vmo_ext* current = AVL_ENTRY(it, vmo_ext, vma_node);
 
         if (!vm_object_validate(current)) {
             LOGF("[VMM VERIFY] Object %d failed validation\n", count);

@@ -34,20 +34,20 @@ typedef struct {
 } console_char_t;
 
 typedef struct {
-    size_t cursor_x;
-    size_t cursor_y;
-    uint8_t fg_color;
-    uint8_t bg_color;
+    size_t cx;
+    size_t cy;
+    uint8_t fg;
+    uint8_t bg;
 
     // Cursor State (Static Block)
-    bool cursor_enabled;
+    bool on;
 
     // UTF-8 State
-    uint32_t utf8_codepoint;
-    int utf8_bytes_needed;
+    uint32_t u8cp;
+    int u8n;
 
     // ANSI State
-    uint8_t ansi_state;
+    uint8_t ansi_st;
 
     // Backbuffer
     console_char_t* buffer;
@@ -58,7 +58,7 @@ typedef struct {
     size_t header_rows;
 
     spinlock_t lock;
-    int reentrancy_count;
+    int reent;
 } console_t;
 
 // Global Hardware Management

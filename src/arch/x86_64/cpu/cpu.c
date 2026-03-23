@@ -3,7 +3,7 @@
  *
  * Gathers detailed CPU information (vendor, brand, features, core count)
  * using the CPUID instruction and related MSRs. Results are cached in
- * a global CPUInfo structure accessible to the rest of GatOS.
+ * a global cpu_info_t structure accessible to the rest of GatOS.
  *
  * Author: u/ApparentlyPlus
  */
@@ -13,7 +13,7 @@
 #include <kernel/debug.h>
 #include <klibc/string.h>
 
-static CPUInfo cpuinfo;
+static cpu_info_t cpuinfo;
 cpu_local_t cpu_local = {0};
 
 /*
@@ -123,20 +123,20 @@ void cpu_init(void)
     cpuinfo.model    = ((a >> 4) & 0xF) | ((a >> 12) & 0xF0);
     cpuinfo.stepping = (a & 0xF);
 
-    if (d & (1 << 6))  cpuinfo.features |= CPU_FEAT_PAE;
-    if (d & (1 << 25)) cpuinfo.features |= CPU_FEAT_SSE;
-    if (d & (1 << 26)) cpuinfo.features |= CPU_FEAT_SSE2;
-    if (c & (1 << 0))  cpuinfo.features |= CPU_FEAT_SSE3;
-    if (c & (1 << 9))  cpuinfo.features |= CPU_FEAT_SSSE3;
-    if (c & (1 << 19)) cpuinfo.features |= CPU_FEAT_SSE4_1;
-    if (c & (1 << 20)) cpuinfo.features |= CPU_FEAT_SSE4_2;
-    if (c & (1 << 28)) cpuinfo.features |= CPU_FEAT_AVX;
-    if (c & (1 << 5))  cpuinfo.features |= CPU_FEAT_VMX;
+    if (d & (1 << 6))  cpuinfo.features |= CF_PAE;
+    if (d & (1 << 25)) cpuinfo.features |= CF_SSE;
+    if (d & (1 << 26)) cpuinfo.features |= CF_SSE2;
+    if (c & (1 << 0))  cpuinfo.features |= CF_SSE3;
+    if (c & (1 << 9))  cpuinfo.features |= CF_SSSE3;
+    if (c & (1 << 19)) cpuinfo.features |= CF_SSE4_1;
+    if (c & (1 << 20)) cpuinfo.features |= CF_SSE4_2;
+    if (c & (1 << 28)) cpuinfo.features |= CF_AVX;
+    if (c & (1 << 5))  cpuinfo.features |= CF_VMX;
 
     if (max_basic >= 7) {
         cpuid(7, 0, &a, &b, &c, &d);
-        if (b & (1 << 7))  cpuinfo.features |= CPU_FEAT_SMEP;
-        if (b & (1 << 20)) cpuinfo.features |= CPU_FEAT_SMAP;
+        if (b & (1 << 7))  cpuinfo.features |= CF_SMEP;
+        if (b & (1 << 20)) cpuinfo.features |= CF_SMAP;
     }
 
     cpuid(0x80000000, 0, &a, &b, &c, &d);
@@ -144,9 +144,9 @@ void cpu_init(void)
 
     if (max_ext >= 0x80000001) {
         cpuid(0x80000001, 0, &a, &b, &c, &d);
-        if (d & (1 << 20)) cpuinfo.features |= CPU_FEAT_NX;
-        if (d & (1 << 29)) cpuinfo.features |= CPU_FEAT_64BIT;
-        if (c & (1 << 2))  cpuinfo.features |= CPU_FEAT_SVM;
+        if (d & (1 << 20)) cpuinfo.features |= CF_NX;
+        if (d & (1 << 29)) cpuinfo.features |= CF_64BIT;
+        if (c & (1 << 2))  cpuinfo.features |= CF_SVM;
     }
 
     if (max_ext >= 0x80000004) {
@@ -167,20 +167,20 @@ void cpu_init(void)
         cpuinfo.core_count = ((b >> 26) & 0x3F) + 1;
     }
 
-    if (cpu_has_feature(CPU_FEAT_SSE)) {
-        cpu_enable_feature(CPU_FEAT_SSE);
+    if (cpu_has_feature(CF_SSE)) {
+        cpu_enable_feature(CF_SSE);
     }
 
-    if (cpu_has_feature(CPU_FEAT_AVX)) {
-        cpu_enable_feature(CPU_FEAT_AVX);
+    if (cpu_has_feature(CF_AVX)) {
+        cpu_enable_feature(CF_AVX);
     }
 
-    if (cpu_has_feature(CPU_FEAT_SMEP)) {
-        cpu_enable_feature(CPU_FEAT_SMEP);
+    if (cpu_has_feature(CF_SMEP)) {
+        cpu_enable_feature(CF_SMEP);
     }
 
-    if (cpu_has_feature(CPU_FEAT_SMAP)) {
-        cpu_enable_feature(CPU_FEAT_SMAP);
+    if (cpu_has_feature(CF_SMAP)) {
+        cpu_enable_feature(CF_SMAP);
     }
 
     // Set active GS_BASE to our cpu_local structure for Ring 0.
@@ -196,9 +196,9 @@ void cpu_init(void)
 }
 
 /*
- * cpu_get_info - Get a pointer to the cached CPUInfo structure
+ * cpu_get_info - Get a pointer to the cached cpu_info_t structure
  */
-const CPUInfo* cpu_get_info(void)
+const cpu_info_t* cpu_get_info(void)
 {
     return &cpuinfo;
 }
@@ -222,18 +222,18 @@ bool cpu_enable_feature(cpu_feature_t feature)
     uint64_t cr0, cr4, xcr0, efer;
 
     switch (feature) {
-        case CPU_FEAT_PAE:
+        case CF_PAE:
             cr4 = read_cr4();
             cr4 |= (1 << 5); // CR4.PAE
             write_cr4(cr4);
             return true;
 
-        case CPU_FEAT_SSE:
-        case CPU_FEAT_SSE2:
-        case CPU_FEAT_SSE3:
-        case CPU_FEAT_SSSE3:
-        case CPU_FEAT_SSE4_1:
-        case CPU_FEAT_SSE4_2:
+        case CF_SSE:
+        case CF_SSE2:
+        case CF_SSE3:
+        case CF_SSSE3:
+        case CF_SSE4_1:
+        case CF_SSE4_2:
             cr0 = read_cr0();
             cr4 = read_cr4();
             cr0 &= ~(1 << 2); // Clear EM (Emulation)
@@ -244,8 +244,8 @@ bool cpu_enable_feature(cpu_feature_t feature)
             write_cr4(cr4);
             return true;
 
-        case CPU_FEAT_AVX:
-        case CPU_FEAT_AVX2:
+        case CF_AVX:
+        case CF_AVX2:
             cr4 = read_cr4();
             cr4 |= (1 << 18); // CR4.OSXSAVE
             write_cr4(cr4);
@@ -255,31 +255,31 @@ bool cpu_enable_feature(cpu_feature_t feature)
             write_xcr0(xcr0);
             return true;
 
-        case CPU_FEAT_NX:
+        case CF_NX:
             efer = read_msr(MSR_EFER);
             efer |= EFER_NXE;
             write_msr(MSR_EFER, efer);
             return true;
 
-        case CPU_FEAT_VMX:
+        case CF_VMX:
             cr4 = read_cr4();
             cr4 |= (1 << 13); // CR4.VMXE
             write_cr4(cr4);
             return true;
 
-        case CPU_FEAT_SVM:
+        case CF_SVM:
             efer = read_msr(0xC0000080);
             efer |= (1 << 12); // EFER.SVME
             write_msr(0xC0000080, efer);
             return true;
 
-        case CPU_FEAT_SMEP:
+        case CF_SMEP:
             cr4 = read_cr4();
             cr4 |= (1 << 20); // CR4.SMEP
             write_cr4(cr4);
             return true;
 
-        case CPU_FEAT_SMAP:
+        case CF_SMAP:
             cr4 = read_cr4();
             cr4 |= (1 << 21); // CR4.SMAP
             write_cr4(cr4);
@@ -298,44 +298,44 @@ bool cpu_is_feature_enabled(cpu_feature_t feature)
     uint64_t cr0, cr4, xcr0, efer;
 
     switch (feature) {
-        case CPU_FEAT_PAE:
+        case CF_PAE:
             cr4 = read_cr4();
             return (cr4 & (1 << 5)) != 0;
 
-        case CPU_FEAT_SSE:
-        case CPU_FEAT_SSE2:
-        case CPU_FEAT_SSE3:
-        case CPU_FEAT_SSSE3:
-        case CPU_FEAT_SSE4_1:
-        case CPU_FEAT_SSE4_2:
+        case CF_SSE:
+        case CF_SSE2:
+        case CF_SSE3:
+        case CF_SSSE3:
+        case CF_SSE4_1:
+        case CF_SSE4_2:
             cr0 = read_cr0();
             cr4 = read_cr4();
             return ((cr4 & (1 << 9)) && (cr4 & (1 << 10)) && !(cr0 & (1 << 2)));
 
-        case CPU_FEAT_AVX:
-        case CPU_FEAT_AVX2:
+        case CF_AVX:
+        case CF_AVX2:
             cr4  = read_cr4();
             xcr0 = read_xcr0();
             return ((cr4 & (1 << 18)) &&
                     (xcr0 & (1 << 0)) && (xcr0 & (1 << 1)) && (xcr0 & (1 << 2)));
 
-        case CPU_FEAT_NX:
+        case CF_NX:
             efer = read_msr(MSR_EFER);
             return (efer & EFER_NXE) != 0;
 
-        case CPU_FEAT_VMX:
+        case CF_VMX:
             cr4 = read_cr4();
             return (cr4 & (1 << 13)) != 0;
 
-        case CPU_FEAT_SVM:
+        case CF_SVM:
             efer = read_msr(0xC0000080);
             return (efer & (1 << 12)) != 0;
 
-        case CPU_FEAT_SMEP:
+        case CF_SMEP:
             cr4 = read_cr4();
             return (cr4 & (1 << 20)) != 0;
 
-        case CPU_FEAT_SMAP:
+        case CF_SMAP:
             cr4 = read_cr4();
             return (cr4 & (1 << 21)) != 0;
 

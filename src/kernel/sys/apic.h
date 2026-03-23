@@ -154,7 +154,7 @@ void ioapic_mask(uint8_t irq);
 void ioapic_unmask(uint8_t irq);
 
 // Timer
-void lapic_timer_set_calibration(uint64_t ticks_per_ms);
+void lapic_set_tpm(uint64_t ticks_per_ms);
 void lapic_timer_oneshot(uint32_t us, uint8_t vector);
 void lapic_timer_periodic(uint32_t us, uint8_t vector);
 void lapic_timer_stop(void);

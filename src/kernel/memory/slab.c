@@ -83,7 +83,7 @@ struct slab_cache {
 
     spinlock_t lock;
 
-    slab_cache_stats_t stats;
+    cache_stats_t stats;
     slab_cache_t* next;
 };
 
@@ -496,7 +496,7 @@ slab_cache_t* slab_cache_create(const char* name, size_t obj_size,
 
     spinlock_init(&cache->lock, "slab_cache");
 
-    kmemset(&cache->stats, 0, sizeof(slab_cache_stats_t));
+    kmemset(&cache->stats, 0, sizeof(cache_stats_t));
 
     cache->next = caches;
     caches = cache;
@@ -750,7 +750,7 @@ slab_status_t slab_free(slab_cache_t* cache, void* obj) {
 /*
  * slab_cache_stats - copy cache stats out
  */
-void slab_cache_stats(slab_cache_t* cache, slab_cache_stats_t* out_stats) {
+void slab_cache_stats(slab_cache_t* cache, cache_stats_t* out_stats) {
     if (!cache_validate(cache) || !out_stats) return;
     bool flags = spinlock_acquire(&cache->lock);
     *out_stats = cache->stats;

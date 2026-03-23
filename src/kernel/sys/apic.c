@@ -156,9 +156,9 @@ void lapic_send_ipi(uint32_t dest_id, uint8_t vector) {
 }
 
 /*
- * lapic_timer_set_calibration - Sets the calibrated tick rate
+ * lapic_set_tpm - Sets the calibrated tick rate
  */
-void lapic_timer_set_calibration(uint64_t tpm) {
+void lapic_set_tpm(uint64_t tpm) {
     ticks_per_ms = tpm;
 }
 

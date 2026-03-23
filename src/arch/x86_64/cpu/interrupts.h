@@ -22,7 +22,7 @@ typedef struct
     uint16_t address_mid;
     uint32_t address_high;
     uint32_t reserved;
-} __attribute__((packed)) interrupt_descriptor;
+} __attribute__((packed)) idt_entry_t;
 
 typedef struct
 {
@@ -97,7 +97,7 @@ typedef struct
 #define INT_LAST_INTERRUPT       255
 
 
-extern interrupt_descriptor idt[IDT_SIZE];
+extern idt_entry_t idt[IDT_SIZE];
 
 extern uint32_t gdt64_code_segment;
 
@@ -110,23 +110,23 @@ void irq_register(uint8_t vector, irq_handler_t handler);
 void irq_unregister(uint8_t vector);
 
 /*
- * enable_interrupts - Set the IF flag in RFLAGS to enable CPU interrupts
+ * intr_on - Set the IF flag in RFLAGS to enable CPU interrupts
  */
-static inline void enable_interrupts(void) {
+static inline void intr_on(void) {
     __asm__ volatile("sti" ::: "memory");
 }
 
 /*
- * disable_interrupts - Clear the IF flag in RFLAGS to disable CPU interrupts
+ * intr_off - Clear the IF flag in RFLAGS to disable CPU interrupts
  */
-static inline void disable_interrupts(void) {
+static inline void intr_off(void) {
     __asm__ volatile("cli" ::: "memory");
 }
 
 /* 
- * interrupts_save - Save interrupt flag and unconditionally disable, then return previous state. 
+ * intr_save - Save interrupt flag and unconditionally disable, then return previous state. 
  */
-static inline bool interrupts_save(void) {
+static inline bool intr_save(void) {
     uint64_t rflags;
     __asm__ volatile("pushfq; popq %0" : "=r"(rflags) :: "memory");
     bool enabled = (rflags >> 9) & 1;
@@ -135,8 +135,8 @@ static inline bool interrupts_save(void) {
 }
 
 /*
- * interrupts_restore - Restore interrupt state saved by interrupts_save()
+ * intr_restore - Restore interrupt state saved by intr_save()
  */
-static inline void interrupts_restore(bool enabled) {
+static inline void intr_restore(bool enabled) {
     if (enabled) __asm__ volatile("sti" ::: "memory");
 }

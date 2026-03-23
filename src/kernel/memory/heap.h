@@ -46,7 +46,7 @@ typedef enum {
 // Forward declarations
 
 typedef struct heap heap_t;
-typedef struct heap_block_header heap_block_header_t;
+typedef struct blk_hdr blk_hdr_t;
 
 // Kernel heap interface (auto-initialized on first use)
 
@@ -59,15 +59,15 @@ void* kcalloc(size_t nmemb, size_t size);
 
 // Heap introspection and debugging
 
-heap_status_t heap_check_integrity(heap_t* heap);
+heap_status_t heap_check(heap_t* heap);
 void heap_dump(heap_t* heap);
 void heap_stats(heap_t* heap, size_t* total, size_t* used, size_t* free, size_t* overhead);
-size_t heap_get_alloc_size(heap_t* heap, void* ptr);
+size_t heap_alloc_sz(heap_t* heap, void* ptr);
 
 // Utility functions
 
 size_t heap_align_size(size_t size);
-bool heap_validate_block(heap_block_header_t* header);
+bool heap_validate_blk(blk_hdr_t* header);
 
 /*
 

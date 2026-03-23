@@ -80,9 +80,9 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
                 break;
             }
 
-            bool ints = interrupts_save();
+            bool ints = intr_save();
             if (!vmm_check_buffer(current->process->vmm, buf, len, VM_FLAG_USER)) {
-                interrupts_restore(ints);
+                intr_restore(ints);
                 kfree(kbuf);
                 LOGF("[SYSCALL] SYS_WRITE: Invalid buffer pointer 0x%lx (len: %zu) from thread '%s' (PID %u)\n", (uintptr_t)buf, len, current->name, current->process ? current->process->pid : 0);
                 sched_exit();
@@ -91,7 +91,7 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
             smap_allow();
             kmemcpy(kbuf, buf, len);
             smap_deny();
-            interrupts_restore(ints);
+            intr_restore(ints);
 
             if (current->process && current->process->tty) {
                 tty_write(current->process->tty, kbuf, len);
@@ -174,9 +174,9 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
 
             size_t n = tty_read(tty, kbuf, count);
 
-            bool ints = interrupts_save();
+            bool ints = intr_save();
             if (!vmm_check_buffer(current->process->vmm, buf, n, VM_FLAG_USER | VM_FLAG_WRITE)) {
-                interrupts_restore(ints);
+                intr_restore(ints);
                 kfree(kbuf);
                 sched_exit();
                 break;
@@ -185,7 +185,7 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
             smap_allow();
             kmemcpy(buf, kbuf, n);
             smap_deny();
-            interrupts_restore(ints);
+            intr_restore(ints);
             kfree(kbuf);
 
             registers[14] = (uint64_t)n;

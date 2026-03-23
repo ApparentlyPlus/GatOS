@@ -23,65 +23,18 @@
 static xhci_hc_t *hcs[16];
 static int hc_cnt = 0;
 
-/*
- * cr32 - Reads a 32-bit value from the xHCI capability registers
- */
 static inline uint32_t cr32(xhci_hc_t *hc, uint32_t o) { return *(volatile uint32_t *)(hc->cap + o); }
-
-/*
- * cr8 - Reads an 8-bit value from the xHCI capability registers
- */
-static inline uint8_t cr8(xhci_hc_t *hc, uint32_t o) { return *(volatile uint8_t *)(hc->cap + o); }
-
-/*
- * or32 - Reads a 32-bit value from the xHCI operational registers
- */
-static inline uint32_t or32(xhci_hc_t *hc, uint32_t o) { return *(volatile uint32_t *)(hc->op + o); }
-
-/*
- * ow32 - Writes a 32-bit value to the xHCI operational registers
- */
-static inline void ow32(xhci_hc_t *hc, uint32_t o, uint32_t v) { *(volatile uint32_t *)(hc->op + o) = v; }
-
-/*
- * ow64 - Writes a 64-bit value to the xHCI operational registers
- */
-static inline void ow64(xhci_hc_t *hc, uint32_t o, uint64_t v) { ow32(hc, o, (uint32_t)v); ow32(hc, o + 4, (uint32_t)(v >> 32)); }
-
-/*
- * rr32 - Reads a 32-bit value from the xHCI runtime registers
- */
-static inline uint32_t rr32(xhci_hc_t *hc, uint32_t o) { return *(volatile uint32_t *)(hc->rt + o); }
-
-/*
- * rw32 - Writes a 32-bit value to the xHCI runtime registers
- */
-static inline void rw32(xhci_hc_t *hc, uint32_t o, uint32_t v) { *(volatile uint32_t *)(hc->rt + o) = v; }
-
-/*
- * rw64 - Writes a 64-bit value to the xHCI runtime registers
- */
-static inline void rw64(xhci_hc_t *hc, uint32_t o, uint64_t v) { rw32(hc, o, (uint32_t)v); rw32(hc, o + 4, (uint32_t)(v >> 32)); }
-
-/*
- * ir32 - Reads a 32-bit value from the xHCI interrupter registers
- */
+static inline uint8_t  cr8 (xhci_hc_t *hc, uint32_t o) { return *(volatile uint8_t  *)(hc->cap + o); }
+static inline uint32_t or32(xhci_hc_t *hc, uint32_t o) { return *(volatile uint32_t *)(hc->op  + o); }
+static inline void     ow32(xhci_hc_t *hc, uint32_t o, uint32_t v) { *(volatile uint32_t *)(hc->op + o) = v; }
+static inline void     ow64(xhci_hc_t *hc, uint32_t o, uint64_t v) { ow32(hc, o, (uint32_t)v); ow32(hc, o + 4, (uint32_t)(v >> 32)); }
+static inline uint32_t rr32(xhci_hc_t *hc, uint32_t o) { return *(volatile uint32_t *)(hc->rt  + o); }
+static inline void     rw32(xhci_hc_t *hc, uint32_t o, uint32_t v) { *(volatile uint32_t *)(hc->rt + o) = v; }
+static inline void     rw64(xhci_hc_t *hc, uint32_t o, uint64_t v) { rw32(hc, o, (uint32_t)v); rw32(hc, o + 4, (uint32_t)(v >> 32)); }
 static inline uint32_t ir32(xhci_hc_t *hc, uint32_t r) { return rr32(hc, XHCI_IR0 + r); }
-
-/*
- * iw32 - Writes a 32-bit value to the xHCI interrupter registers
- */
-static inline void iw32(xhci_hc_t *hc, uint32_t r, uint32_t v) { rw32(hc, XHCI_IR0 + r, v); }
-
-/*
- * iw64 - Writes a 64-bit value to the xHCI interrupter registers
- */
-static inline void iw64(xhci_hc_t *hc, uint32_t r, uint64_t v) { rw64(hc, XHCI_IR0 + r, v); }
-
-/*
- * dbw - Writes a 32-bit value to the xHCI doorbell registers
- */
-static inline void dbw(xhci_hc_t *hc, uint32_t s, uint32_t v) { *(volatile uint32_t *)(hc->db + s) = v; }
+static inline void     iw32(xhci_hc_t *hc, uint32_t r, uint32_t v) { rw32(hc, XHCI_IR0 + r, v); }
+static inline void     iw64(xhci_hc_t *hc, uint32_t r, uint64_t v) { rw64(hc, XHCI_IR0 + r, v); }
+static inline void     dbw (xhci_hc_t *hc, uint32_t s, uint32_t v) { *(volatile uint32_t *)(hc->db  + s) = v; }
 
 /*
  * assert_dma_clean - Ensures that allocated DMA memory does not overlap with the kernel image
@@ -112,7 +65,7 @@ static void *dma_alloc(xhci_hc_t *hc, size_t sz, uint64_t *phys) {
 }
 
 /*
- * ring_init - Initializes a TRB ring with a specified number of TRBs
+ * ring_init - set up a TRB ring; Link TRB at tail keeps it circular
  */
 static void ring_init(xhci_hc_t *hc, ring_t *r, uint32_t cnt) {
     r->trbs = dma_alloc(hc, cnt * sizeof(trb_t), &r->phys);
@@ -126,7 +79,7 @@ static void ring_init(xhci_hc_t *hc, ring_t *r, uint32_t cnt) {
 }
 
 /*
- * enq - Enqueues a TRB into the specified ring and advances the enqueue pointer
+ * enq - post a TRB to a ring, wrapping with a Link at [cnt-1]
  */
 static void enq(ring_t *r, uint32_t cnt, uint32_t d0, uint32_t d1, uint32_t d2, uint32_t c) {
     trb_t *t = &r->trbs[r->enq];
@@ -161,7 +114,7 @@ static void evt_init(xhci_hc_t *hc) {
 }
 
 /*
- * deq - Dequeues the next event TRB from the event ring if available
+ * deq - pop next event if the cycle bit matches, advance ERDP
  */
 static trb_t *deq(xhci_hc_t *hc) {
     trb_t *t = &hc->evt.trbs[hc->evt.deq];
@@ -176,7 +129,7 @@ static trb_t *deq(xhci_hc_t *hc) {
 }
 
 /*
- * wait_ev - Waits for a specific type of event TRB on the event ring until a timeout occurs
+ * wait_ev - spin on the event ring until we see the expected TRB type or timeout
  */
 static trb_t wait_ev(xhci_hc_t *hc, uint8_t type, uint32_t tmo) {
     trb_t res = {0};
@@ -201,7 +154,7 @@ static trb_t wait_ev(xhci_hc_t *hc, uint8_t type, uint32_t tmo) {
 }
 
 /*
- * bios_handoff - Performs BIOS to OS handoff for the xHCI controller if supported
+ * bios_handoff - hand off xHCI ownership from BIOS; also reroutes Intel USB2 ports to xHCI
  */
 static void bios_handoff(xhci_hc_t *hc, pci_dev_t *pci) {
     // Intel Port Routing (Panther Point / Lynx Point quirks)
@@ -233,7 +186,7 @@ static void bios_handoff(xhci_hc_t *hc, pci_dev_t *pci) {
 }
 
 /*
- * reset_hc - Halts and performs a host controller reset
+ * reset_hc - stop the HC then issue a full reset — wait up to 100ms each
  */
 static bool reset_hc(xhci_hc_t *hc) {
     ow32(hc, XHCI_CMD, or32(hc, XHCI_CMD) & ~CMD_RS);
@@ -265,7 +218,7 @@ static void start_hc(xhci_hc_t *hc) {
 }
 
 /*
- * cmd_slot - Issues an Enable Slot command to allocate a device slot
+ * cmd_slot - allocate a device slot, return slot_id or 0 on fail
  */
 static uint8_t cmd_slot(xhci_hc_t *hc) {
     enq(&hc->cmd, RING_SZ, 0, 0, 0, TRB_TYPE(TRB_EN_SLOT));
@@ -278,7 +231,7 @@ static uint8_t cmd_slot(xhci_hc_t *hc) {
 }
 
 /*
- * cmd_addr - Issues an Address Device command to assign an address to a slot
+ * cmd_addr - address a slot (bsr=true skips SET_ADDRESS for hubs)
  */
 static bool cmd_addr(xhci_hc_t *hc, uint64_t ctx, uint8_t slot, bool bsr) {
     enq(&hc->cmd, RING_SZ, (uint32_t)ctx, (uint32_t)(ctx >> 32), 0, TRB_TYPE(TRB_ADDR_DEV) | TRB_SLOT(slot) | (bsr ? TRB_BSR : 0));
@@ -290,7 +243,7 @@ static bool cmd_addr(xhci_hc_t *hc, uint64_t ctx, uint8_t slot, bool bsr) {
 }
 
 /*
- * cmd_cfg - Issues a Configure Endpoint command to initialize device endpoints
+ * cmd_cfg - configure endpoints for a slot
  */
 static bool cmd_cfg(xhci_hc_t *hc, uint64_t ctx, uint8_t slot) {
     enq(&hc->cmd, RING_SZ, (uint32_t)ctx, (uint32_t)(ctx >> 32), 0, TRB_TYPE(TRB_CFG_EP) | TRB_SLOT(slot));
@@ -301,7 +254,7 @@ static bool cmd_cfg(xhci_hc_t *hc, uint64_t ctx, uint8_t slot) {
 }
 
 /*
- * cmd_eval - Issues an Evaluate Context command to update slot/endpoint parameters
+ * cmd_eval - evaluate context (update MPS etc.)
  */
 static bool cmd_eval(xhci_hc_t *hc, uint64_t ctx, uint8_t slot) {
     enq(&hc->cmd, RING_SZ, (uint32_t)ctx, (uint32_t)(ctx >> 32), 0, TRB_TYPE(TRB_EVAL_CTX) | TRB_SLOT(slot));

@@ -202,7 +202,7 @@ static char* fmtsz(char* buf, size_t n, uint64_t b) {
  */
 static void draw_cpu(console_t* con, const layout_t* L) {
     char b[32];
-    const CPUInfo* ci = cpu_get_info();
+    const cpu_info_t* ci = cpu_get_info();
 
     section(con, L, "CPU");
 
@@ -211,14 +211,14 @@ static void draw_cpu(console_t* con, const layout_t* L) {
     kv(con,  L, "Brand",  ci->brand);
 
     static const struct { cpu_feature_t f; const char* n; } feats[] = {
-        {CPU_FEAT_PAE,    "PAE"   }, {CPU_FEAT_NX,     "NX"    },
-        {CPU_FEAT_SSE,    "SSE"   }, {CPU_FEAT_SSE2,   "SSE2"  },
-        {CPU_FEAT_SSE3,   "SSE3"  }, {CPU_FEAT_SSSE3,  "SSSE3" },
-        {CPU_FEAT_SSE4_1, "SSE4.1"}, {CPU_FEAT_SSE4_2, "SSE4.2"},
-        {CPU_FEAT_AVX,    "AVX"   }, {CPU_FEAT_AVX2,   "AVX2"  },
-        {CPU_FEAT_VMX,    "VMX"   }, {CPU_FEAT_SVM,    "SVM"   },
-        {CPU_FEAT_64BIT,  "64BIT" }, {CPU_FEAT_SMEP,   "SMEP"  },
-        {CPU_FEAT_SMAP,   "SMAP"  },
+        {CF_PAE,    "PAE"   }, {CF_NX,     "NX"    },
+        {CF_SSE,    "SSE"   }, {CF_SSE2,   "SSE2"  },
+        {CF_SSE3,   "SSE3"  }, {CF_SSSE3,  "SSSE3" },
+        {CF_SSE4_1, "SSE4.1"}, {CF_SSE4_2, "SSE4.2"},
+        {CF_AVX,    "AVX"   }, {CF_AVX2,   "AVX2"  },
+        {CF_VMX,    "VMX"   }, {CF_SVM,    "SVM"   },
+        {CF_64BIT,  "64BIT" }, {CF_SMEP,   "SMEP"  },
+        {CF_SMAP,   "SMAP"  },
     };
 
     /* Label aligned with kv key column */
@@ -293,22 +293,22 @@ static void draw_mem(console_t* con, const layout_t* L) {
  */
 static const char* state_str(thread_state_t s) {
     switch (s) {
-        case THREAD_STATE_READY:    return "READY";
-        case THREAD_STATE_RUNNING:  return "RUNNING";
-        case THREAD_STATE_BLOCKED:  return "BLOCKED";
-        case THREAD_STATE_SLEEPING: return "SLEEPING";
-        case THREAD_STATE_DEAD:     return "DEAD";
+        case T_READY:    return "READY";
+        case T_RUNNING:  return "RUNNING";
+        case T_BLOCKED:  return "BLOCKED";
+        case T_SLEEPING: return "SLEEPING";
+        case T_DEAD:     return "DEAD";
         default:                    return "?";
     }
 }
 
 static uint8_t state_color(thread_state_t s) {
     switch (s) {
-        case THREAD_STATE_RUNNING:  return CONSOLE_COLOR_LIGHT_GREEN;
-        case THREAD_STATE_READY:    return CONSOLE_COLOR_GREEN;
-        case THREAD_STATE_SLEEPING: return CONSOLE_COLOR_YELLOW;
-        case THREAD_STATE_BLOCKED:  return CONSOLE_COLOR_LIGHT_CYAN;
-        case THREAD_STATE_DEAD:     return CONSOLE_COLOR_DARK_GRAY;
+        case T_RUNNING:  return CONSOLE_COLOR_LIGHT_GREEN;
+        case T_READY:    return CONSOLE_COLOR_GREEN;
+        case T_SLEEPING: return CONSOLE_COLOR_YELLOW;
+        case T_BLOCKED:  return CONSOLE_COLOR_LIGHT_CYAN;
+        case T_DEAD:     return CONSOLE_COLOR_DARK_GRAY;
         default:                    return CONSOLE_COLOR_LIGHT_GRAY;
     }
 }
@@ -334,7 +334,7 @@ static void draw_procs(console_t* con, const layout_t* L) {
 
     process_t* proc = process_get_all();
     while (proc) {
-        if (con->cursor_y >= con->height - 2) break;
+        if (con->cy >= con->height - 2) break;
 
         int nth = 0;
         for (thread_t* t = proc->threads; t; t = t->next) nth++;
@@ -357,10 +357,10 @@ static void draw_procs(console_t* con, const layout_t* L) {
 
         /* Thread sub-rows: prefix in dim, state bracket right-aligned in state color */
         for (thread_t* t = proc->threads; t; t = t->next) {
-            if (con->cursor_y >= con->height - 2) break;
+            if (con->cy >= con->height - 2) break;
 
-            if (t->state == THREAD_STATE_SLEEPING) {
-                int64_t left = (int64_t)t->sleep_until - (int64_t)get_uptime_ms();
+            if (t->state == T_SLEEPING) {
+                int64_t left = (int64_t)t->wake_at - (int64_t)get_uptime_ms();
                 ksnprintf(detail, sizeof(detail), "SLEEPING %ldms", left > 0 ? left : 0);
             } else {
                 ksnprintf(detail, sizeof(detail), "%s", state_str(t->state));
@@ -433,7 +433,7 @@ static void dash_draw(void) {
 
     /* Pad remaining rows */
     cl(con, CONSOLE_COLOR_BLACK, CONSOLE_COLOR_BLACK);
-    while (con->cursor_y < con->height - 1) con_putc(con, '\n');
+    while (con->cy < con->height - 1) con_putc(con, '\n');
 
     cl(con, CONSOLE_COLOR_DARK_GRAY, CONSOLE_COLOR_BLACK);
     emit(con, " CTRL+SHIFT+ESC to close or ALT+TAB to cycle");

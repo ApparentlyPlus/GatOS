@@ -121,9 +121,9 @@ typedef struct{
     uint64_t total_PDs;
     uint64_t total_PDPTs;
     uint64_t total_PML4s;
-} physmapInfo;
+} physmap_t;
 
-static physmapInfo physmapStruct = {0};
+static physmap_t physmap = {0};
 #endif
 
 /*

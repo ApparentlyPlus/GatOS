@@ -308,7 +308,7 @@ static bool t_cycle(void) {
         *(uint64_t*)p = (uint64_t)i;
         TEST_ASSERT_STATUS(slab_free(c, p), SLAB_OK);
     }
-    slab_cache_stats_t st;
+    cache_stats_t st;
     slab_cache_stats(c, &st);
     TEST_ASSERT(st.active_objects == 0);
     return true;
@@ -351,7 +351,7 @@ static bool t_stats_null(void) {
 static bool t_cstats(void) {
     slab_cache_t* c = mk_cache("ts_cst", 32, 8);
     TEST_ASSERT(c != NULL);
-    slab_cache_stats_t st;
+    cache_stats_t st;
     slab_cache_stats(c, &st);
     TEST_ASSERT(st.active_objects == 0);
     TEST_ASSERT(st.total_allocs == 0);
@@ -365,7 +365,7 @@ static bool t_cstats_cnt(void) {
     for (int i = 0; i < 8; i++) {
         TEST_ASSERT_STATUS(slab_alloc(c, &ptrs[i]), SLAB_OK);
     }
-    slab_cache_stats_t st;
+    cache_stats_t st;
     slab_cache_stats(c, &st);
     TEST_ASSERT(st.total_allocs == 8);
     TEST_ASSERT(st.active_objects == 8);
@@ -522,7 +522,7 @@ static bool t_seq(void) {
         TEST_ASSERT(*(uint32_t*)p == (uint32_t)i);
         TEST_ASSERT_STATUS(slab_free(c, p), SLAB_OK);
     }
-    slab_cache_stats_t st;
+    cache_stats_t st;
     slab_cache_stats(c, &st);
     TEST_ASSERT(st.active_objects == 0);
     TEST_ASSERT(st.total_allocs == 2000);
@@ -540,7 +540,7 @@ static bool t_batch_rev(void) {
     }
     for (int i = 127; i >= 0; i--)
         TEST_ASSERT_STATUS(slab_free(c, ptrs[i]), SLAB_OK);
-    slab_cache_stats_t st;
+    cache_stats_t st;
     slab_cache_stats(c, &st);
     TEST_ASSERT(st.active_objects == 0);
     return true;
@@ -558,7 +558,7 @@ static bool t_recreate(void) {
     slab_cache_t* c2 = slab_cache_create("ts_realloc_pat", 32, 8);
     tr_reg(c2);
     TEST_ASSERT(c2 != NULL);
-    slab_cache_stats_t st;
+    cache_stats_t st;
     slab_cache_stats(c2, &st);
     TEST_ASSERT(st.total_allocs == 0);
     return true;

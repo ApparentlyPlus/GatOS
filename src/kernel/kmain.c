@@ -200,7 +200,7 @@ void kernel_main(void* mb_info) {
 	kprintf("[KERNEL] Dashboard ready (CTRL+SHIFT+ESC)\n");
 	QEMU_LOG("Initialized kernel dashboard (CTRL+SHIFT+ESC)", TOTAL_DBG);
 
-	enable_interrupts();
+	intr_on();
 	QEMU_LOG("Enabled interrupts", TOTAL_DBG);
 
 	QEMU_LOG("Reached kernel end", TOTAL_DBG);

@@ -26,7 +26,7 @@ void spinlock_init(spinlock_t* lock, const char* name) {
  * spinlock_acquire - Take the lock, saving interrupt state
  */
 bool spinlock_acquire(spinlock_t* lock) {
-    bool was_enabled = interrupts_save();
+    bool was_enabled = intr_save();
 
     while (__atomic_test_and_set(&lock->locked, __ATOMIC_ACQUIRE)) {
         __asm__ volatile("pause");
@@ -41,10 +41,10 @@ bool spinlock_acquire(spinlock_t* lock) {
  * spinlock_try_acquire - Attempt to take the lock without spinning
  */
 bool spinlock_try_acquire(spinlock_t* lock, bool* was_enabled) {
-    *was_enabled = interrupts_save();
+    *was_enabled = intr_save();
 
     if (__atomic_test_and_set(&lock->locked, __ATOMIC_ACQUIRE)) {
-        interrupts_restore(*was_enabled);
+        intr_restore(*was_enabled);
         return false;
     }
 
@@ -58,7 +58,7 @@ bool spinlock_try_acquire(spinlock_t* lock, bool* was_enabled) {
 void spinlock_release(spinlock_t* lock, bool interrupts_enabled) {
     lock->cpu_id = 0xFFFFFFFF;
     __atomic_clear(&lock->locked, __ATOMIC_RELEASE);
-    interrupts_restore(interrupts_enabled);
+    intr_restore(interrupts_enabled);
 }
 
 /*

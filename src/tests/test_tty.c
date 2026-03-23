@@ -453,7 +453,7 @@ static bool t_hdr_stable(void) {
 static bool t_hdr_cursor(void) {
     tty_t* t = tty_create();
     tty_header_init(t, 3);
-    TEST_ASSERT(t->console->cursor_y >= t->console->header_rows);
+    TEST_ASSERT(t->console->cy >= t->console->header_rows);
     tty_destroy(t);
     return true;
 }
@@ -473,7 +473,7 @@ static bool t_hdr_one(void) {
     tty_t* t = tty_create();
     tty_header_init(t, 1);
     TEST_ASSERT(t->console->header_rows == 1);
-    TEST_ASSERT(t->console->cursor_y >= 1);
+    TEST_ASSERT(t->console->cy >= 1);
     tty_destroy(t);
     return true;
 }

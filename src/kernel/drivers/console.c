@@ -84,15 +84,15 @@ static void render_cursor(console_t* con, bool on) {
     if (!fb) return;
     extern tty_t* active_tty;
     if (!active_tty || active_tty->console != con) return;
-    size_t px = con->cursor_x * fw;
-    size_t py = con->cursor_y * (fh + PADDING_Y);
+    size_t px = con->cx * fw;
+    size_t py = con->cy * (fh + PADDING_Y);
     if (on) {
-        uint32_t color = VGA_PALETTE[con->fg_color];
+        uint32_t color = VGA_PALETTE[con->fg];
         for (size_t y = 0; y < fh; y++)
             for (size_t x = 0; x < fw; x++)
                 put_pixel(px + x, py + y, color);
     } else {
-        console_char_t c = con->buffer[con->cursor_y * con->width + con->cursor_x];
+        console_char_t c = con->buffer[con->cy * con->width + con->cx];
         draw_glyph(get_glyph(c.codepoint), px, py, VGA_PALETTE[c.fg], VGA_PALETTE[c.bg]);
     }
 }
@@ -111,7 +111,7 @@ static void refresh_locked(console_t* con) {
             console_char_t c = con->buffer[y * con->width + x];
             draw_glyph(get_glyph(c.codepoint), x * fw, y * (fh + PADDING_Y), VGA_PALETTE[c.fg], VGA_PALETTE[c.bg]);
         }
-    if (con->cursor_enabled) render_cursor(con, true);
+    if (con->on) render_cursor(con, true);
 }
 
 /*
@@ -119,7 +119,7 @@ static void refresh_locked(console_t* con) {
  * Uses a pixel-level memmove on the framebuffer instead of a full redraw.
  */
 static void scroll(console_t* con) {
-    if (con->cursor_enabled) render_cursor(con, false);
+    if (con->on) render_cursor(con, false);
     size_t first = con->header_rows;
     size_t rows  = con->height - first;
     if (!rows) return;
@@ -128,10 +128,10 @@ static void scroll(console_t* con) {
         kmemmove(con->buffer + first * con->width, con->buffer + (first + 1) * con->width, (rows - 1) * con->width * sizeof(console_char_t));
     for (size_t x = 0; x < con->width; x++) {
         size_t idx = (con->height - 1) * con->width + x;
-        con->buffer[idx] = (console_char_t){ ' ', con->fg_color, con->bg_color };
+        con->buffer[idx] = (console_char_t){ ' ', con->fg, con->bg };
     }
-    con->cursor_y--;
-    if (con->cursor_y < first) con->cursor_y = first;
+    con->cy--;
+    if (con->cy < first) con->cy = first;
 
     if (fb) {
         extern tty_t* active_tty;
@@ -145,7 +145,7 @@ static void scroll(console_t* con) {
             if (move_bytes > 0)
                 kmemmove(fb + dst_off, fb + src_off, move_bytes);
 
-            uint32_t bg_color    = VGA_PALETTE[con->bg_color];
+            uint32_t bg_color    = VGA_PALETTE[con->bg];
             size_t last_row_off  = (con->height - 1) * row_h * fb_pitch;
             size_t last_row_len  = row_h * fb_pitch;
             if (fb_bpp == 32) {
@@ -166,27 +166,27 @@ static void scroll(console_t* con) {
 static void emit_cp(console_t* con, uint32_t cp) {
     extern tty_t* active_tty;
     bool active = (active_tty && active_tty->console == con);
-    if (active && con->cursor_enabled) render_cursor(con, false);
+    if (active && con->on) render_cursor(con, false);
 
-    if (cp == '\n')      { con->cursor_x = 0; con->cursor_y++; }
-    else if (cp == '\r') { con->cursor_x = 0; }
+    if (cp == '\n')      { con->cx = 0; con->cy++; }
+    else if (cp == '\r') { con->cx = 0; }
     else if (cp == '\b') {
-        if (con->cursor_x > 0) con->cursor_x--;
-        size_t idx = con->cursor_y * con->width + con->cursor_x;
+        if (con->cx > 0) con->cx--;
+        size_t idx = con->cy * con->width + con->cx;
         con->buffer[idx].codepoint = ' ';
-        if (active) draw_glyph(get_glyph(' '), con->cursor_x * fw, con->cursor_y * (fh + PADDING_Y), VGA_PALETTE[con->fg_color], VGA_PALETTE[con->bg_color]);
+        if (active) draw_glyph(get_glyph(' '), con->cx * fw, con->cy * (fh + PADDING_Y), VGA_PALETTE[con->fg], VGA_PALETTE[con->bg]);
     } else if (cp == '\t') {
-        con->cursor_x = (con->cursor_x + 4) & ~3;
+        con->cx = (con->cx + 4) & ~3;
     } else {
-        if (con->cursor_x >= con->width) { con->cursor_x = 0; con->cursor_y++; }
-        if (con->cursor_y >= con->height) scroll(con);
-        size_t idx = con->cursor_y * con->width + con->cursor_x;
-        con->buffer[idx] = (console_char_t){ cp, con->fg_color, con->bg_color };
-        if (active) draw_glyph(get_glyph(cp), con->cursor_x * fw, con->cursor_y * (fh + PADDING_Y), VGA_PALETTE[con->fg_color], VGA_PALETTE[con->bg_color]);
-        con->cursor_x++;
+        if (con->cx >= con->width) { con->cx = 0; con->cy++; }
+        if (con->cy >= con->height) scroll(con);
+        size_t idx = con->cy * con->width + con->cx;
+        con->buffer[idx] = (console_char_t){ cp, con->fg, con->bg };
+        if (active) draw_glyph(get_glyph(cp), con->cx * fw, con->cy * (fh + PADDING_Y), VGA_PALETTE[con->fg], VGA_PALETTE[con->bg]);
+        con->cx++;
     }
-    if (con->cursor_y >= con->height) scroll(con);
-    if (active && con->cursor_enabled) render_cursor(con, true);
+    if (con->cy >= con->height) scroll(con);
+    if (active && con->on) render_cursor(con, true);
 }
 
 #pragma region Instance API
@@ -196,11 +196,11 @@ static void emit_cp(console_t* con, uint32_t cp) {
  */
 bool con_init(console_t* con) {
     con->width = cols; con->height = rows;
-    con->cursor_x = 0; con->cursor_y = 0;
-    con->fg_color = CONSOLE_COLOR_WHITE; con->bg_color = CONSOLE_COLOR_BLACK;
-    con->utf8_bytes_needed = 0; con->utf8_codepoint = 0;
-    con->ansi_state = 0; con->reentrancy_count = 0;
-    con->cursor_enabled = true; con->header_rows = 0;
+    con->cx = 0; con->cy = 0;
+    con->fg = CONSOLE_COLOR_WHITE; con->bg = CONSOLE_COLOR_BLACK;
+    con->u8n = 0; con->u8cp = 0;
+    con->ansi_st = 0; con->reent = 0;
+    con->on = true; con->header_rows = 0;
     con->buffer = kmalloc(con->width * con->height * sizeof(console_char_t));
     if (!con->buffer) return false;
     spinlock_init(&con->lock, "console_lock");
@@ -213,16 +213,16 @@ bool con_init(console_t* con) {
  */
 void con_clear(console_t* con, uint8_t background) {
     bool flags = spinlock_acquire(&con->lock);
-    con->bg_color = background & 0xF;
+    con->bg = background & 0xF;
     for (size_t y = con->header_rows; y < con->height; y++)
         for (size_t x = 0; x < con->width; x++) {
             size_t i = y * con->width + x;
-            con->buffer[i] = (console_char_t){ ' ', con->fg_color, con->bg_color };
+            con->buffer[i] = (console_char_t){ ' ', con->fg, con->bg };
         }
-    con->cursor_x = 0; con->cursor_y = con->header_rows;
+    con->cx = 0; con->cy = con->header_rows;
     extern tty_t* active_tty;
     if (active_tty && active_tty->console == con) {
-        uint32_t bg_color = VGA_PALETTE[con->bg_color];
+        uint32_t bg_color = VGA_PALETTE[con->bg];
         size_t start_py  = con->header_rows * (fh + PADDING_Y);
         if (fb_bpp == 32) {
             size_t off = start_py * fb_pitch / 4;
@@ -233,7 +233,7 @@ void con_clear(console_t* con, uint8_t background) {
                 for (uint32_t x = 0; x < fb_w; x++)
                     put_pixel(x, y, bg_color);
         }
-        if (con->cursor_enabled) render_cursor(con, true);
+        if (con->on) render_cursor(con, true);
     }
     spinlock_release(&con->lock, flags);
 }
@@ -247,48 +247,48 @@ void con_putc(console_t* con, char character) {
 
     uint8_t byte = (uint8_t)character;
 
-    if (con->ansi_state == 1) {
-        if (byte == '[') con->ansi_state = 2;
-        else { con->ansi_state = 0; emit_cp(con, '\x1b'); emit_cp(con, byte); }
+    if (con->ansi_st == 1) {
+        if (byte == '[') con->ansi_st = 2;
+        else { con->ansi_st = 0; emit_cp(con, '\x1b'); emit_cp(con, byte); }
         spinlock_release(&con->lock, flags); return;
-    } else if (con->ansi_state == 2) {
-        if      (byte == 'H') { con->cursor_x = 0; con->cursor_y = con->header_rows; con->ansi_state = 0; }
-        else if (byte == '2') { con->ansi_state = 3; }
-        else                  { con->ansi_state = 0; }
+    } else if (con->ansi_st == 2) {
+        if      (byte == 'H') { con->cx = 0; con->cy = con->header_rows; con->ansi_st = 0; }
+        else if (byte == '2') { con->ansi_st = 3; }
+        else                  { con->ansi_st = 0; }
         spinlock_release(&con->lock, flags); return;
-    } else if (con->ansi_state == 3) {
+    } else if (con->ansi_st == 3) {
         if (byte == 'J') {
-            con->ansi_state = 0;
+            con->ansi_st = 0;
             extern tty_t* active_tty;
             bool active = (active_tty && active_tty->console == con);
-            if (active && con->cursor_enabled) render_cursor(con, false);
+            if (active && con->on) render_cursor(con, false);
             for (size_t y = con->header_rows; y < con->height; y++)
                 for (size_t x = 0; x < con->width; x++) {
                     size_t i = y * con->width + x;
-                    if (con->buffer[i].codepoint != ' ' || con->buffer[i].bg != con->bg_color) {
-                        con->buffer[i] = (console_char_t){ ' ', con->fg_color, con->bg_color };
-                        if (active) draw_glyph(get_glyph(' '), x * fw, y * (fh + PADDING_Y), VGA_PALETTE[con->fg_color], VGA_PALETTE[con->bg_color]);
+                    if (con->buffer[i].codepoint != ' ' || con->buffer[i].bg != con->bg) {
+                        con->buffer[i] = (console_char_t){ ' ', con->fg, con->bg };
+                        if (active) draw_glyph(get_glyph(' '), x * fw, y * (fh + PADDING_Y), VGA_PALETTE[con->fg], VGA_PALETTE[con->bg]);
                     }
                 }
-            con->cursor_x = 0; con->cursor_y = con->header_rows;
-            if (active && con->cursor_enabled) render_cursor(con, true);
-        } else { con->ansi_state = 0; }
+            con->cx = 0; con->cy = con->header_rows;
+            if (active && con->on) render_cursor(con, true);
+        } else { con->ansi_st = 0; }
         spinlock_release(&con->lock, flags); return;
     } else if (byte == '\x1b') {
-        con->ansi_state = 1;
+        con->ansi_st = 1;
         spinlock_release(&con->lock, flags); return;
     }
 
-    if (con->utf8_bytes_needed == 0) {
+    if (con->u8n == 0) {
         if      ((byte & 0x80) == 0x00) emit_cp(con, byte);
-        else if ((byte & 0xE0) == 0xC0) { con->utf8_bytes_needed = 1; con->utf8_codepoint = byte & 0x1F; }
-        else if ((byte & 0xF0) == 0xE0) { con->utf8_bytes_needed = 2; con->utf8_codepoint = byte & 0x0F; }
-        else if ((byte & 0xF8) == 0xF0) { con->utf8_bytes_needed = 3; con->utf8_codepoint = byte & 0x07; }
+        else if ((byte & 0xE0) == 0xC0) { con->u8n = 1; con->u8cp = byte & 0x1F; }
+        else if ((byte & 0xF0) == 0xE0) { con->u8n = 2; con->u8cp = byte & 0x0F; }
+        else if ((byte & 0xF8) == 0xF0) { con->u8n = 3; con->u8cp = byte & 0x07; }
     } else {
         if ((byte & 0xC0) == 0x80) {
-            con->utf8_codepoint = (con->utf8_codepoint << 6) | (byte & 0x3F);
-            if (--con->utf8_bytes_needed == 0) emit_cp(con, con->utf8_codepoint);
-        } else { con->utf8_bytes_needed = 0; emit_cp(con, 0xFFFD); }
+            con->u8cp = (con->u8cp << 6) | (byte & 0x3F);
+            if (--con->u8n == 0) emit_cp(con, con->u8cp);
+        } else { con->u8n = 0; emit_cp(con, 0xFFFD); }
     }
     spinlock_release(&con->lock, flags);
 }
@@ -308,7 +308,7 @@ void con_refresh(console_t* con) {
  */
 void con_set_color(console_t* con, uint8_t foreground, uint8_t background) {
     bool flags = spinlock_acquire(&con->lock);
-    con->fg_color = foreground & 0xF; con->bg_color = background & 0xF;
+    con->fg = foreground & 0xF; con->bg = background & 0xF;
     spinlock_release(&con->lock, flags);
 }
 
@@ -317,9 +317,9 @@ void con_set_color(console_t* con, uint8_t foreground, uint8_t background) {
  */
 void con_enable_cursor(console_t* con, bool enabled) {
     bool flags = spinlock_acquire(&con->lock);
-    if (con->cursor_enabled && !enabled)  render_cursor(con, false);
-    else if (!con->cursor_enabled && enabled) render_cursor(con, true);
-    con->cursor_enabled = enabled;
+    if (con->on && !enabled)  render_cursor(con, false);
+    else if (!con->on && enabled) render_cursor(con, true);
+    con->on = enabled;
     spinlock_release(&con->lock, flags);
 }
 
@@ -335,7 +335,7 @@ void con_header_init(console_t* con, size_t rows) {
             size_t i = y * con->width + x;
             con->buffer[i] = (console_char_t){ ' ', CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK };
         }
-    if (con->cursor_y < rows) { con->cursor_y = rows; con->cursor_x = 0; }
+    if (con->cy < rows) { con->cy = rows; con->cx = 0; }
     spinlock_release(&con->lock, flags);
 }
 

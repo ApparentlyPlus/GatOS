@@ -66,9 +66,9 @@ void process_init(void) {
 }
 
 /*
- * process_header_update - Rewrites the sticky info bar for a process
+ * proc_hdr_update - Rewrites the sticky info bar for a process
  */
-void process_header_update(process_t* proc) {
+void proc_hdr_update(process_t* proc) {
     if (!proc || !proc->tty) return;
 
     size_t total = 0;
@@ -76,7 +76,7 @@ void process_header_update(process_t* proc) {
     thread_t* t = proc->threads;
     while (t) {
         total++;
-        if (t->state != THREAD_STATE_DEAD) alive++;
+        if (t->state != T_DEAD) alive++;
         t = t->next;
     }
 
@@ -147,7 +147,7 @@ process_t* process_create(const char* name, tty_t* existing_tty) {
         if (!proc->tty) goto map_fail;
         tty_header_init(proc->tty, 3);
         proc->tty->hidden = false;
-        process_header_update(proc);
+        proc_hdr_update(proc);
     }
 
     proc->next = proc_list;
@@ -172,7 +172,7 @@ thread_t* thread_create(process_t* process, const char* name, void (*entry)(void
     kmemset(thread, 0, sizeof(thread_t));
     thread->tid = next_tid++;
     thread->process = process;
-    thread->state = THREAD_STATE_READY;
+    thread->state = T_READY;
     kstrncpy(thread->name, name, MAX_THREAD_NAME - 1);
 
     /*
@@ -187,17 +187,17 @@ thread_t* thread_create(process_t* process, const char* name, void (*entry)(void
      * This avoids fninit + fxsave, which would capture the calling context's
      * live XMM registers and potentially leak kernel FPU state into the thread.
      */
-    *(uint16_t *)(&thread->fpu_state[0])  = 0x037F;
-    *(uint32_t *)(&thread->fpu_state[24]) = 0x1F80;
+    *(uint16_t *)(&thread->fpu[0])  = 0x037F;
+    *(uint32_t *)(&thread->fpu[24]) = 0x1F80;
 
-    thread->kernel_stack = kmalloc(KERNEL_STACK_SIZE);
-    if (!thread->kernel_stack) {
+    thread->kstack = kmalloc(KERNEL_STACK_SIZE);
+    if (!thread->kstack) {
         kfree(thread);
         return NULL;
     }
-    kmemset(thread->kernel_stack, 0, KERNEL_STACK_SIZE);
+    kmemset(thread->kstack, 0, KERNEL_STACK_SIZE);
 
-    uintptr_t stack_top = (uintptr_t)thread->kernel_stack + KERNEL_STACK_SIZE;
+    uintptr_t stack_top = (uintptr_t)thread->kstack + KERNEL_STACK_SIZE;
     thread->context = (cpu_context_t*)(stack_top - sizeof(cpu_context_t));
     kmemset(thread->context, 0, sizeof(cpu_context_t));
 
@@ -218,22 +218,22 @@ thread_t* thread_create(process_t* process, const char* name, void (*entry)(void
 
         if (user_rsp == 0) {
             // Allocate userspace stack lazily from the process VMM directly
-            vmm_status_t alloc_status = vmm_alloc(process->vmm, USER_STACK_SIZE, VM_FLAG_USER | VM_FLAG_WRITE | VM_FLAG_LAZY, NULL, &thread->user_stack);
+            vmm_status_t alloc_status = vmm_alloc(process->vmm, USER_STACK_SIZE, VM_FLAG_USER | VM_FLAG_WRITE | VM_FLAG_LAZY, NULL, &thread->ustack);
 
-            if (alloc_status != VMM_OK || !thread->user_stack) {
-                kfree(thread->kernel_stack);
+            if (alloc_status != VMM_OK || !thread->ustack) {
+                kfree(thread->kstack);
                 kfree(thread);
                 return NULL;
             }
-            
+
             // Align to 16 bytes and leave 8 bytes for ABI (as if called)
-            // The System V ABI says: "The value (%rsp + 8) is always a multiple of 16 
+            // The System V ABI says: "The value (%rsp + 8) is always a multiple of 16
             // when control is transferred to the function entry point."
             // Since userspace_start is entered via iretq, we want it to look like a call.
-            user_rsp = (uint64_t)thread->user_stack + USER_STACK_SIZE - 8;
+            user_rsp = (uint64_t)thread->ustack + USER_STACK_SIZE - 8;
         } else {
             // Userspace provided a stack, we don't track it
-            thread->user_stack = NULL;
+            thread->ustack = NULL;
         }
 
         thread->context->iret_rsp = user_rsp;
@@ -250,7 +250,7 @@ thread_t* thread_create(process_t* process, const char* name, void (*entry)(void
 
     thread->next = process->threads;
     process->threads = thread;
-    process_header_update(process);
+    proc_hdr_update(process);
 
     LOGF("[PROC] Created %s thread '%s' (TID: %u) in PID %u\n",
          is_user ? "USER" : "KERNEL", thread->name, thread->tid, process->pid);
@@ -267,20 +267,20 @@ thread_t* thread_create_bootstrap(process_t* process, const char* name) {
     kmemset(thread, 0, sizeof(thread_t));
     thread->tid = next_tid++;
     thread->process = process;
-    thread->state = THREAD_STATE_RUNNING; 
+    thread->state = T_RUNNING; 
     kstrncpy(thread->name, name, MAX_THREAD_NAME - 1);
 
     __asm__ volatile (
         "fxsave %0 \n"
-        : "=m"(thread->fpu_state)
+        : "=m"(thread->fpu)
     );
 
-    thread->kernel_stack = NULL; 
+    thread->kstack = NULL;
     thread->context = NULL; 
 
     thread->next = process->threads;
     process->threads = thread;
-    process_header_update(process);
+    proc_hdr_update(process);
 
     LOGF("[PROC] Bootstrapped current context as thread '%s' (TID: %u)\n", thread->name, thread->tid);
     return thread;
@@ -294,12 +294,12 @@ void thread_destroy(thread_t* thread) {
 
     LOGF("[PROC] Destroying thread '%s' (TID: %u)\n", thread->name, thread->tid);
 
-    if (thread->user_stack && thread->process && thread->process->vmm) {
-        vmm_free(thread->process->vmm, thread->user_stack);
+    if (thread->ustack && thread->process && thread->process->vmm) {
+        vmm_free(thread->process->vmm, thread->ustack);
     }
 
-    if (thread->kernel_stack) {
-        kfree(thread->kernel_stack);
+    if (thread->kstack) {
+        kfree(thread->kstack);
     }
 
     kfree(thread);
@@ -356,7 +356,7 @@ void procs_kill_tty(tty_t* tty) {
         if (proc->tty == tty) {
             thread_t* thread = proc->threads;
             while (thread) {
-                thread->state = THREAD_STATE_DEAD;
+                thread->state = T_DEAD;
                 thread = thread->next;
             }
             proc->tty = NULL;

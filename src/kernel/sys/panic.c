@@ -64,7 +64,7 @@ void panic_c(const char* message, cpu_context_t* context)
     int i;
     int pad;
 
-    disable_interrupts();
+    intr_off();
     panic_log(message, context);
 
     uint16_t screen_width = (uint16_t)con_crash_width();

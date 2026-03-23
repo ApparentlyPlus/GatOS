@@ -22,7 +22,7 @@
 
 #pragma region Types and Globals
 
-interrupt_descriptor idt[IDT_SIZE] = {0};
+idt_entry_t idt[IDT_SIZE] = {0};
 static irq_handler_t irq_handlers[IDT_SIZE] = {0};
 extern char interrupt_handler_0[];
 
@@ -58,7 +58,7 @@ void set_idt_entry(uint8_t vector, void* handler, uint8_t dpl, uint8_t ist_index
 {
     uint64_t handler_addr = (uint64_t)handler;
 
-    interrupt_descriptor* entry = &idt[vector];
+    idt_entry_t* entry = &idt[vector];
     entry->address_low = handler_addr & 0xFFFF;
     entry->address_mid = (handler_addr >> 16) & 0xFFFF;
     entry->address_high = handler_addr >> 32;
@@ -258,7 +258,7 @@ cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
                 }
                 LOGF("[USERSPACE FAULT] %s", buf + 1);
 
-                current->state = THREAD_STATE_DEAD;
+                current->state = T_DEAD;
                 return sched_schedule(context);
             }
         }

@@ -51,7 +51,7 @@ void kernel_test(void* mb_info, char* KERNEL_VERSION) {
 
     // Initialize core subsystems
 	idt_init();
-	enable_interrupts();
+	intr_on();
 	cpu_init();
 
 	// Initialize multiboot parser

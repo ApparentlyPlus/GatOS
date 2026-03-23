@@ -42,8 +42,8 @@ static thread_t* fpu_owner = NULL;
 static int sleep_cmp(const avl_node_t* a, const avl_node_t* b) {
     const thread_t* ta = AVL_ENTRY(a, thread_t, sleep_node);
     const thread_t* tb = AVL_ENTRY(b, thread_t, sleep_node);
-    if (ta->sleep_until < tb->sleep_until) return -1;
-    if (ta->sleep_until > tb->sleep_until) return  1;
+    if (ta->wake_at < tb->wake_at) return -1;
+    if (ta->wake_at > tb->wake_at) return  1;
     if (ta->tid < tb->tid) return -1;
     if (ta->tid > tb->tid) return  1;
     return 0;
@@ -57,7 +57,7 @@ static cpu_context_t* fpu_nm_handler(cpu_context_t* ctx) {
 
     if (!cur) {
         if (fpu_owner) {
-            __asm__ volatile("fxsave %0" : "=m"(fpu_owner->fpu_state));
+            __asm__ volatile("fxsave %0" : "=m"(fpu_owner->fpu));
             fpu_owner = NULL;
         }
         return ctx;
@@ -65,8 +65,8 @@ static cpu_context_t* fpu_nm_handler(cpu_context_t* ctx) {
 
     if (fpu_owner != cur) {
         if (fpu_owner)
-            __asm__ volatile("fxsave %0" : "=m"(fpu_owner->fpu_state));
-        __asm__ volatile("fxrstor %0" :: "m"(cur->fpu_state));
+            __asm__ volatile("fxsave %0" : "=m"(fpu_owner->fpu));
+        __asm__ volatile("fxrstor %0" :: "m"(cur->fpu));
         fpu_owner = cur;
     }
     return ctx;
@@ -105,7 +105,7 @@ void sched_init(void) {
     // Use the boot stack for kernel_main to keep the current execution stack valid.
     // The boot stack is 32 KiB; we treat the top 16 KiB as the kernel stack.
     extern char KERNEL_STACK_TOP;
-    cur->kernel_stack = (void *)((uintptr_t)&KERNEL_STACK_TOP - KERNEL_STACK_SIZE);
+    cur->kstack = (void *)((uintptr_t)&KERNEL_STACK_TOP - KERNEL_STACK_SIZE);
 
     avl_init(&sleep_tree, sleep_cmp);
     irq_register(INT_DEVICE_NOT_AVAILABLE, fpu_nm_handler);
@@ -127,19 +127,19 @@ bool sched_active(void) {
 void sched_add(thread_t* thread) {
     if (!thread) return;
 
-    if (thread->state == THREAD_STATE_DEAD) {
+    if (thread->state == T_DEAD) {
         sched_add_dead(thread);
         return;
     }
 
-    thread->state = THREAD_STATE_READY;
-    thread->sched_next = NULL;
+    thread->state = T_READY;
+    thread->rnext = NULL;
 
     if (!rq_head) {
         rq_head = thread;
         rq_tail = thread;
     } else {
-        rq_tail->sched_next = thread;
+        rq_tail->rnext = thread;
         rq_tail = thread;
     }
 }
@@ -149,7 +149,7 @@ void sched_add(thread_t* thread) {
  */
 static void sched_add_sleep(thread_t* thread) {
     if (!thread) return;
-    thread->sched_next = NULL;
+    thread->rnext = NULL;
     avl_insert(&sleep_tree, &thread->sleep_node);
 }
 
@@ -159,7 +159,7 @@ static void sched_add_sleep(thread_t* thread) {
 static void sched_add_dead(thread_t* thread) {
     if (!thread) return;
 
-    thread->sched_next = dead_head;
+    thread->rnext = dead_head;
     dead_head = thread;
 }
 
@@ -174,17 +174,17 @@ void sched_drop_proc(process_t* proc) {
     while (curr) {
         if (curr->process == proc) {
             if (prev) {
-                prev->sched_next = curr->sched_next;
+                prev->rnext = curr->rnext;
             } else {
-                rq_head = curr->sched_next;
+                rq_head = curr->rnext;
             }
             if (rq_tail == curr) {
                 rq_tail = prev;
             }
-            curr = curr->sched_next;
+            curr = curr->rnext;
         } else {
             prev = curr;
-            curr = curr->sched_next;
+            curr = curr->rnext;
         }
     }
 
@@ -202,14 +202,14 @@ void sched_drop_proc(process_t* proc) {
     while (curr) {
         if (curr->process == proc) {
             if (prev) {
-                prev->sched_next = curr->sched_next;
+                prev->rnext = curr->rnext;
             } else {
-                dead_head = curr->sched_next;
+                dead_head = curr->rnext;
             }
-            curr = curr->sched_next;
+            curr = curr->rnext;
         } else {
             prev = curr;
-            curr = curr->sched_next;
+            curr = curr->rnext;
         }
     }
 }
@@ -226,14 +226,14 @@ cpu_context_t* sched_schedule(cpu_context_t* ctx) {
         cur->context = ctx;
         cur->fs_base = read_msr(MSR_FS_BASE);
 
-        if (cur->state == THREAD_STATE_RUNNING) {
-            cur->state = THREAD_STATE_READY;
+        if (cur->state == T_RUNNING) {
+            cur->state = T_READY;
             if (cur != idle) {
                 sched_add(cur);
             }
-        } else if (cur->state == THREAD_STATE_SLEEPING) {
+        } else if (cur->state == T_SLEEPING) {
             sched_add_sleep(cur);
-        } else if (cur->state == THREAD_STATE_DEAD) {
+        } else if (cur->state == T_DEAD) {
             sched_add_dead(cur);
         }
     }
@@ -241,7 +241,7 @@ cpu_context_t* sched_schedule(cpu_context_t* ctx) {
     avl_node_t* sn = avl_min(&sleep_tree);
     while (sn) {
         thread_t* sleeper = AVL_ENTRY(sn, thread_t, sleep_node);
-        if (sleeper->sleep_until > now) break;
+        if (sleeper->wake_at > now) break;
         avl_node_t* next_sn = avl_next(sn);
         avl_remove(&sleep_tree, sn);
         sched_add(sleeper);
@@ -252,7 +252,7 @@ cpu_context_t* sched_schedule(cpu_context_t* ctx) {
 
     while (dead_head) {
         thread_t* thread = dead_head;
-        dead_head = thread->sched_next;
+        dead_head = thread->rnext;
 
         process_t* proc = thread->process;
 
@@ -298,13 +298,13 @@ cpu_context_t* sched_schedule(cpu_context_t* ctx) {
     thread_t* nxt = NULL;
     while (rq_head) {
         nxt = rq_head;
-        rq_head = nxt->sched_next;
+        rq_head = nxt->rnext;
         if (!rq_head) {
             rq_tail = NULL;
         }
-        nxt->sched_next = NULL;
+        nxt->rnext = NULL;
 
-        if (nxt->state == THREAD_STATE_DEAD) {
+        if (nxt->state == T_DEAD) {
             sched_add_dead(nxt);
             nxt = NULL;
         } else {
@@ -327,13 +327,13 @@ cpu_context_t* sched_schedule(cpu_context_t* ctx) {
     }
 
     cur = nxt;
-    cur->state = THREAD_STATE_RUNNING;
+    cur->state = T_RUNNING;
 
     // fpu_nm_handler will lazily restore state on first use
     set_cr0_ts();
 
-    if (cur->kernel_stack) {
-        uint64_t stack_top = (uint64_t)cur->kernel_stack + KERNEL_STACK_SIZE;
+    if (cur->kstack) {
+        uint64_t stack_top = (uint64_t)cur->kstack + KERNEL_STACK_SIZE;
         tss_set_rsp0(stack_top);
 
         // Update local CPU structure for syscall entries
@@ -378,8 +378,8 @@ thread_t* sched_current(void) {
 void sched_sleep(uint64_t ms) {
     if (!cur || !sched_on) return;
 
-    cur->state = THREAD_STATE_SLEEPING;
-    cur->sleep_until = get_uptime_ms() + ms;
+    cur->state = T_SLEEPING;
+    cur->wake_at = get_uptime_ms() + ms;
 
     sched_yield();
 }
@@ -390,10 +390,10 @@ void sched_sleep(uint64_t ms) {
 void sched_exit(void) {
     if (!cur) return;
 
-    cur->state = THREAD_STATE_DEAD;
+    cur->state = T_DEAD;
     LOGF("[SCHED] Thread '%s' (TID: %u) exited.\n", cur->name, cur->tid);
 
-    process_header_update(cur->process);
+    proc_hdr_update(cur->process);
 
     sched_yield();
     while(1);

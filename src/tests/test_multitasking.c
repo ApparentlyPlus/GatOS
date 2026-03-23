@@ -3,7 +3,7 @@
  *
  * Tests every public function: process_create/destroy, thread_create,
  * thread_create_bootstrap, thread_destroy, process_get_all,
- * procs_kill_tty, process_header_update, sched_active,
+ * procs_kill_tty, proc_hdr_update, sched_active,
  * sched_current, sched_add, sched_yield.
  * Covers PID/TID uniqueness, context layout, stack alignment, name truncation,
  * global process list, and shared TTY.
@@ -66,7 +66,7 @@ static bool t_sched_name(void) {
 }
 
 static bool t_sched_stk(void) {
-    TEST_ASSERT(sched_current()->kernel_stack != NULL);
+    TEST_ASSERT(sched_current()->kstack != NULL);
     return true;
 }
 #pragma endregion
@@ -167,7 +167,7 @@ static bool t_kt_nn(void) {
 static bool t_kt_state(void) {
     process_t* p = process_create("t_ktstate", NULL);
     thread_t* t = thread_create(p, "kt_s", kentry, NULL, false, 0);
-    TEST_ASSERT(t->state == THREAD_STATE_READY);
+    TEST_ASSERT(t->state == T_READY);
     process_destroy(p);
     return true;
 }
@@ -191,7 +191,7 @@ static bool t_kt_name(void) {
 static bool t_kt_stk(void) {
     process_t* p = process_create("t_ktstk", NULL);
     thread_t* t = thread_create(p, "kt_stk", kentry, NULL, false, 0);
-    TEST_ASSERT(t->kernel_stack != NULL);
+    TEST_ASSERT(t->kstack != NULL);
     process_destroy(p);
     return true;
 }
@@ -200,7 +200,7 @@ static bool t_kt_ctx(void) {
     process_t* p = process_create("t_ktctx", NULL);
     thread_t* t = thread_create(p, "kt_ctx", kentry, (void*)0xDEAD, false, 0);
     TEST_ASSERT(t->context != NULL);
-    uintptr_t base = (uintptr_t)t->kernel_stack;
+    uintptr_t base = (uintptr_t)t->kstack;
     uintptr_t top  = base + KERNEL_STACK_SIZE;
     uintptr_t ctx  = (uintptr_t)t->context;
     TEST_ASSERT(ctx >= base && ctx < top);
@@ -247,7 +247,7 @@ static bool t_ut_nn(void) {
 static bool t_ut_stk(void) {
     process_t* p = process_create("t_utstk", NULL);
     thread_t* t = thread_create(p, "ut_stk", uentry, NULL, true, 0);
-    TEST_ASSERT(t->user_stack != NULL);
+    TEST_ASSERT(t->ustack != NULL);
     process_destroy(p);
     return true;
 }
@@ -384,7 +384,7 @@ static bool t_shared_tty(void) {
 
 static bool t_hdr_update(void) {
     process_t* p = process_create("t_hdr", NULL);
-    process_header_update(p); /* must not crash */
+    proc_hdr_update(p); /* must not crash */
     process_destroy(p);
     return true;
 }
@@ -392,7 +392,7 @@ static bool t_hdr_update(void) {
 static bool t_hdr_update_thr(void) {
     process_t* p = process_create("t_hdrth", NULL);
     thread_create(p, "th", kentry, NULL, false, 0);
-    process_header_update(p); /* must not crash with 1 thread */
+    proc_hdr_update(p); /* must not crash with 1 thread */
     process_destroy(p);
     return true;
 }
@@ -462,7 +462,7 @@ void test_multitasking(void) {
     run_test("kthread: SS = KERNEL_DS",       t_kt_ss);
     run_test("kthread: RDI = arg",            t_kt_arg);
     run_test("uthread: not null",             t_ut_nn);
-    run_test("uthread: user_stack not null",  t_ut_stk);
+    run_test("uthread: ustack not null",      t_ut_stk);
     run_test("uthread: context not null",     t_ut_ctx);
     run_test("uthread: RSP % 16 == 8 (ABI)", t_ut_align);
     run_test("tid: unique same process",      t_tid_same);
@@ -473,8 +473,8 @@ void test_multitasking(void) {
     run_test("process name truncation",       t_proc_ntrunc);
     run_test("thread name truncation",        t_thr_ntrunc);
     run_test("shared tty between processes",  t_shared_tty);
-    run_test("process_header_update no crash",t_hdr_update);
-    run_test("process_header_update+thread",  t_hdr_update_thr);
+    run_test("proc_hdr_update no crash",t_hdr_update);
+    run_test("proc_hdr_update+thread",  t_hdr_update_thr);
     run_test("terminate_by_tty no crash",     t_term_tty);
     run_test("thread_create_bootstrap",       t_bootstrap);
 

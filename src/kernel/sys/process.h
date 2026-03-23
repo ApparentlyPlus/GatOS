@@ -1,8 +1,7 @@
 /*
  * process.h - Process and Thread definitions
  *
- * This file defines the structures for Process Control Blocks (PCB) and
- * Thread Control Blocks (TCB), which are fundamental for multitasking.
+ * PCB and TCB definitions.
  *
  * Author: u/ApparentlyPlus
  */
@@ -27,11 +26,11 @@ typedef uint32_t pid_t;
 typedef uint32_t tid_t;
 
 typedef enum {
-    THREAD_STATE_READY,
-    THREAD_STATE_RUNNING,
-    THREAD_STATE_BLOCKED,
-    THREAD_STATE_SLEEPING,
-    THREAD_STATE_DEAD
+    T_READY,
+    T_RUNNING,
+    T_BLOCKED,
+    T_SLEEPING,
+    T_DEAD
 } thread_state_t;
 
 struct process;
@@ -43,17 +42,17 @@ typedef struct thread {
     
     thread_state_t state;
     cpu_context_t* context; // Pointer to the saved state on the kernel stack
-    void* kernel_stack;     // Base of the kernel stack
-    void* user_stack;       // Virtual address of the user stack
+    void* kstack;           // Base of the kernel stack
+    void* ustack;           // Virtual address of the user stack
     uint64_t fs_base;       // Thread Local Storage base
-    
-    uint8_t fpu_state[512] __attribute__((aligned(16))); // FPU/SSE/AVX state
 
-    uint64_t sleep_until;   // Timestamp for waking up
+    uint8_t fpu[512] __attribute__((aligned(16))); // FPU/SSE/AVX state
+
+    uint64_t wake_at;       // Timestamp for waking up
     avl_node_t sleep_node;  // AVL tree node for sleep queue
-    
-    struct thread* next;       // Next thread in the process (linked list)
-    struct thread* sched_next; // Next thread in the scheduler's ready queue
+
+    struct thread* next;    // Next thread in the process (linked list)
+    struct thread* rnext;   // Next thread in the scheduler's ready queue
 } thread_t;
 
 typedef struct process {
@@ -75,4 +74,4 @@ void thread_destroy(thread_t* thread);
 void process_destroy(process_t* process);
 process_t* process_get_all(void);
 void procs_kill_tty(tty_t* tty);
-void process_header_update(process_t* proc);
+void proc_hdr_update(process_t* proc);
