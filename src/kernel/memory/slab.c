@@ -186,8 +186,8 @@ static void slab_remove_from_list(slab_t** list_head, slab_t* slab) {
         slab->next->prev = slab->prev;
     }
 
-    slab->next    = NULL;
-    slab->prev    = NULL;
+    slab->next = NULL;
+    slab->prev = NULL;
     slab->list_id = SLAB_LIST_NONE;
 }
 
@@ -198,8 +198,8 @@ static void slab_add_to_list(slab_t** list_head, slab_t* slab, uint8_t list_id) 
     if (!slab) return;
 
     slab->list_id = list_id;
-    slab->next    = *list_head;
-    slab->prev    = NULL;
+    slab->next = *list_head;
+    slab->prev = NULL;
 
     if (*list_head) {
         (*list_head)->prev = slab;

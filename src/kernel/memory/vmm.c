@@ -509,7 +509,7 @@ vmo_ext* vmm_alloc_vm_object(void) {
     internal->magic = VM_OBJECT_MAGIC;
     internal->red_zone_pre = VM_OBJECT_RED_ZONE;
     internal->red_zone_post = VM_OBJECT_RED_ZONE;
-    internal->pg_size  = PAGE_SIZE;
+    internal->pg_size = PAGE_SIZE;
     internal->phys_base = 0;
 
     return internal;
@@ -626,9 +626,9 @@ vmm_status_t vmm_alloc(vmm_t* vmm_pub, size_t length, size_t flags, void* arg,
         return VMM_ERR_NO_MEMORY;
     }
 
-    obj->public.base   = found_base;
+    obj->public.base = found_base;
     obj->public.length = length;
-    obj->public.flags  = flags;
+    obj->public.flags = flags;
     vma_insert(vmm, obj);
 
     if (flags & VM_FLAG_LAZY) {
@@ -652,16 +652,16 @@ vmm_status_t vmm_alloc(vmm_t* vmm_pub, size_t length, size_t flags, void* arg,
     }
 
     obj->phys_base = (flags & VM_FLAG_MMIO) ? 0 : phys_base;
-    bool is_user_vmm  = !vmm->is_kernel;
+    bool is_user_vmm = !vmm->is_kernel;
     uint64_t pt_flags = vmm_convert_vm_flags(flags, vmm->is_kernel);
-    bool allow_huge   = !(flags & (VM_FLAG_MMIO | VM_FLAG_LAZY));
-    bool any_huge     = false;
+    bool allow_huge = !(flags & (VM_FLAG_MMIO | VM_FLAG_LAZY));
+    bool any_huge = false;
 
     size_t offset = 0;
     while (offset < length) {
         uintptr_t virt_cur = obj->public.base + offset;
-        uint64_t  phys_cur = phys_base + offset;
-        size_t    remain   = length - offset;
+        uint64_t phys_cur = phys_base + offset;
+        size_t remain = length - offset;
         bool use_2mb = allow_huge &&
                        (virt_cur & (PAGE_2MB - 1)) == 0 &&
                        (phys_cur & (PAGE_2MB - 1)) == 0 &&
@@ -757,9 +757,9 @@ vmm_status_t vmm_alloc_at(vmm_t* vmm_pub, void* desired_addr, size_t length,
         return VMM_ERR_NO_MEMORY;
     }
 
-    obj->public.base   = desired;
+    obj->public.base = desired;
     obj->public.length = length;
-    obj->public.flags  = flags;
+    obj->public.flags = flags;
     vma_insert(vmm, obj);
 
     uint64_t phys_base = 0;
@@ -776,16 +776,16 @@ vmm_status_t vmm_alloc_at(vmm_t* vmm_pub, void* desired_addr, size_t length,
     }
 
     obj->phys_base = (flags & VM_FLAG_MMIO) ? 0 : phys_base;
-    bool is_user_vmm  = !vmm->is_kernel;
+    bool is_user_vmm = !vmm->is_kernel;
     uint64_t pt_flags = vmm_convert_vm_flags(flags, vmm->is_kernel);
-    bool allow_huge   = !(flags & (VM_FLAG_MMIO | VM_FLAG_LAZY));
-    bool any_huge     = false;
+    bool allow_huge = !(flags & (VM_FLAG_MMIO | VM_FLAG_LAZY));
+    bool any_huge = false;
 
     size_t offset = 0;
     while (offset < length) {
         uintptr_t virt_cur = desired + offset;
-        uint64_t  phys_cur = phys_base + offset;
-        size_t    remain   = length - offset;
+        uint64_t phys_cur = phys_base + offset;
+        size_t remain = length - offset;
         bool use_2mb = allow_huge &&
                        (virt_cur & (PAGE_2MB - 1)) == 0 &&
                        (phys_cur & (PAGE_2MB - 1)) == 0 &&
@@ -1176,7 +1176,7 @@ bool vmm_check_buffer(vmm_t* vmm_pub, const void* ptr, size_t size, size_t requi
 
     uintptr_t start = (uintptr_t)ptr;
     if (size > (UINTPTR_MAX - start)) return false;
-    uintptr_t end   = start + size;
+    uintptr_t end = start + size;
 
     bool lock_flags = spinlock_acquire(&vmm->lock);
 

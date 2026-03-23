@@ -144,7 +144,7 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
         }
 
         case SYS_READ: {
-            char*  buf   = (char*)registers[9];
+            char* buf = (char*)registers[9];
             size_t count = (size_t)registers[10];
 
             if (!buf || count == 0) {
@@ -193,7 +193,7 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
         }
         
         case SYS_TTY_CTRL: {
-            uint64_t cmd  = registers[9];
+            uint64_t cmd = registers[9];
             uint64_t arg2 = registers[10];
             
             tty_t* tty = current->process->tty;
@@ -214,9 +214,7 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
                     break;
                 }
                 case TTY_CTRL_GET_DIMS: {
-                    // Pack width and height into a single 64-bit return value
-                    // High 32 bits is height (excluding sticky header rows)
-                    // Low 32 bits is width
+                    // height in high 32 bits, width in low 32
                     uint32_t width = (uint32_t)tty->console->width;
                     uint32_t height = (uint32_t)(tty->console->height - tty->console->header_rows);
                     registers[14] = ((uint64_t)height << 32) | (uint64_t)width;
@@ -231,7 +229,7 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
 
         case SYS_SET_FS_BASE: {
             uint64_t base = registers[9];
-            // Disallow setting FS base to values in the kernel space range to prevent abuse
+            // don't let userspace point FS into kernel memory
             if (base >= 0x0000800000000000ULL) {
                 registers[14] = (uint64_t)-1;
                 break;

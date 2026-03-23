@@ -23,7 +23,7 @@
 
 static bool inited = false;
 static uint64_t range_start = 0;
-static uint64_t range_end   = 0;
+static uint64_t range_end = 0;
 static uint64_t min_block = PMM_MIN_ORDER_PAGE_SIZE;
 static uint32_t max_order = 0;
 static uint32_t order_count = 0;
@@ -175,8 +175,8 @@ static uint64_t pop_head(uint32_t order) {
 static void push_head(uint32_t order, uint64_t block_phys) {
     uint64_t old_head = free_heads[order];
     pmm_free_header_t* hdr = (pmm_free_header_t*)PHYSMAP_P2V(block_phys);
-    hdr->magic     = PMM_FREE_BLOCK_MAGIC;
-    hdr->order     = order;
+    hdr->magic = PMM_FREE_BLOCK_MAGIC;
+    hdr->order = order;
     hdr->next_phys = (old_head == EMPTY_SENTINEL) ? EMPTY_SENTINEL : old_head;
     hdr->prev_phys = EMPTY_SENTINEL;
 
@@ -560,7 +560,7 @@ pmm_status_t pmm_mark_reserved_range(uint64_t start, uint64_t end) {
 
     uint64_t orig_start = start, orig_end = end;
     start = align_down(start, min_block);
-    end   = align_up(end, min_block);
+    end = align_up(end, min_block);
 
     if (start != orig_start || end != orig_end) {
         LOGF("[PMM] Adjusted reserved range [0x%lx, 0x%lx) to [0x%lx, 0x%lx)\n",

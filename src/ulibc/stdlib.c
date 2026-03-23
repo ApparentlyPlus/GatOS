@@ -216,7 +216,7 @@ static block_t *coalesce(block_t *b) {
 #pragma region Split
 
 static void split_block(block_t *b, size_t size) {
-    size_t oh        = sizeof(block_t) + sizeof(bfooter_t);
+    size_t oh = sizeof(block_t) + sizeof(bfooter_t);
     size_t remaining = b->size - size;
     if (remaining < MIN_BLOCK_SIZE + oh) return;
 
@@ -232,13 +232,13 @@ static void split_block(block_t *b, size_t size) {
         size_t new_free = remaining - oh;
         if (b->arena) {
             b->arena->total_alloc -= remaining;
-            b->arena->total_free  += new_free;
+            b->arena->total_free += new_free;
         }
         uheap.total_alloc -= remaining;
-        uheap.total_free  += new_free;
+        uheap.total_free += new_free;
     }
 
-    b->size       = size;
+    b->size = size;
     b->total_size = sizeof(block_t) + size + sizeof(bfooter_t);
 
     bfooter_t *f = get_footer(b);
@@ -246,12 +246,12 @@ static void split_block(block_t *b, size_t size) {
     f->header = b; f->magic = b->magic;
 
     block_t *nb = (block_t *)((uint8_t *)b + b->total_size);
-    nb->magic      = BLOCK_MAGIC_FREE;
-    nb->rz_pre     = nb->rz_post = BLOCK_RED_ZONE;
-    nb->size       = remaining - oh;
+    nb->magic = BLOCK_MAGIC_FREE;
+    nb->rz_pre = nb->rz_post = BLOCK_RED_ZONE;
+    nb->size = remaining - oh;
     nb->total_size = remaining;
-    nb->arena      = b->arena;
-    nb->next_free  = nb->prev_free = NULL;
+    nb->arena = b->arena;
+    nb->next_free = nb->prev_free = NULL;
 
     bfooter_t *nf = get_footer(nb);
     nf->rz_pre = nf->rz_post = BLOCK_RED_ZONE;
@@ -279,27 +279,27 @@ static arena_t *arena_create(size_t min_body) {
 
     arena->magic = ARENA_MAGIC;
     arena->start = (uintptr_t)region + ARENA_HDR_SIZE;
-    arena->end   = (uintptr_t)region + total;
-    arena->size  = total;
+    arena->end = (uintptr_t)region + total;
+    arena->size = total;
 
     // Initial free block covers the entire body
-    size_t body    = total - ARENA_HDR_SIZE;
+    size_t body = total - ARENA_HDR_SIZE;
     size_t payload = body - sizeof(block_t) - sizeof(bfooter_t);
 
     block_t *b = (block_t *)arena->start;
-    b->magic      = BLOCK_MAGIC_FREE;
-    b->rz_pre     = b->rz_post = BLOCK_RED_ZONE;
-    b->size       = payload;
+    b->magic = BLOCK_MAGIC_FREE;
+    b->rz_pre = b->rz_post = BLOCK_RED_ZONE;
+    b->size = payload;
     b->total_size = body;
-    b->arena      = arena;
-    b->next_free  = b->prev_free = NULL;
+    b->arena = arena;
+    b->next_free = b->prev_free = NULL;
 
     bfooter_t *f = get_footer(b);
     f->rz_pre = f->rz_post = BLOCK_RED_ZONE;
     f->header = b; f->magic = BLOCK_MAGIC_FREE;
 
     arena->first_block = b;
-    arena->total_free  = payload;
+    arena->total_free = payload;
     arena->total_alloc = 0;
 
     // Append to arena list
@@ -349,7 +349,7 @@ static void try_shrink(arena_t *arena) {
 
     // Arena is empty when its free payload equals body - block overhead
     size_t body = arena->size - ARENA_HDR_SIZE;
-    size_t oh   = sizeof(block_t) + sizeof(bfooter_t);
+    size_t oh = sizeof(block_t) + sizeof(bfooter_t);
     if (arena->total_free + oh >= body)
         arena_destroy(arena);
 }
@@ -384,7 +384,7 @@ static void *heap_alloc(size_t size, bool zero) {
     if (!b) {
         // No block fits; expand the heap with a new arena
         size_t needed = size + sizeof(block_t) + sizeof(bfooter_t);
-        size_t body   = needed > MIN_ARENA_BODY ? needed : MIN_ARENA_BODY;
+        size_t body = needed > MIN_ARENA_BODY ? needed : MIN_ARENA_BODY;
         if (!arena_create(body)) return NULL;
         b = uheap.free_list;
         while (b && b->size < size) b = b->next_free;
@@ -398,10 +398,10 @@ static void *heap_alloc(size_t size, bool zero) {
     get_footer(b)->magic = BLOCK_MAGIC_USED;
 
     if (b->arena) {
-        b->arena->total_free  -= b->size;
+        b->arena->total_free -= b->size;
         b->arena->total_alloc += b->size;
     }
-    uheap.total_free  -= b->size;
+    uheap.total_free -= b->size;
     uheap.total_alloc += b->size;
     uheap.alloc_count++;
 
@@ -422,10 +422,10 @@ static void heap_free(void *ptr) {
 
     if (b->arena) {
         b->arena->total_alloc -= b->size;
-        b->arena->total_free  += b->size;
+        b->arena->total_free += b->size;
     }
     uheap.total_alloc -= b->size;
-    uheap.total_free  += b->size;
+    uheap.total_free += b->size;
     uheap.alloc_count--;
 
     fl_insert(b);
@@ -498,12 +498,12 @@ void *realloc(void *ptr, size_t size) {
             fl_remove(nxt);
             size_t oh = sizeof(block_t) + sizeof(bfooter_t);
             if (b->arena) {
-                b->arena->total_free  -= nxt->size;
+                b->arena->total_free -= nxt->size;
                 b->arena->total_alloc += nxt->size + oh;
             }
-            uheap.total_free  -= nxt->size;
+            uheap.total_free -= nxt->size;
             uheap.total_alloc += nxt->size + oh;
-            b->size       = combined;
+            b->size = combined;
             b->total_size += nxt->total_size;
             bfooter_t *f = get_footer(b);
             f->header = b; f->magic = BLOCK_MAGIC_USED;

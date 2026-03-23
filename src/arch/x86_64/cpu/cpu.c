@@ -119,8 +119,8 @@ void cpu_init(void)
     uint32_t max_basic = a;
 
     cpuid(1, 0, &a, &b, &c, &d);
-    cpuinfo.family   = ((a >> 8) & 0xF) + ((a >> 20) & 0xFF);
-    cpuinfo.model    = ((a >> 4) & 0xF) | ((a >> 12) & 0xF0);
+    cpuinfo.family = ((a >> 8) & 0xF) + ((a >> 20) & 0xFF);
+    cpuinfo.model = ((a >> 4) & 0xF) | ((a >> 12) & 0xF0);
     cpuinfo.stepping = (a & 0xF);
 
     if (d & (1 << 6))  cpuinfo.features |= CF_PAE;
@@ -183,8 +183,7 @@ void cpu_init(void)
         cpu_enable_feature(CF_SMAP);
     }
 
-    // Set active GS_BASE to our cpu_local structure for Ring 0.
-    // Set KERNEL_GS_BASE to 0 (will be used to store User GS during Ring 0 execution).
+    // GS_BASE -> cpu_local in ring 0, KERNEL_GS_BASE holds user GS on entry
     write_msr(MSR_GS_BASE, (uint64_t)&cpu_local);
     write_msr(MSR_KERNEL_GS_BASE, 0);
 
@@ -314,7 +313,7 @@ bool cpu_is_feature_enabled(cpu_feature_t feature)
 
         case CF_AVX:
         case CF_AVX2:
-            cr4  = read_cr4();
+            cr4 = read_cr4();
             xcr0 = read_xcr0();
             return ((cr4 & (1 << 18)) &&
                     (xcr0 & (1 << 0)) && (xcr0 & (1 << 1)) && (xcr0 & (1 << 2)));

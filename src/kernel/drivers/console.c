@@ -14,16 +14,16 @@
 #pragma region Statistics
 
 // Framebuffer hardware
-static uint8_t* fb      = NULL;
+static uint8_t* fb = NULL;
 static uint64_t fb_phys = 0;
-static uint32_t fb_w    = 0;
-static uint32_t fb_h    = 0;
+static uint32_t fb_w = 0;
+static uint32_t fb_h = 0;
 static uint32_t fb_pitch = 0;
-static uint32_t fb_bpp  = 0;
-static size_t   fb_sz   = 0;
+static uint32_t fb_bpp = 0;
+static size_t fb_sz = 0;
 
-static size_t fw   = 8;
-static size_t fh   = 16;
+static size_t fw = 8;
+static size_t fh = 16;
 static size_t cols = 0;
 static size_t rows = 0;
 
@@ -37,10 +37,10 @@ static const uint32_t VGA_PALETTE[16] = {
 };
 
 // Panic cursor/color (fb dims/addr shared with regular console via fb_*)
-static uint32_t ccx  = 0;
-static uint32_t ccy  = 0;
-static uint8_t  cfg  = CONSOLE_COLOR_WHITE;
-static uint8_t  cbg  = CONSOLE_COLOR_RED;
+static uint32_t ccx = 0;
+static uint32_t ccy = 0;
+static uint8_t cfg = CONSOLE_COLOR_WHITE;
+static uint8_t cbg = CONSOLE_COLOR_RED;
 static char     cbuf[2048];
 
 #pragma region Hardware Drawing
@@ -121,7 +121,7 @@ static void refresh_locked(console_t* con) {
 static void scroll(console_t* con) {
     if (con->on) render_cursor(con, false);
     size_t first = con->header_rows;
-    size_t rows  = con->height - first;
+    size_t rows = con->height - first;
     if (!rows) return;
 
     if (rows > 1)
@@ -136,18 +136,18 @@ static void scroll(console_t* con) {
     if (fb) {
         extern tty_t* active_tty;
         if (active_tty && active_tty->console == con) {
-            uint32_t row_h    = (uint32_t)(fh + PADDING_Y);
-            size_t first_px   = first * row_h;
-            size_t src_off    = (first_px + row_h) * fb_pitch;
-            size_t dst_off    = first_px * fb_pitch;
+            uint32_t row_h = (uint32_t)(fh + PADDING_Y);
+            size_t first_px = first * row_h;
+            size_t src_off = (first_px + row_h) * fb_pitch;
+            size_t dst_off = first_px * fb_pitch;
             size_t move_bytes = (rows - 1) * row_h * fb_pitch;
 
             if (move_bytes > 0)
                 kmemmove(fb + dst_off, fb + src_off, move_bytes);
 
-            uint32_t bg_color    = VGA_PALETTE[con->bg];
-            size_t last_row_off  = (con->height - 1) * row_h * fb_pitch;
-            size_t last_row_len  = row_h * fb_pitch;
+            uint32_t bg_color = VGA_PALETTE[con->bg];
+            size_t last_row_off = (con->height - 1) * row_h * fb_pitch;
+            size_t last_row_len = row_h * fb_pitch;
             if (fb_bpp == 32) {
                 uint32_t* p = (uint32_t*)(fb + last_row_off);
                 for (size_t i = 0; i < last_row_len / 4; i++) p[i] = bg_color;
@@ -223,7 +223,7 @@ void con_clear(console_t* con, uint8_t background) {
     extern tty_t* active_tty;
     if (active_tty && active_tty->console == con) {
         uint32_t bg_color = VGA_PALETTE[con->bg];
-        size_t start_py  = con->header_rows * (fh + PADDING_Y);
+        size_t start_py = con->header_rows * (fh + PADDING_Y);
         if (fb_bpp == 32) {
             size_t off = start_py * fb_pitch / 4;
             uint32_t* p = (uint32_t*)fb + off;
@@ -385,11 +385,11 @@ static inline void crash_pix(uint32_t x, uint32_t y, uint32_t color) {
  * crash_scroll - Pixel-level scroll of the crash view by one text row
  */
 static void crash_scroll(void) {
-    uint32_t row_h   = (uint32_t)fh + PADDING_Y;
+    uint32_t row_h = (uint32_t)fh + PADDING_Y;
     size_t row_bytes = row_h * fb_pitch;
-    size_t total     = (size_t)fb_h * fb_pitch;
+    size_t total = (size_t)fb_h * fb_pitch;
     kmemmove(fb, fb + row_bytes, total - row_bytes);
-    uint32_t bg   = VGA_PALETTE[cbg];
+    uint32_t bg = VGA_PALETTE[cbg];
     uint8_t* last = fb + total - row_bytes;
     if (fb_bpp == 32) {
         uint32_t* p = (uint32_t*)last;
@@ -474,11 +474,11 @@ void console_init(multiboot_parser_t* parser) {
     font_init();
     multiboot_framebuffer_t* mbfb = multiboot_get_framebuffer(parser);
     if (!mbfb) return;
-    fb_phys   = mbfb->addr;
-    fb_w  = mbfb->width;  fb_h = mbfb->height;
-    fb_pitch  = mbfb->pitch;  fb_bpp    = mbfb->bpp;
-    fb_sz   = fb_h * fb_pitch;
-    fb   = (uint8_t*)PHYSMAP_P2V(fb_phys);
+    fb_phys = mbfb->addr;
+    fb_w = mbfb->width;  fb_h = mbfb->height;
+    fb_pitch = mbfb->pitch;  fb_bpp = mbfb->bpp;
+    fb_sz = fb_h * fb_pitch;
+    fb = (uint8_t*)PHYSMAP_P2V(fb_phys);
     fh = font_get_current()->header->charsize;
     cols = fb_w / fw;
     rows = fb_h / (fh + PADDING_Y);

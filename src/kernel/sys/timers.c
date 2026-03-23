@@ -231,7 +231,7 @@ void timer_init(void) {
     irq_register(INT_FIRST_INTERRUPT, (irq_handler_t)timer_handler);
     ioapic_unmask(0);
 
-    // Start the Local APIC timer in periodic mode (10ms interval) for scheduling
+    // kick off the LAPIC timer, 10ms periodic for preemption
     lapic_timer_periodic(10000, INT_FIRST_INTERRUPT);
 
     // Check for TSC Deadline support

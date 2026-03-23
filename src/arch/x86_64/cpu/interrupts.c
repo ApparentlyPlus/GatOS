@@ -90,7 +90,7 @@ void load_idt(void* idt_addr)
  */
 void idt_init(void)
 {
-    // Disable the legacy 8259 PICs to prevent interference with the APIC.
+    // kill the legacy PIC - APIC's taking over
     disable_pic();
 
     // The stubs are spaced 16 bytes apart in the interrupt_handler_0 block
@@ -156,7 +156,7 @@ cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
                 panicf_c(context, "Bad user SS in iret frame (ss=0x%04x cs=0x%04x vec=%lu)", ss, cs, vec);
         }
 
-        // Exceptions (0-31) do not need EOI; hardware interrupts do.
+        // exceptions don't need EOI, only real hw interrupts
         if (vec >= INT_FIRST_INTERRUPT) {
             lapic_eoi();
         }
@@ -187,7 +187,7 @@ cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
             case INT_SIMD_ERROR:           panic_msg = "SIMD exception"; break;
         }
 
-        // Demand paging: check process VMM first, then kernel VMM as fallback.
+        // demand paging - try proc VMM first, fall back to kernel's
         if (vec == INT_PAGE_FAULT) {
             uint64_t cr2;
             __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
@@ -239,8 +239,7 @@ cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
                 if (vec == INT_PAGE_FAULT) {
                     uint64_t cr2;
                     __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
-                    // Fault at address 0 with an instruction fetch usually means a thread
-                    // returned from its entry point with 0 on the stack.
+                    // null rip + instr fetch = thread fell off its entry point
                     if (cr2 == 0 && (context->error_code & 16)) {
                         len = snprintf_(buf, sizeof(buf), "\n[Thread %u from %s (PID %u)] Returned from entry point (RIP: 0x%lx)\n",
                                        current->tid, current->process->name, current->process->pid, context->iret_rip);
@@ -282,7 +281,7 @@ cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
         panic_c(panic_msg, context);
     }
 
-    // No handler registered; still must EOI to prevent the APIC from blocking future interrupts.
+    // no handler, but still gotta EOI or we'll never get another interrupt
     else {
         LOGF("[INT] Unhandled interrupt vector: %d\n", vec);
         lapic_eoi();

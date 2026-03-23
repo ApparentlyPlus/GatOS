@@ -244,7 +244,7 @@ static void draw_mem(console_t* con, const layout_t* L) {
     /* --- Physical memory --- */
     pmm_stats_t ps;
     pmm_get_stats(&ps);
-    uint64_t min_blk    = pmm_min_block_size();
+    uint64_t min_blk = pmm_min_block_size();
     uint64_t phys_total = pmm_managed_size();
 
     uint64_t phys_free = 0, largest = 0;
@@ -254,8 +254,8 @@ static void draw_mem(console_t* con, const layout_t* L) {
         if (!largest && ps.free_blocks[i]) largest = bsz;
     }
     uint64_t phys_used = phys_total - phys_free;
-    int      used_pct  = phys_total ? (int)(phys_used * 100 / phys_total) : 0;
-    uint64_t frag      = phys_free  ? (100 - (largest * 100 / phys_free)) : 0;
+    int used_pct = phys_total ? (int)(phys_used * 100 / phys_total) : 0;
+    uint64_t frag = phys_free ? (100 - (largest * 100 / phys_free)) : 0;
 
     section(con, L, "PHYSICAL MEMORY");
 
@@ -410,7 +410,7 @@ static void dash_draw(void) {
 
     /* Update sticky header with current uptime */
     uint64_t ms = get_uptime_ms();
-    uint64_t s  = ms / 1000, m = s / 60, h = m / 60;
+    uint64_t s = ms / 1000, m = s / 60, h = m / 60;
     s %= 60; m %= 60;
     char hdr[80];
     ksnprintf(hdr, sizeof(hdr), "  GatOS Kernel Dashboard  |  Uptime: %02lu:%02lu:%02lu",
@@ -418,7 +418,7 @@ static void dash_draw(void) {
     con_header_write(con, 0, hdr, CONSOLE_COLOR_WHITE, CONSOLE_COLOR_MAGENTA);
 
     tty_t* active = active_tty;
-    active_tty  = NULL;
+    active_tty = NULL;
 
     con_clear(con, CONSOLE_COLOR_BLACK);
     cl(con, CONSOLE_COLOR_LIGHT_GRAY, CONSOLE_COLOR_BLACK);

@@ -23,7 +23,7 @@
 static uint64_t fb_pd[PAGE_ENTRIES] __attribute__((aligned(PAGE_SIZE)));
 
 uint64_t KSTART = (uint64_t)&KPHYS_START;
-uint64_t KEND   = (uint64_t)&KPHYS_END;
+uint64_t KEND = (uint64_t)&KPHYS_END;
 
 /*
  * get_physmap_start - Gets the start address of the physmap region (virtual)
@@ -92,16 +92,16 @@ void cleanup_kpt(uintptr_t start, uintptr_t end) {
 
     // Compute virtual addresses (higher half only)
     uintptr_t virt_start = start + KERNEL_VIRTUAL_BASE;
-    uintptr_t virt_end   = end   + KERNEL_VIRTUAL_BASE;
+    uintptr_t virt_end = end + KERNEL_VIRTUAL_BASE;
 
     // Get page table indices for higher half mapping only
     size_t hh_pml4 = PML4_INDEX(virt_start);
     size_t hh_pdpt = PDPT_INDEX(virt_start);
     size_t hh_pd_start = PD_INDEX(virt_start);
-    size_t hh_pd_end   = PD_INDEX(virt_end - 1);
+    size_t hh_pd_end = PD_INDEX(virt_end - 1);
 
     uintptr_t start_page = start >> 12;
-    uintptr_t end_page   = (end - 1) >> 12;
+    uintptr_t end_page = (end - 1) >> 12;
     size_t total_pages = end_page - start_page + 1;
     size_t total_pds = hh_pd_end + 1;
 
@@ -161,8 +161,8 @@ uint64_t reserve_required_tablespace(multiboot_parser_t* multiboot) {
 
     // Table space sized for RAM only
     uint64_t total_pages = total_RAM / PAGE_SIZE;
-    uint64_t total_PTs   = CEIL_DIV(total_pages, PAGE_ENTRIES);
-    uint64_t total_PDs   = CEIL_DIV(total_PTs, PAGE_ENTRIES);
+    uint64_t total_PTs = CEIL_DIV(total_pages, PAGE_ENTRIES);
+    uint64_t total_PDs = CEIL_DIV(total_PTs, PAGE_ENTRIES);
     uint64_t total_PDPTs = CEIL_DIV(total_PDs, PAGE_ENTRIES);
     uint64_t total_PML4s = CEIL_DIV(total_PDPTs, PAGE_ENTRIES);
 
@@ -174,12 +174,12 @@ uint64_t reserve_required_tablespace(multiboot_parser_t* multiboot) {
     multiboot_framebuffer_t* fb = multiboot_get_framebuffer(multiboot);
     if (fb) { fb_phys = fb->addr; fb_size = (uint64_t)fb->height * fb->pitch; }
 
-    physmap.total_RAM   = total_RAM;
-    physmap.fb_phys     = fb_phys;
-    physmap.fb_size     = fb_size;
+    physmap.total_RAM = total_RAM;
+    physmap.fb_phys = fb_phys;
+    physmap.fb_size = fb_size;
     physmap.total_pages = total_pages;
-    physmap.total_PTs   = total_PTs;
-    physmap.total_PDs   = total_PDs;
+    physmap.total_PTs = total_PTs;
+    physmap.total_PDs = total_PDs;
     physmap.total_PDPTs = total_PDPTs;
     physmap.total_PML4s = total_PML4s;
     physmap.tables_base = (uintptr_t)get_kend(true);
@@ -204,17 +204,17 @@ void build_physmap() {
         return;
     }
 
-    uintptr_t pt_base   = physmap.tables_base;
-    uintptr_t pd_base   = pt_base  + physmap.total_PTs   * PAGE_SIZE;
-    uintptr_t pdpt_base = pd_base  + physmap.total_PDs   * PAGE_SIZE;
+    uintptr_t pt_base = physmap.tables_base;
+    uintptr_t pd_base = pt_base + physmap.total_PTs * PAGE_SIZE;
+    uintptr_t pdpt_base = pd_base + physmap.total_PDs * PAGE_SIZE;
     uintptr_t pml4_base = pdpt_base + physmap.total_PDPTs * PAGE_SIZE;
 
     typedef uint64_t pte_t;
     typedef pte_t page_table_t[PAGE_ENTRIES];
-    page_table_t* PTs   = (page_table_t*)pt_base;
-    page_table_t* PDs   = (page_table_t*)pd_base;
+    page_table_t* PTs = (page_table_t*)pt_base;
+    page_table_t* PDs = (page_table_t*)pd_base;
     page_table_t* PDPTs = (page_table_t*)pdpt_base;
-    page_table_t* PML4  = (page_table_t*)pml4_base;
+    page_table_t* PML4 = (page_table_t*)pml4_base;
 
     // Zero all tables
     kmemset((void*)physmap.tables_base, 0,
@@ -239,7 +239,7 @@ void build_physmap() {
         if (pdpt_s == pdpt_e) {
             kmemset(fb_pd, 0, sizeof(fb_pd));
             uint64_t base2m = physmap.fb_phys & ~(uint64_t)(0x1FFFFF);
-            uint64_t end2m  = (fb_end + 0x1FFFFF)  & ~(uint64_t)(0x1FFFFF);
+            uint64_t end2m = (fb_end + 0x1FFFFF) & ~(uint64_t)(0x1FFFFF);
             for (uint64_t pa2m = base2m; pa2m < end2m; pa2m += 0x200000)
                 fb_pd[(pa2m >> 21) & 0x1FF] =
                     pa2m | (PAGE_PRESENT | PAGE_WRITABLE | PAGE_HUGE | PAGE_PWT | PAGE_PCD);
@@ -270,10 +270,10 @@ void build_physmap() {
     // Build new PML4
     kmemset(PML4, 0, PAGE_SIZE);
     uint64_t* old_pml4 = getPML4();
-    size_t kernel_index  = PML4_INDEX(KERNEL_VIRTUAL_BASE);
+    size_t kernel_index = PML4_INDEX(KERNEL_VIRTUAL_BASE);
     size_t physmap_index = PML4_INDEX(PHYSMAP_VIRTUAL_BASE);
     PANIC_ASSERT(kernel_index != physmap_index);
-    PML4[0][kernel_index]  = old_pml4[kernel_index];
+    PML4[0][kernel_index] = old_pml4[kernel_index];
     PML4[0][physmap_index] = KERNEL_V2P(&PDPTs[0]) | (PAGE_PRESENT | PAGE_WRITABLE);
 
     PML4_switch(KERNEL_V2P(pml4_base));

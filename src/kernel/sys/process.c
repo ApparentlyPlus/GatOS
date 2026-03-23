@@ -187,7 +187,7 @@ thread_t* thread_create(process_t* process, const char* name, void (*entry)(void
      * This avoids fninit + fxsave, which would capture the calling context's
      * live XMM registers and potentially leak kernel FPU state into the thread.
      */
-    *(uint16_t *)(&thread->fpu[0])  = 0x037F;
+    *(uint16_t *)(&thread->fpu[0]) = 0x037F;
     *(uint32_t *)(&thread->fpu[24]) = 0x1F80;
 
     thread->kstack = kmalloc(KERNEL_STACK_SIZE);

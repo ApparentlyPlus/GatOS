@@ -31,13 +31,13 @@ static uint64_t ticks_per_ms = 0;
  */
 void disable_pic(void) {
 
-    // Standard initialization sequence: put PIC into a known state before masking.
+    // reinit the PIC to a known state before masking
     outb(PIC_COMMAND_MASTER, ICW_1);
     io_wait();
     outb(PIC_COMMAND_SLAVE, ICW_1);
     io_wait();
 
-    // Map PIC vectors out of the way of CPU exceptions (vectors 0-31).
+    // remap IRQs above the exception range (0-31)
     outb(PIC_DATA_MASTER, ICW_2_M);
     io_wait();
     outb(PIC_DATA_SLAVE, ICW_2_S);
@@ -148,7 +148,7 @@ void lapic_init(void) {
  * lapic_send_ipi - Send an Inter-Processor Interrupt to another core
  */
 void lapic_send_ipi(uint32_t dest_id, uint8_t vector) {
-    // Wait for delivery status clear (ICR Low bit 12) before writing - standard xAPIC IPI protocol.
+    // spin until delivery bit clears before writing ICR
     while (lapic_read(LAPIC_ICR_LOW) & (1 << 12));
 
     lapic_write(LAPIC_ICR_HIGH, dest_id << 24);
@@ -247,8 +247,7 @@ void ioapic_redirect(uint8_t irq, uint8_t vector, uint32_t dest_core, uint16_t f
 
     entry |= ((uint64_t)dest_core << 56);
     
-    // Default to MASKED (Bit 16 = 1). 
-    // Drivers must explicitly call ioapic_unmask() when they are ready to handle it
+    // start masked, drivers call ioapic_unmask() when ready
     entry |= (1 << 16);
     
     ioapic_set_entry(irq, entry);
@@ -304,7 +303,7 @@ void ioapic_init(void) {
     uint32_t ver = ioapic_read(IOAPIC_VER);
     uint32_t count = ((ver >> 16) & 0xFF) + 1;
 
-    // Mask all entries and establish a default 1:1 ISA mapping (vector offset 32).
+    // default 1:1 ISA mapping, everything masked
     uint32_t gsi_base = ioapic_rec->global_system_interrupt_base;
     uint32_t bsp_id = lapic_get_id();
 
