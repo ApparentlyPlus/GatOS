@@ -27,6 +27,8 @@
  * Optionally, for some vectors the cpu will push a 64-bit error code (see the table below for specifics). 
  * This structure is known as an iret frame, because to return from an interrupt we use the iret instruction, 
  * which pops those five values from the stack.
+ *
+ * Author: u/ApparentlyPlus
  */
 
 .intel_syntax noprefix
@@ -75,7 +77,7 @@ generic_interrupt_handler:
     push r15
     
     // Call our C interrupt dispatcher
-    // Ensure 16-byte stack alignment at call boundary (SysV ABI)
+    // Ensure 16b stack alignment at call boundary (SysV ABI)
     mov rdi, rsp
     sub rsp, 8
     call interrupt_dispatcher

@@ -21,6 +21,7 @@
 #include <klibc/string.h>
 #include <klibc/stdio.h>
 
+// Scheduler state
 static thread_t* cur = NULL;
 static thread_t* rq_head = NULL;
 static thread_t* rq_tail = NULL;
@@ -53,6 +54,10 @@ static int sleep_cmp(const avl_node_t* a, const avl_node_t* b) {
  * fpu_nm_handler - Handles the FPU not available interrupt
  */
 static cpu_context_t* fpu_nm_handler(cpu_context_t* ctx) {
+
+    // In here, we lazily save/restore the FPU state only when a thread that doesn't own the FPU tries to use it
+    // This avoids unnecessary FPU state saves/restores on every context switch, which can be expensive
+
     __asm__ volatile("clts" ::: "memory");
 
     if (!cur) {
@@ -102,8 +107,8 @@ void sched_init(void) {
     cur = thread_create_bootstrap(kproc, "kernel_main");
     if (!cur) panic("Failed to bootstrap kernel main thread!");
 
-    // Use the boot stack for kernel_main to keep the current execution stack valid.
-    // The boot stack is 32 KiB; we treat the top 16 KiB as the kernel stack.
+    // Use the boot stack for kernel_main to keep the current execution stack valid
+    // The boot stack is 32 KiB; we treat the top 16 KiB as the kernel stack
     extern char KERNEL_STACK_TOP;
     cur->kstack = (void *)((uintptr_t)&KERNEL_STACK_TOP - KERNEL_STACK_SIZE);
 
@@ -188,6 +193,7 @@ void sched_drop_proc(process_t* proc) {
         }
     }
 
+    // Remove from sleep tree
     avl_node_t* sn = avl_min(&sleep_tree);
     while (sn) {
         thread_t* t = AVL_ENTRY(sn, thread_t, sleep_node);
@@ -197,6 +203,7 @@ void sched_drop_proc(process_t* proc) {
         sn = next_sn;
     }
 
+    // Remove from dead queue
     prev = NULL;
     curr = dead_head;
     while (curr) {
@@ -238,6 +245,7 @@ cpu_context_t* sched_schedule(cpu_context_t* ctx) {
         }
     }
 
+    // Check the sleep tree for any threads that need to be woken up
     avl_node_t* sn = avl_min(&sleep_tree);
     while (sn) {
         thread_t* sleeper = AVL_ENTRY(sn, thread_t, sleep_node);
@@ -250,6 +258,7 @@ cpu_context_t* sched_schedule(cpu_context_t* ctx) {
 
     process_t* old_proc = cur ? cur->process : NULL;
 
+    // If there are no ready threads, run the idle thread
     while (dead_head) {
         thread_t* thread = dead_head;
         dead_head = thread->rnext;

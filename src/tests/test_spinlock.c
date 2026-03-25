@@ -4,6 +4,8 @@
  * Tests every public spinlock function: init, acquire, try_acquire, release,
  * is_locked. Covers IRQ state saving/restoring, independence of multiple locks,
  * sequential reuse, try-fail semantics, and high-frequency churn stability.
+ * 
+ * Author: Claude Code
  */
 
 #include <kernel/sys/spinlock.h>

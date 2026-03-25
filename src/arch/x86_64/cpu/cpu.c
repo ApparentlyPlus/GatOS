@@ -21,9 +21,7 @@ cpu_local_t cpu_local = {0};
  */
 void cpuid(uint32_t eax, uint32_t ecx, uint32_t* a, uint32_t* b, uint32_t* c, uint32_t* d)
 {
-    __asm__ volatile("cpuid"
-                     : "=a"(*a), "=b"(*b), "=c"(*c), "=d"(*d)
-                     : "a"(eax), "c"(ecx));
+    __asm__ volatile("cpuid" : "=a"(*a), "=b"(*b), "=c"(*c), "=d"(*d) : "a"(eax), "c"(ecx));
 }
 
 /*
@@ -31,9 +29,9 @@ void cpuid(uint32_t eax, uint32_t ecx, uint32_t* a, uint32_t* b, uint32_t* c, ui
  */
 uint64_t read_msr(uint32_t msr)
 {
-    uint32_t low, high;
-    __asm__ volatile("rdmsr" : "=a"(low), "=d"(high) : "c"(msr));
-    return ((uint64_t)high << 32) | low;
+    uint32_t lo, hi;
+    __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(msr));
+    return ((uint64_t)hi << 32) | lo;
 }
 
 /*
@@ -41,9 +39,9 @@ uint64_t read_msr(uint32_t msr)
  */
 void write_msr(uint32_t msr, uint64_t value)
 {
-    uint32_t low = (uint32_t)value;
-    uint32_t high = (uint32_t)(value >> 32);
-    __asm__ volatile("wrmsr" :: "c"(msr), "a"(low), "d"(high));
+    uint32_t lo = (uint32_t)value;
+    uint32_t hi = (uint32_t)(value >> 32);
+    __asm__ volatile("wrmsr" :: "c"(msr), "a"(lo), "d"(hi));
 }
 
 /*
@@ -87,9 +85,9 @@ void write_cr4(uint64_t val)
  */
 uint64_t read_xcr0(void)
 {
-    uint32_t low, high;
-    __asm__ volatile("xgetbv" : "=a"(low), "=d"(high) : "c"(0));
-    return ((uint64_t)high << 32) | low;
+    uint32_t lo, hi;
+    __asm__ volatile("xgetbv" : "=a"(lo), "=d"(hi) : "c"(0));
+    return ((uint64_t)hi << 32) | lo;
 }
 
 /*
@@ -97,9 +95,9 @@ uint64_t read_xcr0(void)
  */
 void write_xcr0(uint64_t value)
 {
-    uint32_t low = (uint32_t)value;
-    uint32_t high = (uint32_t)(value >> 32);
-    __asm__ volatile("xsetbv" :: "a"(low), "d"(high), "c"(0));
+    uint32_t lo = (uint32_t)value;
+    uint32_t hi = (uint32_t)(value >> 32);
+    __asm__ volatile("xsetbv" :: "a"(lo), "d"(hi), "c"(0));
 }
 
 /*
@@ -107,10 +105,12 @@ void write_xcr0(uint64_t value)
  */
 void cpu_init(void)
 {
+    // Init the struct
     kmemset(&cpuinfo, 0, sizeof(cpuinfo));
 
     uint32_t a, b, c, d;
 
+    // 4b segments
     cpuid(0, 0, &a, &b, &c, &d);
     *((uint32_t*)&cpuinfo.vendor[0]) = b;
     *((uint32_t*)&cpuinfo.vendor[4]) = d;
@@ -118,11 +118,13 @@ void cpu_init(void)
     cpuinfo.vendor[12] = '\0';
     uint32_t max_basic = a;
 
+    // parse model info
     cpuid(1, 0, &a, &b, &c, &d);
     cpuinfo.family = ((a >> 8) & 0xF) + ((a >> 20) & 0xFF);
     cpuinfo.model = ((a >> 4) & 0xF) | ((a >> 12) & 0xF0);
     cpuinfo.stepping = (a & 0xF);
 
+    // feats
     if (d & (1 << 6))  cpuinfo.features |= CF_PAE;
     if (d & (1 << 25)) cpuinfo.features |= CF_SSE;
     if (d & (1 << 26)) cpuinfo.features |= CF_SSE2;
@@ -139,6 +141,7 @@ void cpu_init(void)
         if (b & (1 << 20)) cpuinfo.features |= CF_SMAP;
     }
 
+    // NX support hacky check, blame x86 for this atrocity
     cpuid(0x80000000, 0, &a, &b, &c, &d);
     uint32_t max_ext = a;
 
@@ -167,6 +170,8 @@ void cpu_init(void)
         cpuinfo.core_count = ((b >> 26) & 0x3F) + 1;
     }
 
+    // SSE is enabled at boot time (it's a requirement for GatOS to work)
+    // but it's good to do it here too
     if (cpu_has_feature(CF_SSE)) {
         cpu_enable_feature(CF_SSE);
     }
@@ -249,7 +254,7 @@ bool cpu_enable_feature(cpu_feature_t feature)
             cr4 |= (1 << 18); // CR4.OSXSAVE
             write_cr4(cr4);
             xcr0 = read_xcr0();
-            xcr0 |= (1 << 0) | (1 << 1); // enable x87 + SSE
+            xcr0 |= (1 << 0) | (1 << 1); // enable x87 and SSE
             xcr0 |= (1 << 2); // enable AVX state
             write_xcr0(xcr0);
             return true;

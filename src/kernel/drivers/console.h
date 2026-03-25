@@ -1,5 +1,7 @@
 /*
  * console.h - Framebuffer text mode printing console interface
+ *
+ * Author: u/ApparentlyPlus
  */
 
 #pragma once
@@ -42,7 +44,7 @@ typedef struct {
     // Cursor State (Static Block)
     bool on;
 
-    // UTF-8 State
+    // UTF8 State
     uint32_t u8cp;
     int u8n;
 
@@ -54,7 +56,7 @@ typedef struct {
     size_t width;
     size_t height;
 
-    // Sticky header: rows [0, header_rows) are reserved and never scrolled
+    // Sticky header, rows [0, header_rows) are reserved and never scrolled
     size_t header_rows;
 
     spinlock_t lock;
@@ -86,7 +88,7 @@ void console_enable_cursor(bool enabled);
 size_t console_get_width();
 size_t console_get_height();
 
-// Crash console api (lock-free, scheduler-free)
+// Crash console api (lock free, scheduler free)
 size_t con_crash_width(void);
 void con_crash_clear(uint8_t bg);
 void con_crash_puts(const char* s);

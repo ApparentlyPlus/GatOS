@@ -3,6 +3,8 @@
  *
  * Tests every public slab API function. Machine-adaptive where applicable.
  * All caches created here use unique names to avoid collisions with kernel caches.
+ * 
+ * Author: Claude Code
  */
 
 #include "tests.h"

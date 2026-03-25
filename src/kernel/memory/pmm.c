@@ -138,7 +138,7 @@ static inline void write_next_word(uint64_t block_phys, uint64_t next_phys, uint
 }
 
 /* 
- * clear_free_header - Clear header when allocating (detect use-after-free)
+ * clear_free_header - Clear header when allocating
  */
 static inline void clear_free_header(uint64_t block_phys) {
     pmm_free_header_t *header = (pmm_free_header_t *)PHYSMAP_P2V(block_phys);
@@ -488,6 +488,7 @@ pmm_status_t pmm_free(uint64_t phys, size_t size_bytes) {
         return PMM_ERR_OUT_OF_RANGE;
     }
 
+    // Round size up to nearest block size to determine order and alignment requirements
     uint64_t rounded = (uint64_t)size_bytes;
     if (rounded & (min_block - 1)) rounded = align_up(rounded, min_block);
 
@@ -509,6 +510,7 @@ pmm_status_t pmm_free(uint64_t phys, size_t size_bytes) {
 
     stats.free_calls++;
 
+    // Coalesce like a pro heheh
     while (order < max_order) {
         uint64_t buddy = buddy_of(block_addr, order);
         uint64_t buddy_size = order_to_size(order);

@@ -90,10 +90,12 @@ void load_idt(void* idt_addr)
  */
 void idt_init(void)
 {
-    // kill the legacy PIC - APIC's taking over
+    // imagine using the PIC in the big 2026, this is some museum stuff here
+    // jokes aside, we'll use the modern APIC instead
     disable_pic();
 
     // The stubs are spaced 16 bytes apart in the interrupt_handler_0 block
+    // This is a hacky trick, but it works, and the alternative is hardcoding them all, so this will do
     for (size_t i = 0; i < IDT_SIZE; i++)
     {
         void* handler = (void*)((uint64_t)interrupt_handler_0 + (i * 16));
@@ -106,7 +108,9 @@ void idt_init(void)
         else if (i == INT_PAGE_FAULT) {
             ist = 2;
         }
+
         // Breakpoint and Debug can be triggered from Ring 3 for debugging
+        // but this is untested and possibly out of scope for now
         else if (i == INT_BREAKPOINT || i == INT_DEBUG) {
             dpl = DPL_RING_3;
         }
@@ -130,7 +134,7 @@ cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
 {
     uint64_t vec = context->vector_number;
    
-    // Spurious interrupts do NOT require an EOI
+    // Spurious interrupts do not require an EOI
     if (vec == INT_SPURIOUS_INTERRUPT) {
         return context;
     }
@@ -141,7 +145,9 @@ cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
             panic("IRQ handler returned NULL context");
         }
 
-        // Validate iret frame CS and SS to catch smashed frames before iretq faults.
+        // Validate iret frame CS and SS to catch smashed frames before iretq faults
+        // This helped me debug the sysretq microarhitecture implementation nightmare
+        // And therefore can be useful to capture frame corruption early
         uint16_t cs = (uint16_t)context->iret_cs;
         uint16_t ss = (uint16_t)context->iret_ss;
         if ((cs & 3) == 0) {
@@ -187,7 +193,8 @@ cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
             case INT_SIMD_ERROR:           panic_msg = "SIMD exception"; break;
         }
 
-        // demand paging - try proc VMM first, fall back to kernel's
+        // demand paging
+        // try proc VMM first, fall back to kernel's
         if (vec == INT_PAGE_FAULT) {
             uint64_t cr2;
             __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
@@ -230,6 +237,7 @@ cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
 
         bool is_user = (context->iret_cs & 3) == 3;
 
+        // If it's a user fault, we can kill the offending process instead of panicking the whole system
         if (is_user && sched_active()) {
             thread_t* current = sched_current();
             if (current && current->process) {
@@ -262,6 +270,7 @@ cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
             }
         }
 
+        // For kernel faults or if we can't find the process info, panic the whole system
         if (vec == INT_PAGE_FAULT) {
             uint64_t cr2;
             __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));

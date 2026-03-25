@@ -48,7 +48,7 @@ typedef enum {
 typedef struct heap heap_t;
 typedef struct blk_hdr blk_hdr_t;
 
-// Kernel heap interface (auto-initialized on first use)
+// Kernel heap interface (auto initialized on first use)
 
 heap_status_t heap_kernel_init(void);
 heap_t* heap_kernel_get(void);
@@ -98,5 +98,5 @@ The heap allocator is a trust boundary:
 
 - If its internal structures are corrupted, the entire kernel is compromised. 
 - Panicking early and loudly is much better than silently propagating corruption 
-            that manifests as a mysterious crash miles away from the actual bug.
+  that manifests as a mysterious crash miles away from the actual bug.
 */

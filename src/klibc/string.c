@@ -1,5 +1,7 @@
 /*
  * string.c - Standard C string implementation
+ *
+ * Author: u/ApparentlyPlus
  */
 
 #include <klibc/string.h>

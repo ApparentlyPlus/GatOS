@@ -1,5 +1,7 @@
 /*
  * xhci.h - eXtensible Host Controller Interface (xHCI) Driver
+ *
+ * Author: u/ApparentlyPlus
  */
 
 #pragma once

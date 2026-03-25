@@ -563,7 +563,7 @@ static slab_cache_t* slab_cache_find_internal(const char* name) {
 }
 
 /*
- * slab_cache_find - find a cache by name (simple linear search)
+ * slab_cache_find - find a cache by name
  */
 slab_cache_t* slab_cache_find(const char* name) {
     if (!slab_inited || !name) return NULL;
@@ -592,7 +592,8 @@ slab_status_t slab_alloc(slab_cache_t* cache, void** out_obj) {
 
     slab_t* slab = NULL;
 
-    // Prefer partial slabs for better locality; only fall back to empty or new
+    // Prefer partial slabs for better locality
+    // If nada, try empty slabs to possibly avoid fragmentation
     if (cache->slabs_partial) {
         slab = cache->slabs_partial;
     } else if (cache->slabs_empty) {
@@ -702,6 +703,7 @@ slab_status_t slab_free(slab_cache_t* cache, void* obj) {
         return SLAB_ERR_CORRUPTION;
     }
 
+    // free object by adding it back to the slab's freelist
     slab_free_obj_t* free_obj = (slab_free_obj_t*)obj_start;
     free_obj->magic = SLAB_FREE_MAGIC;
     free_obj->red_zone_pre = SLAB_RED_ZONE;
@@ -714,6 +716,9 @@ slab_status_t slab_free(slab_cache_t* cache, void* obj) {
     cache->stats.total_frees++;
     cache->stats.active_objects--;
 
+    // this is interesting here
+    // if slab is now empty, we want to move it to the empty list
+    // if there are already too many empty slabs, we can free it back to PMM to reduce fragmentation
     if (slab->in_use == 0) {
         if (slab->list_id == SLAB_LIST_PARTIAL) {
             slab_move_to_list(&cache->slabs_partial, &cache->slabs_empty, slab, SLAB_LIST_EMPTY);

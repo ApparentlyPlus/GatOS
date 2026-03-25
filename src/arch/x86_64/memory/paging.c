@@ -16,7 +16,9 @@
 #include <stdbool.h>
 
 /* 
- * Single PD for framebuffer MMIO: entries use 2MB huge pages (PAGE_HUGE)
+ * This is a (self proclaimed) genius hack to statically reserve a single 2MB page for framebuffer purposes in the physmap,
+ * which is used by the console driver to output everything without relying on the memory systems to be online.
+ * 
  * Covers up to 512 * 2MB = 1GB, enough for any display at any resolution
  * Only 4 KB in BSS, nuts
  */
@@ -77,8 +79,7 @@ void unmap_identity(){
 }
 
 /*
- * cleanup_page_tables:
- * Removes unused page table entries, keeps only the given range in higher half
+ * cleanup_kpt - Removes unused page table entries, keeps only the given range in higher half
  */
 void cleanup_kpt(uintptr_t start, uintptr_t end) {
     uint64_t* PML4 = getPML4();
@@ -111,6 +112,7 @@ void cleanup_kpt(uintptr_t start, uintptr_t end) {
             PML4[i] = 0;
         }
     }
+
     // Set only the higher half PML4 entry
     PML4[hh_pml4] = KERNEL_V2P(PDPT) | (PAGE_PRESENT | PAGE_WRITABLE);
 
@@ -284,6 +286,7 @@ void build_physmap() {
 
 /*
  * QEMU_DUMP_PML4 - Walks the live page table and dumps its structure to serial
+ * Note: Largely unused now that the kernel is stable, but can be useful for debugging early boot paging issues in QEMU
  */
 void QEMU_DUMP_PML4(void) {
     uint64_t* PML4 = getPML4();

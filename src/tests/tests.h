@@ -1,6 +1,8 @@
 /*
  * tests.h - Header file for kernel functionality tests. Contains common
  * macros and function declarations for test suites.
+ * 
+ * Author: Claude Code
  */
 
 #pragma once

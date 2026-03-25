@@ -87,7 +87,7 @@
 #include <arch/x86_64/multiboot2.h>
 #include <stdbool.h>
 
-#define CEIL_DIV(x, y) (((x) + (y) - 1) / (y)) // this is hacky and must be removed eventually
+#define CEIL_DIV(x, y) (((x) + (y) - 1) / (y)) // this is hacky and must be removed eventually (it was never removed lol)
 
 /*
  * invlpg - Invalidate a single TLB entry for the given virtual address
@@ -142,9 +142,7 @@ cvoid flush_tlb(void) {
     __asm__ volatile("mfence" ::: "memory");  // Serialize
 }
 
-2. We should consider invlpg() instead of full TLB flush
-
-3. Consider PAT Support
+2. Consider PAT Support
 
 For MMIO regions, Page Attribute Table entries would give us finer control:
 
@@ -153,7 +151,5 @@ For MMIO regions, Page Attribute Table entries would give us finer control:
 #define PAGE_PAT_WC       1  // Write-combining (good for framebuffers)
 #define PAGE_PAT_WT       4  // Write-through
 #define PAGE_PAT_WB       6  // Write-back
-
-4. Enable NX support by checking CPUID
 
 */

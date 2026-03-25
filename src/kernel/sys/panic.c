@@ -64,6 +64,7 @@ void panic_c(const char* message, cpu_context_t* context)
     int i;
     int pad;
 
+    // Disable interrupts to prevent further state corruption and ensure the panic log is not interleaved with other output
     intr_off();
     panic_log(message, context);
 
@@ -88,6 +89,7 @@ void panic_c(const char* message, cpu_context_t* context)
 
     con_crash_printf("[+] Reason: %s\n", message);
 
+    // If we have CPU context, print detailed register and error information
     if (context) {
         con_crash_printf("[+] Exception: %s (#%lu)\n",
                          exc_name(context->vector_number),

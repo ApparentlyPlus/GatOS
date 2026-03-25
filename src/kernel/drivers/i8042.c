@@ -89,6 +89,9 @@ static void i8042_flush(void) {
 bool i8042_init(void) {
     LOGF("[PS2] Initializing i8042 Controller...\n");
 
+    // This whole thing is mostly legacy PS/2 stuff, but we still need
+    // to do it for the keyboard controller since that's how we get input events (blame x86 squared)
+
     // Disable Devices
     i8042_write_command(PS2_CMD_DISABLE_PORT1);
     i8042_write_command(PS2_CMD_DISABLE_PORT2);
@@ -108,7 +111,7 @@ bool i8042_init(void) {
     i8042_write_command(PS2_CMD_WRITE_CONFIG);
     i8042_write_data(config);
 
-    // Controller Self-Test
+    // Controller Self Test
     i8042_write_command(PS2_CMD_TEST_CONTROLLER);
     uint8_t self_test = i8042_read_data();
     if (self_test != 0x55) {

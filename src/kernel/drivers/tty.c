@@ -161,6 +161,7 @@ void tty_cycle(void) {
 static void tty_wait_for_input(tty_t* tty) {
     while (tty->head == tty->tail) {
         // Yield to other threads while waiting for keyboard input
+        // Combating busy waiting since 2009 interwebzzzzz
         sched_yield();
     }
 }
@@ -235,8 +236,7 @@ void tty_header_init(tty_t* tty, size_t rows) {
 }
 
 /*
- * tty_header_write - Writes centred text into sticky header row
- * and redraws it immediately. Safe to call at any time to update the header.
+ * tty_header_write - Writes centred text into sticky header row and redraws it immediately
  */
 void tty_header_write(tty_t* tty, size_t row, const char* text, uint8_t fg, uint8_t bg) {
     if (!tty || !tty->console) return;
@@ -254,7 +254,6 @@ void ldisc_init(ldisc_t* ld) {
 
 /*
  * ldisc_input - Processes a character through the line discipline
- * Handled characters are eventually pushed to the TTY read buffer.
  */
 void ldisc_input(tty_t* tty, char c) {
     ldisc_t* ld = &tty->ldisc;

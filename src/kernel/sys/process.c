@@ -34,7 +34,7 @@ userspace void userspace_start(void (*entry)(void*), void* arg) {
         entry(arg);
     }
 
-    // SYS_EXIT
+    // call SYS_EXIT
     __asm__ volatile (
         "mov $1, %rax \n"
         "syscall \n"
@@ -105,6 +105,10 @@ process_t* process_create(const char* name, tty_t* existing_tty) {
         return NULL;
     }
 
+    // Map the executable's code, rodata, data, and bss segments into the new process's address space
+    // These are currently identity mapped to simplify loading, but we could easily change this to support 
+    // arbitrary load addresses in the future if desired
+
     uintptr_t t_phys = (uintptr_t)&USER_TEXT_LOAD_ADDR;
     size_t tsz = align_up((uintptr_t)&USER_TEXT_END - (uintptr_t)&USER_TEXT_START, PAGE_SIZE);
     if (tsz > 0) {
@@ -140,6 +144,7 @@ process_t* process_create(const char* name, tty_t* existing_tty) {
         if (st != VMM_OK) goto map_fail;
     }
 
+    // If the caller provided a TTY, use it. Otherwise, create a new one for this process.
     if (existing_tty) {
         proc->tty = existing_tty;
     } else {
@@ -239,6 +244,7 @@ thread_t* thread_create(process_t* process, const char* name, void (*entry)(void
         thread->context->iret_rsp = user_rsp;
 
     } else {
+        // For kernel threads, we can directly set the RIP to the entry point and use the kernel stack
         thread->context->iret_cs = KERNEL_CS;
         thread->context->iret_ss = KERNEL_DS;
         thread->context->iret_rip = (uint64_t)thread_wrap;
@@ -294,14 +300,17 @@ void thread_destroy(thread_t* thread) {
 
     LOGF("[PROC] Destroying thread '%s' (TID: %u)\n", thread->name, thread->tid);
 
+    // Free the user stack if it exists
     if (thread->ustack && thread->process && thread->process->vmm) {
         vmm_free(thread->process->vmm, thread->ustack);
     }
 
+    // If kernel thread, use kfree
     if (thread->kstack) {
         kfree(thread->kstack);
     }
 
+    // The thread struct itself is always allocated with kmalloc, so we use kfree for it as well
     kfree(thread);
 }
 

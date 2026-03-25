@@ -5,6 +5,8 @@
  * read_char, read, write, header_init, header_write, switch, cycle.
  * Covers canonical line discipline, backspace, ring buffer wrap/overflow,
  * ldisc overflow, header state, and mass create/destroy.
+ * 
+ * Author: Claude Code
  */
 
 #include <kernel/drivers/tty.h>

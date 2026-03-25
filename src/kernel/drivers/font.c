@@ -1,10 +1,17 @@
+/*
+ * font.c - Font Driver
+ *
+ * Provides support for loading and rendering fonts.
+ *
+ * Author: u/ApparentlyPlus
+ */
+
 #include <kernel/drivers/font.h>
 
 static psf1_font_t cur_font;
 
 /*
  * VGA 8x16 Font Data (CP437)
- * Source: Linux Kernel (lib/fonts/font_8x16.c)
  */
 uint8_t vga_font_data[] = {
     // PSF1 Header (Magic: 0x36, 0x04, Mode: 0, Size: 16)
@@ -4620,16 +4627,24 @@ uint8_t vga_font_data[] = {
 
 };
 
+/*
+ * font_init - Initialize the font system
+ */
 void font_init(void) {
     cur_font.header = (psf1_header_t*)vga_font_data;
     cur_font.glyph_buffer = (void*)(vga_font_data + sizeof(psf1_header_t));
 }
 
+/*
+ * font_get_current - Get a pointer to the current font
+ */
 psf1_font_t* font_get_current(void) {
     return &cur_font;
 }
 
-// Unicode to CP437 Mapping Table
+/*
+ * unicode_to_cp437 - Convert a Unicode codepoint to a CP437 glyph index
+ */
 uint8_t unicode_to_cp437(uint32_t codepoint) {
     if (codepoint < 128) return (uint8_t)codepoint;
     switch (codepoint) {

@@ -72,7 +72,7 @@ static inline uint64_t get_kend(bool virtual) {
 }
 
 /*
- * get_linker_kstart - Get the linker-defined kernel start address
+ * get_linker_kstart - Get the linker defined kernel start address
  */
 static inline uint64_t get_linker_kstart(bool virtual) {
     uint64_t l = (uint64_t)(uintptr_t)&KPHYS_START;
@@ -80,11 +80,11 @@ static inline uint64_t get_linker_kstart(bool virtual) {
 }
 
 /*
- * get_linker_kend - Get the linker-defined kernel end address
+ * get_linker_kend - Get the linker defined kernel end address
  */ 
 static inline uint64_t get_linker_kend(bool virtual) {
     uint64_t l = (uint64_t)(uintptr_t)&KPHYS_END;
     return virtual ? (l | KERNEL_VIRTUAL_BASE) : l;
 }
 
-#endif /* __ASSEMBLER__ */
+#endif // __ASSEMBLER__

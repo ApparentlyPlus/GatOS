@@ -34,7 +34,8 @@ static void* acpi_map_phys(uint64_t phys_addr, size_t size) {
     uint64_t base_phys = phys_addr - page_offset;
     size_t map_size = align_up(size + page_offset, PAGE_SIZE);
 
-    // VM_FLAG_MMIO ensures we treat this as device memory.
+    // VM_FLAG_MMIO ensures we treat this as device memory
+    // MMIO dude, I hate that we need the vmm for this dammit
     vmm_status_t status = vmm_alloc(NULL, map_size, VM_FLAG_WRITE | VM_FLAG_MMIO, (void*)base_phys, &virt_addr);
 
     if (status != VMM_OK) {
@@ -153,6 +154,7 @@ void* acpi_find_table(const char* signature) {
         entries_count = (root_header->Length - sizeof(ACPISDTHeader)) / sizeof(uint32_t);
     }
 
+    // Iterate through each entry in the RSDT/XSDT and look for the matching signature
     for (size_t i = 0; i < entries_count; i++) {
         uint64_t table_phys = 0;
 
@@ -177,9 +179,7 @@ void* acpi_find_table(const char* signature) {
     return NULL;
 }
 
-/*
- * Getters
- */
+// Getters
 RSDP2Descriptor* acpi_get_rsdp(void) { return rsdp; }
 void* acpi_get_root_sdt(void) { return rsdt_virt; }
 bool acpi_is_xsdt_supported(void) { return xsdt_ok; }

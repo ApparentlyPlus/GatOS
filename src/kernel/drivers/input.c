@@ -24,8 +24,10 @@ void input_init(void) {
  * hotkeys and routes input to the active TTY.
  */
 void input_handle_key(key_event_t event) {
+    // Only handle key press events, ignore releases for now
     if (!event.pressed) return;
 
+    // Dashy dashy daaaaash toggle Ctrl + Shift + Esc
     if ((event.modifiers & MOD_CTRL) &&
         (event.modifiers & MOD_SHIFT) &&
         event.keycode == KEY_ESC) {
@@ -33,18 +35,21 @@ void input_handle_key(key_event_t event) {
         return;
     }
 
+    // Alt tab my beloved
     if ((event.modifiers & MOD_ALT) && event.keycode == KEY_TAB) {
         tty_cycle();
         return;
     }
 
+    // ALT+F4 to close the current tty (if not dashboard or kernel tty)
     if ((event.modifiers & MOD_ALT) && event.keycode == KEY_F4) {
-        if (active_tty && active_tty != kernel_tty && !is_dash_tty()) {
+        if (active_tty && active_tty != kernel_tty && !dash_active()) {
             tty_destroy(active_tty);
         }
         return;
     }
 
+    // If we have an active TTY, route the key event to it
     if (active_tty) {
         char c = keyboard_keycode_to_ascii(event);
         if (c) {

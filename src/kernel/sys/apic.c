@@ -91,6 +91,7 @@ void lapic_eoi(void) {
  */
 void lapic_init(void) {
 
+    // ensure we are not running on a potato
     uint32_t a, b, c, d;
     cpuid(1, 0, &a, &b, &c, &d);
     if (!(d & (1 << 9))) {
@@ -120,6 +121,7 @@ void lapic_init(void) {
         // we are NOT handling that lol, I got enough on my plate
     }
 
+    // Parse MADT for LAPIC and I/O APIC info
     MADTHeader* madt = (MADTHeader*)acpi_find_table("APIC");
     if (madt) {
         uint8_t* start = (uint8_t*)(madt + 1);
@@ -130,7 +132,7 @@ void lapic_init(void) {
             MADTRecordHeader* header = (MADTRecordHeader*)start;
             if (header->type == MADT_TYPE_NMI) {
                 MADT_NMI* nmi = (MADT_NMI*)header;
-                // 0xFF targets all processors; otherwise match by local APIC ID.
+                // 0xFF targets all processors; otherwise match by local APIC ID
                 if (nmi->acpi_processor_id == 0xFF || nmi->acpi_processor_id == my_id) {
                     uint32_t lvt_reg = (nmi->lint == 0) ? LAPIC_LVT_LINT0 : LAPIC_LVT_LINT1;
                     lapic_write(lvt_reg, (4 << 8));
@@ -230,6 +232,7 @@ void ioapic_set_entry(uint8_t index, uint64_t data) {
 void ioapic_redirect(uint8_t irq, uint8_t vector, uint32_t dest_core, uint16_t flags) {
     uint64_t entry = vector;
 
+    // Author notes:
     // Delivery Mode - Fixed (000)
     // Destination Mode - Physical (0)
     // Polarity: bit 13 - 0=High, 1=Low
@@ -340,8 +343,11 @@ void ioapic_init(void) {
 void apic_init(void) {
     LOGF("[APIC] Beginning hardware interrupt controller setup...\n");
 
+    // disable museum mode
     disable_pic();
+    // enable lapic
     lapic_init();
+    //enable ioapic for external interrupts
     ioapic_init();
 
     LOGF("[APIC] Interrupt subsystem is online.\n");

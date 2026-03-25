@@ -1,5 +1,17 @@
 /*
  * console.c - Framebuffer console implementation
+ *
+ * This is the lowest level of the output stack, solely responsible for 
+ * rendering characters to the framebuffer. It provides a simple API for drawing
+ * characters, managing the cursor, setting colors and controlling a sticky header area.
+ * 
+ * TTY and higher-level console abstractions are built on top of this.
+ * 
+ * For panic specifically, the console can be used directly through the con_crash_*
+ * API without relying on the rest of the console/TTY subsystem, which may be in an 
+ * inconsistent state during a panic.
+ * 
+ * Author: u/ApparentlyPlus
  */
 
 #include <kernel/drivers/console.h>

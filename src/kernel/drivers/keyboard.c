@@ -24,6 +24,7 @@
 
 #pragma region Internal State
 
+// Circular buffer for key events (Producer: IRQ handler, Consumer: input handler)
 static struct {
     key_event_t buffer[EVENT_BUFFER_SIZE];
     uint32_t head;
@@ -62,6 +63,9 @@ static const keycode_t scancode_set1[] = {
  * update_leds - Sends command to PS/2 device to update physical LEDs
  */
 static void update_leds(void) {
+    // Gotta love this hardware interface!
+    // we have to send a command to set LED state, 
+    // then wait for an ACK, then send the actual LED state
     i8042_write_data(0xED);
     i8042_wait_read();
     if (i8042_read_data() == 0xFA) {
@@ -131,6 +135,10 @@ bool keyboard_get_event(key_event_t* out_event) {
  * keyboard_handler - Main IRQ handler logic (State machine)
  */
 cpu_context_t* keyboard_handler(cpu_context_t* ctx) {
+
+    // This is hardcoded magic values galore
+    // but it works and it's not like we have a choice given the hardware interface, so ¯\_(ツ)_/¯
+
     if (!(inb(0x64) & 0x01)) return ctx;
 
     uint8_t scancode = inb(0x60);

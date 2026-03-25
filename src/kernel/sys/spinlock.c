@@ -28,6 +28,7 @@ void spinlock_init(spinlock_t* lock, const char* name) {
 bool spinlock_acquire(spinlock_t* lock) {
     bool was_enabled = intr_save();
 
+    // this is built in as of C11 I believe
     while (__atomic_test_and_set(&lock->locked, __ATOMIC_ACQUIRE)) {
         __asm__ volatile("pause");
     }

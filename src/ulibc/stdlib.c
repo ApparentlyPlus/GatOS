@@ -4,6 +4,8 @@
  * Boundary-tag allocator with arena per mmap design.
  * Mirrors kernel heap.c but uses syscall_mmap/syscall_munmap instead of the VMM
  * and embeds the arena header at the start of each mmap'd region.
+ * 
+ * Author: Claude Code
  */
 
 #include <ulibc/stdlib.h>

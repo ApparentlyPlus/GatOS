@@ -4,7 +4,7 @@
  * This file defines the `kernel_test` function, which is the first function
  * called once the kernel takes control after boot, assuming a test build.
  *
- * Author: u/ApparentlyPlus
+ * Author: u/ApparentlyPlus, Claude Code
  */
 
 #ifdef TEST_BUILD

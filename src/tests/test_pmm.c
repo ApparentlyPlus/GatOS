@@ -7,6 +7,8 @@
  *
  * Machine-adaptive: exhaustion and ladder tests use pmm_managed_size() and
  * pmm_min_block_size() instead of hardcoded sizes.
+ * 
+ * Author: Claude Code
  */
 
 #include <arch/x86_64/memory/paging.h>

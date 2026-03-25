@@ -8,6 +8,8 @@
  * Output format is fixed for CI parsing:
  *   "[TEST] <name>  [PASS|FAIL]"
  *   "Timer Test Results: N/N"
+ * 
+ * Author: Claude Code
  */
 
 #include <arch/x86_64/cpu/interrupts.h>

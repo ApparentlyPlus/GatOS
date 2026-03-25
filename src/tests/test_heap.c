@@ -7,6 +7,8 @@
  *
  * Machine-adaptive: large allocation stress targets 25% of available
  * heap space rather than a hardcoded byte count.
+ * 
+ * Author: Claude Code
  */
 
 #include <kernel/memory/heap.h>

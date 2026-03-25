@@ -1,3 +1,10 @@
+/* font.h - Font Driver
+ *
+ * Provides support for loading and rendering fonts.
+ *
+ * Author: u/ApparentlyPlus
+ */
+
 #pragma once
 
 #include <stdint.h>

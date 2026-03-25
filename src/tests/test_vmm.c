@@ -7,6 +7,8 @@
  * verify_integrity, get_alloc_base/end/size, vmm_stats, vmm_dump.
  *
  * Machine-adaptive: the OOM test queries the actual VMM address range.
+ * 
+ * Author: Claude Code
  */
 
 #include <arch/x86_64/memory/paging.h>

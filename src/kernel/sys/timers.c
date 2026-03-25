@@ -51,8 +51,8 @@ void pit_set_oneshot(uint16_t ticks) {
 void pit_prepare_sleep(uint32_t ms) {
     uint32_t total_ticks = (PIT_FREQUENCY / 1000) * ms;
     
-    // The PIT counter is 16-bit, max 54ms per wrap.
-    // For longer sleeps, we'd need a loop.
+    // The PIT counter is 16-bit, max 54ms per wrap
+    // For longer sleeps, we'd need a loop
     if (total_ticks > 0xFFFF) total_ticks = 0xFFFF;
 
     pit_set_oneshot((uint16_t)total_ticks);
@@ -62,8 +62,8 @@ void pit_prepare_sleep(uint32_t ms) {
  * pit_wait - Spins until PIT Channel 0 reaches 0
  */
 static void pit_wait(void) {
-    // In Mode 0, the OUT pin goes high when count reaches 0.
-    
+    // In Mode 0, the OUT pin goes high when count reaches 0
+    // This is magic numbers galore again, blame x86 hardware design
     uint16_t last_val = 0xFFFF;
     while (1) {
         outb(0x43, 0x00); // Latch channel 0
@@ -117,6 +117,7 @@ static void hpet_init(void) {
 
     // Enable HPET (Set bit 0 of General Config)
     // Also clear bit 1 (Legacy Replacement) to use it cleanly
+    // Jesus christ, HPET, why do you have to be like this
     hpet->configuration |= 0x01;
     hpet->configuration &= ~0x02;
 
@@ -174,6 +175,7 @@ static void timer_calibrate_all(void) {
         lapic_start = lapic_read(LAPIC_TCCR);
         tsc_start = tsc_read();
 
+        // Wait for the HPET target to elapse
         while (hpet_read_counter() - hpet_start < hpet_target) {
             __asm__ volatile("pause");
         }
@@ -193,6 +195,9 @@ static void timer_calibrate_all(void) {
         lapic_start = lapic_read(LAPIC_TCCR);
         tsc_start = tsc_read();
 
+        // Wait for the PIT target to elapse
+        // this must be the worst code I've ever written, 
+        // but the PIT is just so bad that it requires this level of hackery
         while (1) {
             outb(0x43, 0x00);
             low = inb(0x40);

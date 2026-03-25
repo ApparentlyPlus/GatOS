@@ -27,13 +27,11 @@ void syscall_init(void) {
     efer |= EFER_SCE; 
     write_msr(MSR_EFER, efer);
 
-    // STAR MSR: 
-    // Bits 63:48 - User CS/SS base. sysret uses STAR[63:48]+16 for CS, STAR[63:48]+8 for SS.
-    // We want User CS = 0x20 (index 4), User SS = 0x18 (index 3).
-    // So base should be 0x10.
-    // Bits 47:32 - Kernel CS/SS base. syscall uses STAR[47:32] for CS, STAR[47:32]+8 for SS.
-    // We want Kernel CS = 0x08, Kernel SS = 0x10.
-    // So base should be 0x08.
+    // Author notes:
+    // For STAR MSR, the upper 16 bits (63:48) 
+    // define the base for user mode CS/SS, and the lower 16 bits (47:32) define the base for kernel mode CS/SS.
+    // We want User CS = 0x20 (index 4), User SS = 0x18 (index 3), so base should be 0x10.
+    // Bits 47:32 should be 0x10 for kernel mode, and bits 63:48 should be 0x08 for user mode.
 
     uint64_t star = ((uint64_t)0x10 << 48) | ((uint64_t)0x08 << 32);
     write_msr(MSR_STAR, star);
@@ -55,6 +53,9 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
     // rdi = registers[9]
     // rsi = registers[10]
     // rdx = registers[11]
+
+    // We could use an enum here for the register indices, 
+    // but it's pretty self-explanatory and we only have a few syscalls for now so eh
     
     thread_t* current = sched_current();
     if (!current) return;
@@ -80,6 +81,8 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
                 break;
             }
 
+            // Validate the user buffer before copying. We need to disable interrupts to prevent
+            // a malicious user from changing the buffer after validation and before copying.
             bool ints = intr_save();
             if (!vmm_check_buffer(current->process->vmm, buf, len, VM_FLAG_USER)) {
                 intr_restore(ints);
@@ -88,6 +91,10 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
                 sched_exit();
                 break;
             }
+
+            // Copy the data into the kernel and write to the TTY
+            // We need to allow SMAP here because the user buffer is in a high memory 
+            // region that SMAP would normally prevent us from accessing.
             smap_allow();
             kmemcpy(kbuf, buf, len);
             smap_deny();
@@ -106,6 +113,7 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
             size_t length = (size_t)registers[10];
             size_t vm_flags = (size_t)registers[11];
             
+            // Don't allow userspace to set flags other than these
             size_t user_allowed_flags = VM_FLAG_WRITE | VM_FLAG_EXEC | VM_FLAG_LAZY;
             vm_flags &= user_allowed_flags;
 
@@ -152,6 +160,8 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
                 break;
             }
 
+            // Don't allow reading more than 4096 bytes at once to prevent abuse
+            // The TTY buffer is only 1024 bytes anyway, so this is more than enough
             if (count > 4096) count = 4096;
 
             if (!vmm_check_buffer(current->process->vmm, buf, count, VM_FLAG_USER | VM_FLAG_WRITE)) {

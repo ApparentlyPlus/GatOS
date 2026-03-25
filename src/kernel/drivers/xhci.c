@@ -1,5 +1,20 @@
 /*
  * xhci.c - eXtensible Host Controller Interface Driver
+ *
+ * Features:
+ * 
+ * - Full xHCI 1.1 compliance with support for USB 2.0 and 3.0 devices
+ * - BIOS handoff and Intel USB port routing quirks
+ * - TRB-based command submission and event handling
+ * - Dynamic device slot allocation and context management
+ * - Control transfer support for device enumeration and configuration
+ * - Hub enumeration and downstream port management
+ * - Integration with input subsystem for USB keyboards
+ * - Robust error handling and timeouts for hardware interactions
+ * - DMA memory management with kernel address mapping
+ * - Spinlock synchronization for concurrent access to shared data structures
+ * 
+ * Author: u/ApparentlyPlus
  */
 
 #include <kernel/drivers/xhci.h>
@@ -158,7 +173,9 @@ static trb_t wait_ev(xhci_hc_t *hc, uint8_t type, uint32_t tmo) {
  */
 static void bios_handoff(xhci_hc_t *hc, pci_dev_t *pci) {
     // Intel Port Routing (Panther Point / Lynx Point quirks)
-    // Routes switchable USB 2.0/3.0 ports from EHCI to xHCI.
+    // Routes switchable USB 2.0/3.0 ports from EHCI to xHCI
+
+    // I am not really proud of this code xD
     if (pci->vendor_id == 0x8086) {
         uint32_t usb3_mask = pci_read32(pci, 0xDC);
         pci_write32(pci, 0xD8, usb3_mask);

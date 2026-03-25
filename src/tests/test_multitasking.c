@@ -7,6 +7,8 @@
  * sched_current, sched_add, sched_yield.
  * Covers PID/TID uniqueness, context layout, stack alignment, name truncation,
  * global process list, and shared TTY.
+ * 
+ * Author: Claude Code
  */
 
 #include <kernel/sys/process.h>

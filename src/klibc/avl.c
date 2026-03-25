@@ -30,8 +30,7 @@ static inline int bal(avl_node_t* n) {
  * Redirect the child pointer in parent (or tree->root) that currently
  * points to old_child so it points to new_child instead.
  */
-static void relink(avl_tree_t* tree, avl_node_t* parent,
-                   avl_node_t* old_child, avl_node_t* new_child) {
+static void relink(avl_tree_t* tree, avl_node_t* parent, avl_node_t* old_child, avl_node_t* new_child) {
     if (!parent)
         tree->root = new_child;
     else if (parent->left == old_child)
@@ -163,9 +162,9 @@ avl_node_t* avl_ceil(avl_tree_t* tree, avl_node_t* key) {
     avl_node_t* n = tree->root, *res = NULL;
     while (n) {
         int c = tree->cmp(key, n);
-        if      (c > 0)            n = n->right;
+        if      (c > 0) n = n->right;
         else if (c < 0) { res = n; n = n->left; }
-        else            return n;
+        else return n;
     }
     return res;
 }

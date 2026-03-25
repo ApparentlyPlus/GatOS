@@ -1,3 +1,13 @@
+/*
+ * serial.c - Serial port driver
+ *
+ * This file implements basic initialization and output functions for the standard PC serial ports (COM1-COM4).
+ * It allows the kernel to output debug information over a serial connection, which is invaluable for early
+ * boot debugging and for use in virtual machines where serial output can be easily captured.
+ * 
+ * Author: u/ApparentlyPlus
+ */
+
 #include <kernel/drivers/serial.h>
 
 /*
