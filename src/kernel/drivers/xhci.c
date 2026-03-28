@@ -411,13 +411,13 @@ static bool reset_port(xhci_hc_t *hc, uint8_t p) {
     return false;
 }
 
-static void enum_hub(xhci_hc_t *hc, xhci_slot_t *hs);
+static bool enum_hub(xhci_hc_t *hc, xhci_slot_t *hs);
 static bool enum_dev(xhci_hc_t *hc, uint8_t p, uint8_t spd, uint32_t route_string, uint8_t root_hub_port, uint8_t tt_slot, uint8_t tt_port);
 
 /*
  * enum_hub - Enumerates downstream ports of an identified USB hub
  */
-static void enum_hub(xhci_hc_t *hc, xhci_slot_t *hs) {
+static bool enum_hub(xhci_hc_t *hc, xhci_slot_t *hs) {
     usb_setup_t req_hub = { USB_DIR_IN | USB_TYPE_CLASS | USB_RECIP_DEVICE, USB_REQ_GET_DESCRIPTOR, (uint16_t)((0x29 << 8) | 0), 0, 8 };
     if (hs->spd == SPD_SS || hs->spd == SPD_SSP) {
         req_hub.wValue = (0x2A << 8) | 0;
@@ -426,7 +426,7 @@ static void enum_hub(xhci_hc_t *hc, xhci_slot_t *hs) {
     int n = ctrl_xfer(hc, hs, &req_hub, hc->scratch_phys);
     if (n < 2) {
         LOGF("[XHCI] slot %u: failed to get hub descriptor\n", hs->id);
-        return;
+        return false;
     }
     uint8_t num_ports = hc->scratch[2];
     LOGF("[XHCI] Hub slot %u has %u ports\n", hs->id, num_ports);
@@ -437,6 +437,7 @@ static void enum_hub(xhci_hc_t *hc, xhci_slot_t *hs) {
     }
     sleep_ms(50);
 
+    bool any_kbd = false;
     for (uint8_t i = 1; i <= num_ports; i++) {
         usb_setup_t rst = { USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_OTHER, 3 /* SET_FEATURE */, 4 /* PORT_RESET */, i, 0 };
         ctrl_xfer(hc, hs, &rst, 0);
@@ -462,10 +463,12 @@ static void enum_hub(xhci_hc_t *hc, xhci_slot_t *hs) {
                     }
                 }
 
-                enum_dev(hc, i, dspd, route, hs->root_hub_port, tt_s, tt_p);
+                if (enum_dev(hc, i, dspd, route, hs->root_hub_port, tt_s, tt_p))
+                    any_kbd = true;
             }
         }
     }
+    return any_kbd;
 }
 
 /*
@@ -544,7 +547,9 @@ static bool enum_dev(xhci_hc_t *hc, uint8_t p, uint8_t spd, uint32_t route_strin
             if (n > 0) {
                 uint8_t cfg_val = ((usb_config_desc_t *)hc->scratch)->bConfigurationValue;
                 set_cfg(hc, s, cfg_val);
-                enum_hub(hc, s);
+                bool kbd = enum_hub(hc, s);
+                pmm_free(in_phys, PAGE_SIZE);
+                return kbd;
             }
         }
         pmm_free(in_phys, PAGE_SIZE);

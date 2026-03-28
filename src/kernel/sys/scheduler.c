@@ -100,7 +100,7 @@ void sched_init(void) {
     idle = thread_create(idle_proc, "idle", idle_thread_entry, NULL, false, 0);
     if (!idle) panic("Failed to create idle thread!");
 
-    process_t* kproc = process_create("kernel_main_proc", active_tty);
+    process_t* kproc = process_create("kproc", active_tty);
     if (!kproc) panic("Failed to create kernel main process!");
 
     // Wrap current context into a thread so it can be preempted and resumed
