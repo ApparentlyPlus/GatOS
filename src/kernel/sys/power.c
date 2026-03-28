@@ -89,7 +89,7 @@ void reboot(void) {
     LOGF("[POWER] Initiating system reboot...\n");
 
     // let's not get preemted
-    intr_disable();
+    intr_off();
 
     // Port 0xCF9, PIIX4/ICH9 reset register
     // supposedly works on QEMU but I don't see it
