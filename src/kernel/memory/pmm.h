@@ -19,6 +19,7 @@
 
 #pragma once
 
+#include <arch/x86_64/multiboot2.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
@@ -62,7 +63,7 @@ typedef struct {
 
 // Initialization and shutdown
 
-pmm_status_t pmm_init(uint64_t range_start_phys, uint64_t range_end_phys, uint64_t min_block_size);
+pmm_status_t pmm_init(uint64_t range_start_phys, uint64_t range_end_phys, uint64_t min_block_size, multiboot_parser_t* multiboot);
 void pmm_shutdown(void);
 
 // Allocation/Deallocation

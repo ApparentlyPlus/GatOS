@@ -70,7 +70,7 @@ void kernel_test(void* mb_info, char* KERNEL_VERSION) {
 
 	// Run tests for each subsystem
 
-	pmm_status_t pmm_status = pmm_init(get_kend(false) + PAGE_SIZE, PHYSMAP_V2P(get_physmap_end()), PAGE_SIZE);
+	pmm_status_t pmm_status = pmm_init(get_kend(false) + PAGE_SIZE, PHYSMAP_V2P(get_physmap_end()), PAGE_SIZE, &multiboot);
 	if(pmm_status != PMM_OK){
         LOGF("[PMM] Failed to initialize physical memory manager, error code: %d\n", pmm_status);
 		return;

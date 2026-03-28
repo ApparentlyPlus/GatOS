@@ -26,6 +26,9 @@
 #define VM_OBJECT_MAGIC 0xACCE55ED
 #define VM_OBJECT_RED_ZONE 0xDEADC0DE
 
+// Sentinel for vmo_ext::phys_base when the object has no PMM backing
+#define VMM_PHYS_NONE UINT64_MAX
+
 // Extended vm_object with validation
 typedef struct vmo_ext {
     uint32_t magic;
@@ -34,6 +37,7 @@ typedef struct vmo_ext {
     uint32_t red_zone_post;
     size_t   pg_size;
     uint64_t phys_base;
+    uint64_t phys_length;
     avl_node_t vma_node;
 } vmo_ext;
 
@@ -505,7 +509,8 @@ vmo_ext* vmm_alloc_vm_object(void) {
     internal->red_zone_pre = VM_OBJECT_RED_ZONE;
     internal->red_zone_post = VM_OBJECT_RED_ZONE;
     internal->pg_size = PAGE_SIZE;
-    internal->phys_base = 0;
+    internal->phys_base = VMM_PHYS_NONE;
+    internal->phys_length = 0;
 
     return internal;
 }
@@ -651,7 +656,8 @@ vmm_status_t vmm_alloc(vmm_t* vmm_pub, size_t length, size_t flags, void* arg, v
     }
 
     // Determine page table flags and map the pages
-    obj->phys_base = (flags & VM_FLAG_MMIO) ? 0 : phys_base;
+    obj->phys_base   = (flags & VM_FLAG_MMIO) ? VMM_PHYS_NONE : phys_base;
+    obj->phys_length = (flags & VM_FLAG_MMIO) ? 0 : length;
     bool is_user_vmm = !vmm->is_kernel;
     uint64_t pt_flags = vmm_convert_vm_flags(flags, vmm->is_kernel);
     bool allow_huge = !(flags & (VM_FLAG_MMIO | VM_FLAG_LAZY));
@@ -780,7 +786,8 @@ vmm_status_t vmm_alloc_at(vmm_t* vmm_pub, void* desired_addr, size_t length, siz
         }
     }
 
-    obj->phys_base = (flags & VM_FLAG_MMIO) ? 0 : phys_base;
+    obj->phys_base   = (flags & VM_FLAG_MMIO) ? VMM_PHYS_NONE : phys_base;
+    obj->phys_length = (flags & VM_FLAG_MMIO) ? 0 : length;
     bool is_user_vmm = !vmm->is_kernel;
     uint64_t pt_flags = vmm_convert_vm_flags(flags, vmm->is_kernel);
     bool allow_huge = !(flags & (VM_FLAG_MMIO | VM_FLAG_LAZY));
@@ -847,12 +854,62 @@ vmm_status_t vmm_free(vmm_t* vmm_pub, void* addr) {
         return VMM_ERR_INVALID;
     }
 
-    for (uintptr_t virt = cur->public.base;
-         virt < cur->public.base + cur->public.length; virt += PAGE_SIZE) {
-        arch_unmap_page(vmm->public.pt_root, (void*)virt);
+    bool has_pmm_backing = !(cur->public.flags & VM_FLAG_MMIO);
+    if (cur->pg_size > PAGE_SIZE) {
+        // Here we got a huge page region, so we know for sure that the entire region is backed by one 
+        // contiguous PMM block (or no block at all, for lazy regions). Just unmap the whole 
+        // range and free the block if it exists.
+
+        // vmm_get_mapped_phys cannot handle huge PTEs, so use phys_base directly.
+        for (uintptr_t virt = cur->public.base;
+             virt < cur->public.base + cur->public.length; virt += PAGE_SIZE)
+            arch_unmap_page(vmm->public.pt_root, (void*)virt);
+        if (has_pmm_backing && cur->phys_base != VMM_PHYS_NONE)
+            pmm_free(cur->phys_base, cur->public.length);
+    } else {
+        /* 
+        Three cases:
+         
+        Not grown, not lazy: phys_length == length, so the entire
+        backing is one contiguous PMM block
+         
+        Grown: phys_length < length. The tail [phys_length, length) was added
+        by vmm_resize and is non-contiguous. Walk those pages first (while the
+        page table is still intact), then bulk free the original block.
+        
+        Lazy (phys_base == VMM_PHYS_NONE): no upfront allocation. Walk all
+        pages and free only the ones that were actually faulted in. 
+        */
+
+        uintptr_t base   = cur->public.base;
+        size_t    length = cur->public.length;
+
+        if (has_pmm_backing && cur->phys_base != VMM_PHYS_NONE) {
+            // Free any grown pages
+            for (uintptr_t virt = base + cur->phys_length; virt < base + length; virt += PAGE_SIZE) {
+                uint64_t phys = 0;
+                if (vmm_get_mapped_phys(vmm->public.pt_root, (void*)virt, &phys))
+                    pmm_free(phys, PAGE_SIZE);
+            }
+
+            // Unmap the full virtual range
+            for (uintptr_t virt = base; virt < base + length; virt += PAGE_SIZE)
+                arch_unmap_page(vmm->public.pt_root, (void*)virt);
+
+            // Bulk free the original contiguous allocation
+            pmm_free(cur->phys_base, cur->phys_length);
+        } else {
+            // walk every page and only mapped pages get freed
+            for (uintptr_t virt = base; virt < base + length; virt += PAGE_SIZE) {
+                if (has_pmm_backing) {
+                    uint64_t phys = 0;
+                    if (vmm_get_mapped_phys(vmm->public.pt_root, (void*)virt, &phys))
+                        pmm_free(phys, PAGE_SIZE);
+                }
+                arch_unmap_page(vmm->public.pt_root, (void*)virt);
+            }
+        }
     }
-    if (cur->phys_base && !(cur->public.flags & VM_FLAG_MMIO))
-        pmm_free(cur->phys_base, cur->public.length);
 
     vma_remove(vmm, cur);
     vmm_free_vm_object(cur);
@@ -948,8 +1005,43 @@ void vmm_destroy(vmm_t* vmm_pub) {
             break;
         }
         avl_node_t* nx = avl_next(n);
-        if (cur->phys_base && !(cur->public.flags & VM_FLAG_MMIO))
-            pmm_free(cur->phys_base, cur->public.length);
+        if (!(cur->public.flags & VM_FLAG_MMIO)) {
+            if (cur->pg_size > PAGE_SIZE) {
+                // Huge page, use phys_base directly
+                if (cur->phys_base != VMM_PHYS_NONE)
+                    pmm_free(cur->phys_base, cur->public.length);
+            } else {
+                // No arch_unmap_page needed, vmm_destroy_page_table frees
+                // the entire page table structure immediately after this loop
+                uintptr_t base   = cur->public.base;
+                size_t    length = cur->public.length;
+
+                if (cur->phys_base != VMM_PHYS_NONE) {
+                    if (cur->phys_length == length) {
+                        // original contiguous allocation, not grown
+                        pmm_free(cur->phys_base, cur->phys_length);
+                    } else {
+                        // walk the tail beyond the original allocation
+                        // to free non contiguous pages appended by vmm_resize
+                        for (uintptr_t virt = base + cur->phys_length;
+                             virt < base + length; virt += PAGE_SIZE) {
+                            uint64_t phys = 0;
+                            if (vmm_get_mapped_phys(vmm->public.pt_root, (void*)virt, &phys))
+                                pmm_free(phys, PAGE_SIZE);
+                        }
+                        // Bulk free the original contiguous allocation
+                        pmm_free(cur->phys_base, cur->phys_length);
+                    }
+                } else {
+                    // only faulted in pages are mapped
+                    for (uintptr_t virt = base; virt < base + length; virt += PAGE_SIZE) {
+                        uint64_t phys = 0;
+                        if (vmm_get_mapped_phys(vmm->public.pt_root, (void*)virt, &phys))
+                            pmm_free(phys, PAGE_SIZE);
+                    }
+                }
+            }
+        }
         vmm_free_vm_object(cur);
         n = nx;
     }
@@ -1433,14 +1525,19 @@ vmm_status_t vmm_resize(vmm_t* vmm_pub, void* addr, size_t new_length) {
     else {
         size_t shrinkage = old_length - new_length;
         uintptr_t shrink_start = cur->public.base + new_length;
+        bool has_pmm_backing = !(cur->public.flags & VM_FLAG_MMIO);
 
+        // Unmap virtual pages being shrunk away
+        uintptr_t phys_end = cur->public.base + cur->phys_length;
         for (uintptr_t virt = shrink_start; virt < shrink_start + shrinkage;
              virt += PAGE_SIZE) {
+            if (has_pmm_backing && virt >= phys_end) {
+                uint64_t phys = 0;
+                if (vmm_get_mapped_phys(vmm->public.pt_root, (void*)virt, &phys))
+                    pmm_free(phys, PAGE_SIZE);
+            }
             arch_unmap_page(vmm->public.pt_root, (void*)virt);
         }
-
-        if (cur->phys_base && !(cur->public.flags & VM_FLAG_MMIO))
-            pmm_free(cur->phys_base + new_length, shrinkage);
 
         cur->public.length = new_length;
         spinlock_release(&vmm->lock, lock_flags);

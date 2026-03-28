@@ -521,8 +521,8 @@ static void dashboard_thread(void* arg) {
     while (1) {
         if (active_tty == dashTTY) {
             dashboard_draw();
-            // refresh every 2 seconds while active, otherwise idle to save resources
-            sleep_ms(2000);
+            // refresh every second while active, otherwise idle to save resources
+            sleep_ms(1000);
         } else {
             sleep_ms(100); // idle-ish 
         }

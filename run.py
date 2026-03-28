@@ -95,11 +95,11 @@ CFLAGS_VFAST = ["-O3", "-fpredictive-commoning", "-fstrict-aliasing", "-fno-dele
 # Profile Definitions
 BUILD_PROFILES = {
     "default": {
-        "flags": [], 
+        "flags": CFLAGS_BASE, 
         "confirm": False
     },
     "test": {
-        "flags": ["-DTEST_BUILD"], 
+        "flags": CFLAGS_FAST + ["-DTEST_BUILD"], 
         "confirm": False
     },
     "fast": {
@@ -307,7 +307,8 @@ def run_qemu(iso_file: Path, headless: bool = False, timeout: Optional[int] = No
         "-cdrom", str(iso_file),
         "-serial", "mon:stdio",
         "-serial", f"file:{DEBUG_LOG}",
-        "-cpu", "kvm64,+smep,+smap"
+        "-cpu", "kvm64,+smep,+smap",
+        "-m", "23G"
     ]
     
     if headless:

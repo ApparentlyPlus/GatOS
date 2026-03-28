@@ -102,7 +102,9 @@ void kernel_main(void* mb_info) {
 	QEMU_LOG("Initialized console", TOTAL_DBG);
 
 	// Initialize PMM before VMM since VMM needs to allocate memory for page tables
-	pmm_status_t pmm_status = pmm_init(get_kend(false) + PAGE_SIZE, PHYSMAP_V2P(get_physmap_end()), PAGE_SIZE);
+	pmm_status_t pmm_status = pmm_init(0x0, PHYSMAP_V2P(get_physmap_end()), PAGE_SIZE, &multiboot);
+	pmm_mark_reserved_range(get_kstart(false), get_kend(false));
+
 	if(pmm_status == PMM_OK) {
 		QEMU_LOG("Initialized physical memory manager", TOTAL_DBG);
 	}

@@ -10,6 +10,7 @@
 
 #include <arch/x86_64/memory/paging.h>
 #include <arch/x86_64/memory/layout.h>
+#include <arch/x86_64/multiboot2.h>
 #include <kernel/sys/spinlock.h>
 #include <kernel/memory/pmm.h>
 #include <kernel/debug.h>
@@ -91,7 +92,7 @@ static inline bool validate_free_header(uint64_t block_phys, uint32_t expected_o
         return false;
     }
 
-    if (header->next_phys != EMPTY_SENTINEL && header->next_phys != 0) {
+    if (header->next_phys != EMPTY_SENTINEL) {
         if (header->next_phys < range_start || header->next_phys >= range_end) {
             LOGF("[PMM ERROR] Invalid next pointer at 0x%lx: 0x%lx (range: 0x%lx-0x%lx)\n",
                    block_phys, header->next_phys, range_start, range_end);
@@ -159,9 +160,9 @@ static uint64_t pop_head(uint32_t order) {
 
     pmm_free_header_t* hdr = (pmm_free_header_t*)PHYSMAP_P2V(head);
     uint64_t next = hdr->next_phys;
-    free_heads[order] = (next == EMPTY_SENTINEL || next == 0) ? EMPTY_SENTINEL : next;
+    free_heads[order] = (next == EMPTY_SENTINEL) ? EMPTY_SENTINEL : next;
 
-    if (next != EMPTY_SENTINEL && next != 0)
+    if (next != EMPTY_SENTINEL)
         ((pmm_free_header_t*)PHYSMAP_P2V(next))->prev_phys = EMPTY_SENTINEL;
 
     clear_free_header(head);
@@ -208,12 +209,12 @@ static bool remove_specific(uint32_t order, uint64_t target_phys) {
     uint64_t next = hdr->next_phys;
 
     if (prev == EMPTY_SENTINEL) {
-        free_heads[order] = (next == 0 || next == EMPTY_SENTINEL) ? EMPTY_SENTINEL : next;
+        free_heads[order] = (next == EMPTY_SENTINEL) ? EMPTY_SENTINEL : next;
     } else {
         ((pmm_free_header_t*)PHYSMAP_P2V(prev))->next_phys = next;
     }
 
-    if (next != EMPTY_SENTINEL && next != 0)
+    if (next != EMPTY_SENTINEL)
         ((pmm_free_header_t*)PHYSMAP_P2V(next))->prev_phys = prev;
 
     clear_free_header(target_phys);
@@ -306,10 +307,13 @@ uint64_t pmm_min_block_size(void) {
 }
 
 /*
- * pmm_init - Initialize the physical memory manager to manage
- * the physical address range [range_start_phys, range_end_phys).
+ * pmm_init - Initialize the physical memory manager.
+ *
+ * Defines the managed physical address range [range_start_phys, range_end_phys)
+ * and populates the free list using the multiboot memory map, adding only regions
+ * the firmware explicitly marks as available.
  */
-pmm_status_t pmm_init(uint64_t range_start_phys, uint64_t range_end_phys, uint64_t min_block_size) {
+pmm_status_t pmm_init(uint64_t range_start_phys, uint64_t range_end_phys, uint64_t min_block_size, multiboot_parser_t* multiboot) {
     spinlock_init(&pmm_lock, "pmm_global");
     bool flags = spinlock_acquire(&pmm_lock);
 
@@ -362,12 +366,24 @@ pmm_status_t pmm_init(uint64_t range_start_phys, uint64_t range_end_phys, uint64
 
     kmemset(&stats, 0, sizeof(pmm_stats_t));
 
-    partition_range_into_blocks(range_start, range_end);
-
     inited = true;
 
     LOGF("[PMM] PMM initialized, managing 0x%lx - 0x%lx (%zu MiB)\n",
            pmm_managed_base(), pmm_managed_end(), pmm_managed_size() / (1024 * 1024));
+
+    // Populate the free list from firmware confirmed available regions only
+    // Author's Note: This might show up as a giant 1GB utilization in the dashboard
+    // because of a huge MMIO hole above the kernel
+    for (size_t i = 0; i < multiboot->memory_map_length; i++) {
+        uintptr_t region_start, region_end;
+        uint32_t region_type;
+        if (multiboot_get_memory_region(multiboot, i, &region_start, &region_end, &region_type) != 0)
+            continue;
+        if (region_type != MULTIBOOT_MEMORY_AVAILABLE)
+            continue;
+        LOGF("[PMM] Adding available region: 0x%lx - 0x%lx\n", region_start, region_end);
+        pmm_mark_free_range_internal((uint64_t)region_start, (uint64_t)region_end);
+    }
 
     spinlock_release(&pmm_lock, flags);
     return PMM_OK;
@@ -383,9 +399,16 @@ void pmm_shutdown(void) {
         return;
     }
 
-    uint8_t *ptr = (uint8_t *)PHYSMAP_P2V(range_start);
-    uint64_t size = pmm_managed_size();
-    kmemset(ptr, 0, size);
+    // Zero only free blocks
+    for (uint32_t order = 0; order <= max_order; order++) {
+        uint64_t cur = free_heads[order];
+        while (cur != EMPTY_SENTINEL) {
+            pmm_free_header_t* hdr = (pmm_free_header_t*)PHYSMAP_P2V(cur);
+            uint64_t next = hdr->next_phys;
+            kmemset(hdr, 0, order_to_size(order));
+            cur = (next == EMPTY_SENTINEL) ? EMPTY_SENTINEL : next;
+        }
+    }
 
     inited = false;
     range_start = 0;
@@ -589,7 +612,7 @@ pmm_status_t pmm_mark_reserved_range(uint64_t start, uint64_t end) {
                 }
             }
 
-            cur = (next == 0 || next == EMPTY_SENTINEL) ? EMPTY_SENTINEL : next;
+            cur = (next == EMPTY_SENTINEL) ? EMPTY_SENTINEL : next;
         }
     }
 
@@ -756,7 +779,7 @@ bool pmm_verify_integrity(void) {
             }
 
             uint64_t next = read_next_word(cur, order);
-            cur = (next == 0 || next == EMPTY_SENTINEL) ? EMPTY_SENTINEL : next;
+            cur = (next == EMPTY_SENTINEL) ? EMPTY_SENTINEL : next;
         }
     }
 
