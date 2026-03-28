@@ -25,7 +25,7 @@ static bool xsdt_ok = false;
  * acpi_map_phys - Map a physical address to a virtual one using vmm_alloc
  * This ensures the address is mapped in a safe, non-conflicting region of kernel memory.
  */
-static void* acpi_map_phys(uint64_t phys_addr, size_t size) {
+void* acpi_map_phys(uint64_t phys_addr, size_t size) {
     if (phys_addr == 0) return NULL;
 
     void* virt_addr = NULL;
@@ -49,7 +49,7 @@ static void* acpi_map_phys(uint64_t phys_addr, size_t size) {
 /*
  * acpi_unmap_phys - Unmap a previously mapped physical region
  */
-static void acpi_unmap_phys(void* virt) {
+void acpi_unmap_phys(void* virt) {
     if (!virt) return;
 
     void* base_virt = (void*)((uintptr_t)virt & ~(PAGE_SIZE - 1));

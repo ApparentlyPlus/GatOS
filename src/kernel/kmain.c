@@ -31,6 +31,7 @@
 #include <kernel/memory/pmm.h>
 #include <kernel/memory/vmm.h>
 #include <kernel/sys/timers.h>
+#include <kernel/sys/power.h>
 #include <kernel/sys/acpi.h>
 #include <kernel/debug.h>
 #include <klibc/string.h>
@@ -239,11 +240,16 @@ void kernel_main(void* mb_info) {
 	while (1) {
 	    char tt[128] = {0};
 
-	    kprintf("\nType anything you want: ");
+	    kprintf("\nType anything you want (shutdown or reboot to exit): ");
 
 	    // Use scanset to read until newline
 	    if (kscanf(" %127[^\n]", tt) > 0) {
 	        kprintf("You typed: %s\n", tt);
+	        if (kstrcmp(tt, "shutdown") == 0) {
+	            power_off();
+	        } else if (kstrcmp(tt, "reboot") == 0) {
+	            reboot();
+	        }
 	    }
 	}
 	
