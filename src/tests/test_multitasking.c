@@ -201,11 +201,10 @@ static bool t_kt_stk(void) {
 static bool t_kt_ctx(void) {
     process_t* p = process_create("t_ktctx", NULL);
     thread_t* t = thread_create(p, "kt_ctx", kentry, (void*)0xDEAD, false, 0);
-    TEST_ASSERT(t->context != NULL);
-    uintptr_t base = (uintptr_t)t->kstack;
-    uintptr_t top  = base + KERNEL_STACK_SIZE;
-    uintptr_t ctx  = (uintptr_t)t->context;
-    TEST_ASSERT(ctx >= base && ctx < top);
+    // context is now embedded in the thread struct, not on the kstack
+    TEST_ASSERT(t->context.iret_cs == KERNEL_CS);
+    uintptr_t ctx = (uintptr_t)&t->context;
+    TEST_ASSERT(ctx >= (uintptr_t)t && ctx < (uintptr_t)t + sizeof(thread_t));
     process_destroy(p);
     return true;
 }
@@ -213,7 +212,7 @@ static bool t_kt_ctx(void) {
 static bool t_kt_cs(void) {
     process_t* p = process_create("t_ktcs", NULL);
     thread_t* t = thread_create(p, "kt_cs", kentry, NULL, false, 0);
-    TEST_ASSERT(t->context->iret_cs == KERNEL_CS);
+    TEST_ASSERT(t->context.iret_cs == KERNEL_CS);
     process_destroy(p);
     return true;
 }
@@ -221,7 +220,7 @@ static bool t_kt_cs(void) {
 static bool t_kt_ss(void) {
     process_t* p = process_create("t_ktss", NULL);
     thread_t* t = thread_create(p, "kt_ss", kentry, NULL, false, 0);
-    TEST_ASSERT(t->context->iret_ss == KERNEL_DS);
+    TEST_ASSERT(t->context.iret_ss == KERNEL_DS);
     process_destroy(p);
     return true;
 }
@@ -230,7 +229,7 @@ static bool t_kt_arg(void) {
     process_t* p = process_create("t_ktarg", NULL);
     thread_t* t = thread_create(p, "kt_arg", kentry, (void*)0xBEEF, false, 0);
     /* thread_wrap(entry, arg): entry→rdi, arg→rsi */
-    TEST_ASSERT(t->context->rsi == 0xBEEF);
+    TEST_ASSERT(t->context.rsi == 0xBEEF);
     process_destroy(p);
     return true;
 }
@@ -257,7 +256,7 @@ static bool t_ut_stk(void) {
 static bool t_ut_ctx(void) {
     process_t* p = process_create("t_utctx", NULL);
     thread_t* t = thread_create(p, "ut_ctx", uentry, NULL, true, 0);
-    TEST_ASSERT(t->context != NULL);
+    TEST_ASSERT(t->context.iret_cs == USER_CS);
     process_destroy(p);
     return true;
 }
@@ -266,8 +265,7 @@ static bool t_ut_align(void) {
     /* x86-64 SysV ABI: RSP % 16 == 8 at function entry point */
     process_t* p = process_create("t_utalign", NULL);
     thread_t* t = thread_create(p, "ut_align", uentry, NULL, true, 0);
-    TEST_ASSERT(t->context != NULL);
-    uintptr_t rsp = (uintptr_t)t->context->iret_rsp;
+    uintptr_t rsp = (uintptr_t)t->context.iret_rsp;
     TEST_ASSERT((rsp % 16) == 8);
     process_destroy(p);
     return true;

@@ -203,23 +203,28 @@ thread_t* thread_create(process_t* process, const char* name, void (*entry)(void
     kmemset(thread->kstack, 0, KERNEL_STACK_SIZE);
 
     uintptr_t stack_top = (uintptr_t)thread->kstack + KERNEL_STACK_SIZE;
-    thread->context = (cpu_context_t*)(stack_top - sizeof(cpu_context_t));
-    kmemset(thread->context, 0, sizeof(cpu_context_t));
 
-    thread->context->iret_flags = 0x202; // IF enabled
+    /* Note here: Context is embedded in the thread struct, never on the kstack
+    ISR.S uses &thread->context as a staging area to pop registers before iretq
+    restores the real RSP */
     
+    // So kstack can be freed at any time without corrupting persistent context state
+    kmemset(&thread->context, 0, sizeof(cpu_context_t));
+
+    thread->context.iret_flags = 0x202; // IF enabled
+
     if (is_user) {
-        thread->context->iret_cs = USER_CS;
-        thread->context->iret_ss = USER_DS;
-        
+        thread->context.iret_cs = USER_CS;
+        thread->context.iret_ss = USER_DS;
+
         // Use the global userspace_start as the RIP
         uintptr_t offset_start = (uintptr_t)userspace_start - (uintptr_t)&USER_TEXT_START;
-        thread->context->iret_rip = USER_CODE_VIRT_ADDR + offset_start;
+        thread->context.iret_rip = USER_CODE_VIRT_ADDR + offset_start;
 
         // The actual entry function and its argument are passed via registers
         uintptr_t offset_entry = (uintptr_t)entry - (uintptr_t)&USER_TEXT_START;
-        thread->context->rdi = USER_CODE_VIRT_ADDR + offset_entry;
-        thread->context->rsi = (uint64_t)arg;
+        thread->context.rdi = USER_CODE_VIRT_ADDR + offset_entry;
+        thread->context.rsi = (uint64_t)arg;
 
         if (user_rsp == 0) {
             // Allocate userspace stack lazily from the process VMM directly
@@ -241,17 +246,17 @@ thread_t* thread_create(process_t* process, const char* name, void (*entry)(void
             thread->ustack = NULL;
         }
 
-        thread->context->iret_rsp = user_rsp;
+        thread->context.iret_rsp = user_rsp;
 
     } else {
-        // For kernel threads, we can directly set the RIP to the entry point and use the kernel stack
-        thread->context->iret_cs = KERNEL_CS;
-        thread->context->iret_ss = KERNEL_DS;
-        thread->context->iret_rip = (uint64_t)thread_wrap;
-        thread->context->iret_rsp = stack_top - sizeof(cpu_context_t);
-        
-        thread->context->rdi = (uint64_t)entry;
-        thread->context->rsi = (uint64_t)arg;
+        // entry runs via thread_wrap on a fresh kstack
+        thread->context.iret_cs  = KERNEL_CS;
+        thread->context.iret_ss  = KERNEL_DS;
+        thread->context.iret_rip = (uint64_t)thread_wrap;
+        thread->context.iret_rsp = stack_top - 8;
+
+        thread->context.rdi = (uint64_t)entry;
+        thread->context.rsi = (uint64_t)arg;
     }
 
     thread->next = process->threads;
@@ -282,7 +287,6 @@ thread_t* thread_create_bootstrap(process_t* process, const char* name) {
     );
 
     thread->kstack = NULL;
-    thread->context = NULL; 
 
     thread->next = process->threads;
     process->threads = thread;

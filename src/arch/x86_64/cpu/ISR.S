@@ -31,9 +31,12 @@
  * Author: u/ApparentlyPlus
  */
 
+#include <arch/x86_64/memory/layout.h>
+
 .intel_syntax noprefix
 
 .extern interrupt_dispatcher
+.extern sched_stack_top
 
 .section .text
 .code64
@@ -76,12 +79,42 @@ generic_interrupt_handler:
     push r14
     push r15
     
-    // Call our C interrupt dispatcher
-    // Ensure 16b stack alignment at call boundary (SysV ABI)
+    // Pass a pointer to the saved-context frame to the dispatcher.
     mov rdi, rsp
+
+    // Switch to the per CPU scheduler stack before calling into C
+    
+    // If sched_stack_top is still 0 (early boot, before sched_init), we stay
+    // on the current stack
+    mov rax, [sched_stack_top + rip]
+    test rax, rax
+    jz .no_sched_stack
+    
+    // Check if we are already on the scheduler stack (nested interrupts)
+    // If rsp is within [stack_top - KERNEL_STACK_SIZE, stack_top), skip the switch
+    mov rbx, rax
+
+    // rbx = stack bottom
+    sub rbx, KERNEL_STACK_SIZE 
+    cmp rsp, rbx
+
+    // rsp below stack bottom, not on sched stack
+    jb .do_switch 
+    cmp rsp, rax
+
+    // rsp at or above top, not on sched stack
+    jae .do_switch 
+
+    // inside bounds, already on sched stack
+    jmp .no_sched_stack  
+
+.do_switch:
+    mov rsp, rax
+.no_sched_stack:
+
+    // Ensure 16b stack alignment at call boundary (SysV ABI)
     sub rsp, 8
     call interrupt_dispatcher
-    add rsp, 8
 
     // Restore the stack pointer
     mov rsp, rax

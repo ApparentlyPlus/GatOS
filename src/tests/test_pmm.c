@@ -2,8 +2,8 @@
  * test_pmm.c - Physical Memory Manager Validation Suite
  *
  * Tests every public PMM function: pmm_is_initialized, pmm_managed_base/end/size,
- * pmm_min_block_size, pmm_alloc, pmm_free, pmm_mark_reserved_range,
- * pmm_mark_free_range, pmm_get_stats, pmm_dump_stats, pmm_verify_integrity.
+ * pmm_min_block_size, pmm_alloc, pmm_free, pmm_mark_reserved,
+ * pmm_populate, pmm_get_stats, pmm_dump_stats, pmm_verify_integrity.
  *
  * Machine-adaptive: exhaustion and ladder tests use pmm_managed_size() and
  * pmm_min_block_size() instead of hardcoded sizes.
@@ -278,7 +278,7 @@ static bool t_reserved(void) {
 
     uint64_t rs = base + 256 * 1024;
     uint64_t re = base + 512 * 1024;
-    TEST_ASSERT_STATUS(pmm_mark_reserved_range(rs, re), PMM_OK);
+    TEST_ASSERT_STATUS(pmm_mark_reserved(rs, re), PMM_OK);
 
     uint64_t frag;
     if (pmm_alloc(256 * 1024, &frag) == PMM_OK) {
@@ -293,7 +293,7 @@ static bool t_mark_free(void) {
     /* Just test it doesn't crash and returns something sensible */
     uint64_t base = pmm_managed_base();
     /* Call on a very small already-free region - implementation must handle */
-    pmm_status_t s = pmm_mark_free_range(base, base); /* zero-size edge */
+    pmm_status_t s = pmm_populate(base, base); /* zero-size edge */
     /* Any non-crash result is acceptable */
     (void)s;
     return true;

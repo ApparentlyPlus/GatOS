@@ -9,8 +9,6 @@
  */
 
 #include <arch/x86_64/memory/paging.h>
-#include <arch/x86_64/memory/layout.h>
-#include <arch/x86_64/multiboot2.h>
 #include <kernel/sys/spinlock.h>
 #include <kernel/memory/pmm.h>
 #include <kernel/debug.h>
@@ -32,13 +30,25 @@ static uint32_t order_count = 0;
 static spinlock_t pmm_lock;
 
 // Forward declarations
-static pmm_status_t pmm_mark_free_range_internal(uint64_t start, uint64_t end);
+static pmm_status_t pmm_mark_free_range(uint64_t start, uint64_t end);
 
 // Free list heads per order. Store physical address of first free block, or EMPTY_SENTINEL for empty.
 static uint64_t free_heads[PMM_MAX_ORDERS];
 static const uint64_t EMPTY_SENTINEL = UINT64_MAX;
 
 static pmm_stats_t stats;
+
+// We're declaring an exclusion table
+// that we populate before marking free ranges
+#define PMM_MAX_EXCLUSIONS 8
+
+typedef struct {
+    uint64_t start;
+    uint64_t end;
+} pmm_exclusion_t;
+
+static pmm_exclusion_t exclusions[PMM_MAX_EXCLUSIONS];
+static uint32_t exclusion_count = 0;
 
 /*
  * order_to_size - convert order to block size in bytes 
@@ -309,11 +319,13 @@ uint64_t pmm_min_block_size(void) {
 /*
  * pmm_init - Initialize the physical memory manager.
  *
- * Defines the managed physical address range [range_start_phys, range_end_phys)
- * and populates the free list using the multiboot memory map, adding only regions
- * the firmware explicitly marks as available.
+ * Sets up the buddy allocator data structures for the managed range
+ * [range_start_phys, range_end_phys). 
+ * 
+ * Freelists are now empty by default and the caller must register 
+ * exclusions via pmm_exclude_range(), then populate free memory via pmm_populate()
  */
-pmm_status_t pmm_init(uint64_t range_start_phys, uint64_t range_end_phys, uint64_t min_block_size, multiboot_parser_t* multiboot) {
+pmm_status_t pmm_init(uint64_t range_start_phys, uint64_t range_end_phys, uint64_t min_block_size) {
     spinlock_init(&pmm_lock, "pmm_global");
     bool flags = spinlock_acquire(&pmm_lock);
 
@@ -365,26 +377,42 @@ pmm_status_t pmm_init(uint64_t range_start_phys, uint64_t range_end_phys, uint64
         free_heads[i] = EMPTY_SENTINEL;
 
     kmemset(&stats, 0, sizeof(pmm_stats_t));
+    exclusion_count = 0;
 
     inited = true;
 
     LOGF("[PMM] PMM initialized, managing 0x%lx - 0x%lx (%zu MiB)\n",
            pmm_managed_base(), pmm_managed_end(), pmm_managed_size() / (1024 * 1024));
 
-    // Populate the free list from firmware confirmed available regions only
-    // Author's Note: This might show up as a giant 1GB utilization in the dashboard
-    // because of a huge MMIO hole above the kernel
-    for (size_t i = 0; i < multiboot->memory_map_length; i++) {
-        uintptr_t region_start, region_end;
-        uint32_t region_type;
-        if (multiboot_get_memory_region(multiboot, i, &region_start, &region_end, &region_type) != 0)
-            continue;
-        if (region_type != MULTIBOOT_MEMORY_AVAILABLE)
-            continue;
-        LOGF("[PMM] Adding available region: 0x%lx - 0x%lx\n", region_start, region_end);
-        pmm_mark_free_range_internal((uint64_t)region_start, (uint64_t)region_end);
+    spinlock_release(&pmm_lock, flags);
+    return PMM_OK;
+}
+
+/*
+ * pmm_exclude_range - Register a physical range [start, end) that must never
+ * be allocated or written to
+ */
+pmm_status_t pmm_exclude_range(uint64_t start, uint64_t end) {
+    bool flags = spinlock_acquire(&pmm_lock);
+    if (!inited) {
+        spinlock_release(&pmm_lock, flags);
+        return PMM_ERR_NOT_INIT;
+    }
+    if (end <= start) {
+        spinlock_release(&pmm_lock, flags);
+        return PMM_ERR_INVALID;
+    }
+    if (exclusion_count >= PMM_MAX_EXCLUSIONS) {
+        LOGF("[PMM] Exclusion table full (max %d)\n", PMM_MAX_EXCLUSIONS);
+        spinlock_release(&pmm_lock, flags);
+        return PMM_ERR_INVALID;
     }
 
+    exclusions[exclusion_count].start = start;
+    exclusions[exclusion_count].end = end;
+    exclusion_count++;
+
+    LOGF("[PMM] Registered exclusion [0x%lx, 0x%lx)\n", start, end);
     spinlock_release(&pmm_lock, flags);
     return PMM_OK;
 }
@@ -416,6 +444,7 @@ void pmm_shutdown(void) {
     min_block = PMM_MIN_ORDER_PAGE_SIZE;
     max_order = 0;
     order_count = 0;
+    exclusion_count = 0;
 
     for (uint32_t i = 0; i < PMM_MAX_ORDERS; ++i)
         free_heads[i] = EMPTY_SENTINEL;
@@ -433,24 +462,28 @@ static pmm_status_t alloc_block_of_order(uint32_t req_order, uint64_t *out_phys)
     if (!inited) return PMM_ERR_NOT_INIT;
     if (req_order > max_order) return PMM_ERR_OOM;
 
-    uint32_t o = req_order;
-    while (o <= max_order && free_heads[o] == EMPTY_SENTINEL) ++o;
-    if (o > max_order) return PMM_ERR_OOM;
+    for (uint32_t o = req_order; o <= max_order; ++o) {
+        while (free_heads[o] != EMPTY_SENTINEL) {
+            uint64_t block = pop_head(o);
+            if (block == EMPTY_SENTINEL) {
+                break;
+            }
 
-    uint64_t block = pop_head(o);
-    if (block == EMPTY_SENTINEL) return PMM_ERR_OOM;
+            while (o > req_order) {
+                --o;
+                uint64_t half = order_to_size(o);
+                uint64_t buddy = block + half;
 
-    while (o > req_order) {
-        --o;
-        uint64_t half = order_to_size(o);
-        uint64_t buddy = block + half;
-        
-        // Push buddy into freelist at order o
-        push_head(o, buddy);
+                // Push buddy into freelist at order o
+                push_head(o, buddy);
+            }
+
+            *out_phys = block;
+            return PMM_OK;
+        }
     }
 
-    *out_phys = block;
-    return PMM_OK;
+    return PMM_ERR_OOM;
 }
 
 /*
@@ -562,10 +595,10 @@ pmm_status_t pmm_free(uint64_t phys, size_t size_bytes) {
 }
 
 /*
- * pmm_mark_reserved_range - mark [start,end) as reserved
+ * pmm_mark_reserved - mark [start,end) as reserved
  * This handles partial overlaps and ensures free-lists remain consistent.
  */
-pmm_status_t pmm_mark_reserved_range(uint64_t start, uint64_t end) {
+pmm_status_t pmm_mark_reserved(uint64_t start, uint64_t end) {
     bool flags = spinlock_acquire(&pmm_lock);
     if (!inited) {
         spinlock_release(&pmm_lock, flags);
@@ -605,10 +638,10 @@ pmm_status_t pmm_mark_reserved_range(uint64_t start, uint64_t end) {
                 remove_specific((uint32_t)o, cur);
 
                 if (block_start < start) {
-                    pmm_mark_free_range_internal(block_start, start);
+                    pmm_mark_free_range(block_start, start);
                 }
                 if (block_end > end) {
-                    pmm_mark_free_range_internal(end, block_end);
+                    pmm_mark_free_range(end, block_end);
                 }
             }
 
@@ -621,11 +654,9 @@ pmm_status_t pmm_mark_reserved_range(uint64_t start, uint64_t end) {
 }
 
 /*
- * pmm_mark_free_range_internal - manually mark a physical range [start,end) as free
- * Partitions the range into aligned blocks and pushes them into the free-lists.
- * Internal use only since it assumes the lock is held.
+ * pmm_mark_free_range - manually mark a physical range [start,end) as free
  */
-static pmm_status_t pmm_mark_free_range_internal(uint64_t start, uint64_t end) {
+static pmm_status_t pmm_mark_free_range(uint64_t start, uint64_t end) {
     if (!inited) return PMM_ERR_NOT_INIT;
     if (end <= start) return PMM_ERR_INVALID;
 
@@ -648,16 +679,33 @@ static pmm_status_t pmm_mark_free_range_internal(uint64_t start, uint64_t end) {
                orig_start, orig_end, start, end);
     }
 
+    // Clip the range against all registered exclusions
+    // Author's Note: This is a simple O(n) loop since we expect very few exclusions. 
+    // For large exclusion counts, a more efficient data structure would be needed.
+    for (uint32_t i = 0; i < exclusion_count; i++) {
+        uint64_t ex_start = exclusions[i].start;
+        uint64_t ex_end = exclusions[i].end;
+        if (start < ex_end && ex_start < end) {
+            if (start < ex_start) {
+                pmm_mark_free_range(start, ex_start);
+            }
+            if (ex_end < end) {
+                pmm_mark_free_range(ex_end, end);
+            }
+            return PMM_OK;
+        }
+    }
+
     partition_range_into_blocks(start, end);
     return PMM_OK;
 }
 
 /*
- * pmm_mark_free_range - public version
+ * pmm_populate - public version
  */
-pmm_status_t pmm_mark_free_range(uint64_t start, uint64_t end) {
+pmm_status_t pmm_populate(uint64_t start, uint64_t end) {
     bool flags = spinlock_acquire(&pmm_lock);
-    pmm_status_t status = pmm_mark_free_range_internal(start, end);
+    pmm_status_t status = pmm_mark_free_range(start, end);
     spinlock_release(&pmm_lock, flags);
     return status;
 }

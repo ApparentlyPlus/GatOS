@@ -70,10 +70,25 @@ void kernel_test(void* mb_info, char* KERNEL_VERSION) {
 
 	// Run tests for each subsystem
 
-	pmm_status_t pmm_status = pmm_init(get_kend(false) + PAGE_SIZE, PHYSMAP_V2P(get_physmap_end()), PAGE_SIZE, &multiboot);
-	if(pmm_status != PMM_OK){
-        LOGF("[PMM] Failed to initialize physical memory manager, error code: %d\n", pmm_status);
+	// Initialize PMM before VMM since VMM needs to allocate memory for page tables
+	pmm_status_t pmm_status = pmm_init(0x0, PHYSMAP_V2P(get_physmap_end()), PAGE_SIZE);
+	if(pmm_status != PMM_OK) {
+		QEMU_LOG("[PMM] Failed to initialize physical memory manager", TOTAL_DBG);
 		return;
+	}
+
+	// Exclude kernel image from the allocator before populating freelists
+	pmm_exclude_range(get_kstart(false), get_kend(false));
+
+	// Populate freelists from firmware reported available regions
+	for (size_t i = 0; i < multiboot.memory_map_length; i++) {
+		uintptr_t region_start, region_end;
+		uint32_t region_type;
+		if (multiboot_get_memory_region(&multiboot, i, &region_start, &region_end, &region_type) != 0)
+			continue;
+		if (region_type != MULTIBOOT_MEMORY_AVAILABLE)
+			continue;
+		pmm_populate((uint64_t)region_start, (uint64_t)region_end);
 	}
     
     QEMU_LOG("PMM Initialized (Tests deferred)", TOTAL_DBG);

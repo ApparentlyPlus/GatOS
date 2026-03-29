@@ -37,6 +37,10 @@ static bool sched_on = false;
 // Lazy FPU, track which thread's state is live in the FPU hardware
 static thread_t* fpu_owner = NULL;
 
+// Top of the dedicated per-CPU scheduler stack
+uint64_t sched_stack_top = 0;
+static void* sched_stack = NULL;
+
 /*
  * sleep_cmp - Comparison function for the sleep tree
  */
@@ -108,12 +112,18 @@ void sched_init(void) {
     if (!cur) panic("Failed to bootstrap kernel main thread!");
 
     // Use the boot stack for kernel_main to keep the current execution stack valid
-    // The boot stack is 32 KiB; we treat the top 16 KiB as the kernel stack
+    // The boot stack is 32 KiB, we treat the top 16 KiB as the kernel stack
     extern char KERNEL_STACK_TOP;
     cur->kstack = (void *)((uintptr_t)&KERNEL_STACK_TOP - KERNEL_STACK_SIZE);
 
     avl_init(&sleep_tree, sleep_cmp);
     irq_register(INT_DEVICE_NOT_AVAILABLE, fpu_nm_handler);
+
+    // Allocate the per CPU scheduler stack
+    sched_stack = kmalloc(KERNEL_STACK_SIZE);
+    if (!sched_stack) panic("Failed to allocate scheduler stack!");
+    sched_stack_top = (uint64_t)sched_stack + KERNEL_STACK_SIZE;
+    LOGF("[SCHED] Scheduler stack allocated at 0x%lx\n", sched_stack_top);
 
     sched_on = true;
     LOGF("[SCHED] Scheduler initialized and enabled.\n");
@@ -174,6 +184,8 @@ static void sched_add_dead(thread_t* thread) {
 void sched_drop_proc(process_t* proc) {
     if (!proc) return;
 
+    bool iflag = intr_save();
+
     thread_t* prev = NULL;
     thread_t* curr = rq_head;
     while (curr) {
@@ -219,6 +231,8 @@ void sched_drop_proc(process_t* proc) {
             curr = curr->rnext;
         }
     }
+
+    intr_restore(iflag);
 }
 
 /*
@@ -230,7 +244,9 @@ cpu_context_t* sched_schedule(cpu_context_t* ctx) {
     uint64_t now = get_uptime_ms();
 
     if (cur) {
-        cur->context = ctx;
+        // Copy the cpu_context_t from wherever ISR.S built it into the embedded field in the thread struct
+        // From this point the kstack is no longer referenced by any live pointer, so thread_destroy may free it freely.
+        cur->context = *ctx;
         cur->fs_base = read_msr(MSR_FS_BASE);
 
         if (cur->state == T_RUNNING) {
@@ -351,18 +367,23 @@ cpu_context_t* sched_schedule(cpu_context_t* ctx) {
 
     write_msr(MSR_FS_BASE, cur->fs_base);
 
-    cpu_context_t *next_ctx = cur->context;
-    if (next_ctx) {
-        uint16_t cs = (uint16_t)next_ctx->iret_cs;
-        uint16_t ss = (uint16_t)next_ctx->iret_ss;
-        bool is_user = (cs & 3) == 3;
-        if (!is_user && (cs != KERNEL_CS || (ss != 0 && ss != KERNEL_DS)))
-            panicf_c(next_ctx, "sched: corrupt kernel ctx for '%s' (cs=0x%x ss=0x%x)",
-                     cur->name, cs, ss);
-        if (is_user && (cs != USER_CS || ss != USER_DS))
-            panicf_c(next_ctx, "sched: corrupt user ctx for '%s' (cs=0x%x ss=0x%x)",
-                     cur->name, cs, ss);
-    }
+    /* 
+    Author's Note: 
+    
+    Return a pointer to the embedded context struct.
+    ISR.S will do "mov rsp, rax" to use it as a staging area 
+    for the pop/iretq sequence, and iretq then restores the real 
+    RSP from context.iret_rsp
+    */
+
+    cpu_context_t *next_ctx = &cur->context;
+    uint16_t cs = (uint16_t)next_ctx->iret_cs;
+    uint16_t ss = (uint16_t)next_ctx->iret_ss;
+    bool is_user = (cs & 3) == 3;
+    if (!is_user && (cs != KERNEL_CS || (ss != 0 && ss != KERNEL_DS)))
+        panicf_c(next_ctx, "sched: corrupt kernel ctx for '%s' (cs=0x%x ss=0x%x)", cur->name, cs, ss);
+    if (is_user && (cs != USER_CS || ss != USER_DS))
+        panicf_c(next_ctx, "sched: corrupt user ctx for '%s' (cs=0x%x ss=0x%x)", cur->name, cs, ss);
     return next_ctx;
 }
 
@@ -387,10 +408,12 @@ thread_t* sched_current(void) {
 void sched_sleep(uint64_t ms) {
     if (!cur || !sched_on) return;
 
+    bool iflag = intr_save();
     cur->state = T_SLEEPING;
     cur->wake_at = get_uptime_ms() + ms;
 
     sched_yield();
+    intr_restore(iflag);
 }
 
 /*
@@ -399,11 +422,15 @@ void sched_sleep(uint64_t ms) {
 void sched_exit(void) {
     if (!cur) return;
 
+    bool iflag = intr_save();
     cur->state = T_DEAD;
     LOGF("[SCHED] Thread '%s' (TID: %u) exited.\n", cur->name, cur->tid);
 
     proc_hdr_update(cur->process);
 
     sched_yield();
-    while(1);
+
+    // the scheduler will never reschedule a T_DEAD thread
+    intr_restore(iflag);
+    __builtin_unreachable();
 }

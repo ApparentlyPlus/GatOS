@@ -41,7 +41,7 @@ typedef struct thread {
     struct process* process;
     
     thread_state_t state;
-    cpu_context_t* context; // Pointer to the saved state on the kernel stack
+    cpu_context_t context;  // Saved CPU state
     void* kstack;           // Base of the kernel stack
     void* ustack;           // Virtual address of the user stack
     uint64_t fs_base;       // Thread Local Storage base

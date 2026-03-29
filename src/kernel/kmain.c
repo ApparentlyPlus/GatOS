@@ -103,16 +103,26 @@ void kernel_main(void* mb_info) {
 	QEMU_LOG("Initialized console", TOTAL_DBG);
 
 	// Initialize PMM before VMM since VMM needs to allocate memory for page tables
-	pmm_status_t pmm_status = pmm_init(0x0, PHYSMAP_V2P(get_physmap_end()), PAGE_SIZE, &multiboot);
-	pmm_mark_reserved_range(get_kstart(false), get_kend(false));
-
-	if(pmm_status == PMM_OK) {
-		QEMU_LOG("Initialized physical memory manager", TOTAL_DBG);
-	}
-	else {
+	pmm_status_t pmm_status = pmm_init(0x0, PHYSMAP_V2P(get_physmap_end()), PAGE_SIZE);
+	if(pmm_status != PMM_OK) {
 		QEMU_LOG("[PMM] Failed to initialize physical memory manager", TOTAL_DBG);
 		return;
 	}
+
+	// Exclude kernel image from the allocator before populating freelists
+	pmm_exclude_range(get_kstart(false), get_kend(false));
+
+	// Populate freelists from firmware reported available regions
+	for (size_t i = 0; i < multiboot.memory_map_length; i++) {
+		uintptr_t region_start, region_end;
+		uint32_t region_type;
+		if (multiboot_get_memory_region(&multiboot, i, &region_start, &region_end, &region_type) != 0)
+			continue;
+		if (region_type != MULTIBOOT_MEMORY_AVAILABLE)
+			continue;
+		pmm_populate((uint64_t)region_start, (uint64_t)region_end);
+	}
+	QEMU_LOG("Initialized physical memory manager", TOTAL_DBG);
 
 	// Initialize slab allocator before VMM since VMM needs to allocate memory for its structures
 	slab_status_t slab_status = slab_init();
