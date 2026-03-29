@@ -27,13 +27,21 @@ void syscall_init(void) {
     efer |= EFER_SCE; 
     write_msr(MSR_EFER, efer);
 
-    // Author notes:
-    // For STAR MSR, the upper 16 bits (63:48) 
-    // define the base for user mode CS/SS, and the lower 16 bits (47:32) define the base for kernel mode CS/SS.
-    // We want User CS = 0x20 (index 4), User SS = 0x18 (index 3), so base should be 0x10.
-    // Bits 47:32 should be 0x10 for kernel mode, and bits 63:48 should be 0x08 for user mode.
+    // STAR MSR layout:
+    //   STAR[47:32] = kernel CS base (SYSCALL loads CS=base, SS=base+8)
+    //   STAR[63:48] = user CS/SS base (SYSRET loads CS=base+16, SS=base+8)
+    //
+    // GDT order: 0x08=KCode, 0x10=KData, 0x18=UData(DPL3), 0x20=UCode(DPL3)
+    //
+    // We set the user base to 0x13 (= 0x10 | RPL3) so that SYSRETQ computes:
+    //   CS = 0x13 + 16 = 0x23 = USER_CS
+    //   SS = 0x13 + 8  = 0x1B = USER_DS
+    //
+    // This avoids reliance on the CPU forcing SS.RPL=3, which certain Intel
+    // microarchitectures fail to do (producing SS=0x18 instead of 0x1B)
+    // Author's Note: Oooooof dude, this was a pain to figure out, thanks google
 
-    uint64_t star = ((uint64_t)0x10 << 48) | ((uint64_t)0x08 << 32);
+    uint64_t star = ((uint64_t)0x13 << 48) | ((uint64_t)0x08 << 32);
     write_msr(MSR_STAR, star);
 
     write_msr(MSR_LSTAR, (uint64_t)syscall_entry);
@@ -45,20 +53,14 @@ void syscall_init(void) {
 }
 
 /*
- * syscall_dispatcher - Called from assembly stub
+ * syscall_dispatcher - Called from syscall_entry.S with a pointer to
+ * the full cpu_context_t built on the per-thread kernel stack
  */
-void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
-    // registers[0] = r15 ... registers[14] = rax
-    // According to our push order:
-    // rdi = registers[9]
-    // rsi = registers[10]
-    // rdx = registers[11]
-
-    // We could use an enum here for the register indices, 
-    // but it's pretty self-explanatory and we only have a few syscalls for now so eh
-    
+void syscall_dispatcher(cpu_context_t* regs) {
     thread_t* current = sched_current();
     if (!current) return;
+
+    uint64_t syscall_num = regs->rax;
 
     switch (syscall_num) {
         case SYS_EXIT:
@@ -66,18 +68,18 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
             break;
             
         case SYS_WRITE: {
-            const char* buf = (const char*)registers[9];
-            size_t len = (size_t)registers[10];
+            const char* buf = (const char*)regs->rdi;
+            size_t len = (size_t)regs->rsi;
 
             if (!buf || len == 0) {
-                registers[14] = (uint64_t)-1;
+                regs->rax = (uint64_t)-1;
                 break;
             }
 
             if (len > 65536) len = 65536;
             char* kbuf = kmalloc(len);
             if (!kbuf) {
-                registers[14] = (uint64_t)-1;
+                regs->rax = (uint64_t)-1;
                 break;
             }
 
@@ -104,14 +106,14 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
                 tty_write(current->process->tty, kbuf, len);
             }
             kfree(kbuf);
-            registers[14] = (uint64_t)len;
+            regs->rax = (uint64_t)len;
             break;
         }
             
         case SYS_MMAP: {
-            void* addr = (void*)registers[9];
-            size_t length = (size_t)registers[10];
-            size_t vm_flags = (size_t)registers[11];
+            void* addr = (void*)regs->rdi;
+            size_t length = (size_t)regs->rsi;
+            size_t vm_flags = (size_t)regs->rdx;
             
             // Don't allow userspace to set flags other than these
             size_t user_allowed_flags = VM_FLAG_WRITE | VM_FLAG_EXEC | VM_FLAG_LAZY;
@@ -127,17 +129,17 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
             }
             
             if (status == VMM_OK) {
-                registers[14] = (uint64_t)out_addr; // rax
+                regs->rax = (uint64_t)out_addr;
             } else {
-                registers[14] = (uint64_t)-1;
+                regs->rax = (uint64_t)-1;
             }
             break;
         }
         
         case SYS_MUNMAP: {
-            void* addr = (void*)registers[9];
+            void* addr = (void*)regs->rdi;
             vmm_free(current->process->vmm, addr);
-            registers[14] = 0;
+            regs->rax = 0;
             break;
         }
         
@@ -146,17 +148,17 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
             break;
 
         case SYS_SLEEP_MS: {
-            uint64_t ms = registers[9];
+            uint64_t ms = regs->rdi;
             sched_sleep(ms);
             break;
         }
 
         case SYS_READ: {
-            char* buf = (char*)registers[9];
-            size_t count = (size_t)registers[10];
+            char* buf = (char*)regs->rdi;
+            size_t count = (size_t)regs->rsi;
 
             if (!buf || count == 0) {
-                registers[14] = (uint64_t)-1;
+                regs->rax = (uint64_t)-1;
                 break;
             }
 
@@ -166,19 +168,19 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
 
             if (!vmm_check_buffer(current->process->vmm, buf, count, VM_FLAG_USER | VM_FLAG_WRITE)) {
                 LOGF("[SYSCALL] SYS_READ: invalid buffer 0x%lx (len: %zu) from '%s'\n", (uintptr_t)buf, count, current->name);
-                registers[14] = (uint64_t)-1;
+                regs->rax = (uint64_t)-1;
                 break;
             }
 
             tty_t* tty = current->process->tty;
             if (!tty) {
-                registers[14] = (uint64_t)-1;
+                regs->rax = (uint64_t)-1;
                 break;
             }
 
             char* kbuf = kmalloc(count);
             if (!kbuf) {
-                registers[14] = (uint64_t)-1;
+                regs->rax = (uint64_t)-1;
                 break;
             }
 
@@ -198,55 +200,55 @@ void syscall_dispatcher(uint64_t syscall_num, uint64_t* registers) {
             intr_restore(ints);
             kfree(kbuf);
 
-            registers[14] = (uint64_t)n;
+            regs->rax = (uint64_t)n;
             break;
         }
         
         case SYS_TTY_CTRL: {
-            uint64_t cmd = registers[9];
-            uint64_t arg2 = registers[10];
+            uint64_t cmd = regs->rdi;
+            uint64_t arg2 = regs->rsi;
             
             tty_t* tty = current->process->tty;
             if (!tty || !tty->console) {
-                registers[14] = (uint64_t)-1;
+                regs->rax = (uint64_t)-1;
                 break;
             }
             
             switch (cmd) {
                 case TTY_CTRL_CLEAR:
                     con_clear(tty->console, CONSOLE_COLOR_BLACK);
-                    registers[14] = 0;
+                    regs->rax = 0;
                     break;
                 case TTY_CTRL_CURSOR: {
                     uint8_t enabled = arg2 & 0xFF;
                     con_enable_cursor(tty->console, enabled);
-                    registers[14] = 0;
+                    regs->rax = 0;
                     break;
                 }
                 case TTY_CTRL_GET_DIMS: {
                     // height in high 32 bits, width in low 32
                     uint32_t width = (uint32_t)tty->console->width;
                     uint32_t height = (uint32_t)(tty->console->height - tty->console->header_rows);
-                    registers[14] = ((uint64_t)height << 32) | (uint64_t)width;
+                    regs->rax = ((uint64_t)height << 32) | (uint64_t)width;
                     break;
                 }
                 default:
-                    registers[14] = (uint64_t)-1;
+                    regs->rax = (uint64_t)-1;
                     break;
             }
             break;
         }
 
         case SYS_SET_FS_BASE: {
-            uint64_t base = registers[9];
+            uint64_t base = regs->rdi;
             // don't let userspace point FS into kernel memory
             if (base >= 0x0000800000000000ULL) {
-                registers[14] = (uint64_t)-1;
+                regs->rax = (uint64_t)-1;
                 break;
             }
             current->fs_base = base;
             write_msr(MSR_FS_BASE, base);
-            registers[14] = 0;
+            regs->rax = 0;
             break;
         }
 

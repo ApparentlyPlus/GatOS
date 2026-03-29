@@ -9,6 +9,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <arch/x86_64/cpu/interrupts.h>
 
 #define SYS_EXIT 1
 #define SYS_WRITE 2
@@ -26,3 +27,4 @@
 #define TTY_CTRL_GET_DIMS 2
 
 void syscall_init(void);
+void syscall_dispatcher(cpu_context_t* regs);
