@@ -8,22 +8,41 @@
 #include <stdint.h>
 
 void* kmemset(void *dest, int c, size_t n) {
-    unsigned char *p = dest;
-    while (n--) *p++ = (unsigned char)c;
+    uint8_t* p = (uint8_t*)dest;
+    while (n && ((uintptr_t)p & 7)) { *p++ = (uint8_t)c; n--; }
+    uint64_t fill = (uint8_t)c;
+    fill |= fill << 8; fill |= fill << 16; fill |= fill << 32;
+    uint64_t* q = (uint64_t*)p;
+    size_t words = n / 8; n &= 7;
+    while (words--) *q++ = fill;
+    p = (uint8_t*)q;
+    while (n--) *p++ = (uint8_t)c;
     return dest;
 }
 
 void *kmemcpy(void *dest, const void *src, size_t n) {
-    unsigned char *d = dest;
-    const unsigned char *s = src;
+    uint8_t* d = (uint8_t*)dest;
+    const uint8_t* s = (const uint8_t*)src;
+    while (n && ((uintptr_t)d & 7)) { *d++ = *s++; n--; }
+    uint64_t* dq = (uint64_t*)d;
+    const uint64_t* sq = (const uint64_t*)s;
+    size_t words = n / 8; n &= 7;
+    while (words--) *dq++ = *sq++;
+    d = (uint8_t*)dq; s = (const uint8_t*)sq;
     while (n--) *d++ = *s++;
     return dest;
 }
 
 void *kmemmove(void *dest, const void *src, size_t n) {
-    unsigned char *d = dest;
-    const unsigned char *s = src;
+    uint8_t* d = (uint8_t*)dest;
+    const uint8_t* s = (const uint8_t*)src;
+    if (d == s || n == 0) return dest;
     if (d < s) {
+        while (n && ((uintptr_t)d & 7)) { *d++ = *s++; n--; }
+        uint64_t* dq = (uint64_t*)d; const uint64_t* sq = (const uint64_t*)s;
+        size_t words = n / 8; n &= 7;
+        while (words--) *dq++ = *sq++;
+        d = (uint8_t*)dq; s = (const uint8_t*)sq;
         while (n--) *d++ = *s++;
     } else {
         d += n; s += n;
