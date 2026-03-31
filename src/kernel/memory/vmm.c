@@ -1332,8 +1332,7 @@ bool vmm_check_buffer(vmm_t* vmm_pub, const void* ptr, size_t size, size_t requi
 /*
  * vmm_map_page - Maps a physical address to the specified virtual address
  */
-vmm_status_t vmm_map_page(vmm_t* vmm_pub, uint64_t phys, void* virt,
-                          size_t flags) {
+vmm_status_t vmm_map_page(vmm_t* vmm_pub, uint64_t phys, void* virt, size_t flags) {
     vmm_ctx* vmm = vmm_get_instance(vmm_pub);
     if (!vmm) return VMM_ERR_NOT_INIT;
 
@@ -1368,8 +1367,7 @@ vmm_status_t vmm_unmap_page(vmm_t* vmm_pub, void* virt) {
 /*
  * vmm_map_range - Maps a physical range to a virtual range starting at a specific virtual address
  */
-vmm_status_t vmm_map_range(vmm_t* vmm_pub, uint64_t phys, void* virt,
-                           size_t length, size_t flags) {
+vmm_status_t vmm_map_range(vmm_t* vmm_pub, uint64_t phys, void* virt, size_t length, size_t flags) {
     vmm_ctx* vmm = vmm_get_instance(vmm_pub);
     if (!vmm) return VMM_ERR_NOT_INIT;
 
@@ -1379,11 +1377,20 @@ vmm_status_t vmm_map_range(vmm_t* vmm_pub, uint64_t phys, void* virt,
 
     uint64_t pt_flags = vmm_convert_vm_flags(flags, vmm->is_kernel);
     bool is_user_vmm = !vmm->is_kernel;
+    bool allow_huge = !(flags & (VM_FLAG_MMIO | VM_FLAG_LAZY));
 
-    for (size_t offset = 0; offset < length; offset += PAGE_SIZE) {
-        vmm_status_t status = arch_map_page(vmm->public.pt_root, phys + offset,
-                                            (void*)((uintptr_t)virt + offset),
-                                            pt_flags, is_user_vmm);
+    size_t offset = 0;
+    while (offset < length) {
+        uintptr_t virt_cur = (uintptr_t)virt + offset;
+        uint64_t phys_cur = phys + offset;
+        size_t remain = length - offset;
+        bool use_2mb = allow_huge && (virt_cur & (PAGE_2MB - 1)) == 0 &&
+                (phys_cur & (PAGE_2MB - 1)) == 0 && remain >= PAGE_2MB;
+        size_t step = use_2mb ? PAGE_2MB : PAGE_SIZE;
+
+        vmm_status_t status = use_2mb ? 
+            arch_map_huge_page(vmm->public.pt_root, phys_cur, (void*)virt_cur, pt_flags, is_user_vmm)
+            : arch_map_page(vmm->public.pt_root, phys_cur, (void*)virt_cur, pt_flags, is_user_vmm);
 
         if (status != VMM_OK) {
             for (size_t rollback = 0; rollback < offset; rollback += PAGE_SIZE) {
@@ -1392,6 +1399,8 @@ vmm_status_t vmm_map_range(vmm_t* vmm_pub, uint64_t phys, void* virt,
             spinlock_release(&vmm->lock, lock_flags);
             return status;
         }
+
+        offset += step;
     }
 
     spinlock_release(&vmm->lock, lock_flags);
@@ -1409,8 +1418,28 @@ vmm_status_t vmm_unmap_range(vmm_t* vmm_pub, void* virt, size_t length) {
 
     bool lock_flags = spinlock_acquire(&vmm->lock);
 
-    for (size_t offset = 0; offset < length; offset += PAGE_SIZE) {
-        arch_unmap_page(vmm->public.pt_root, (void*)((uintptr_t)virt + offset));
+    size_t offset = 0;
+    while (offset < length) {
+        uintptr_t virt_cur = (uintptr_t)virt + offset;
+
+        // if the current address is 2MB aligned and the PD entry has PAGE_HUGE set, 
+        // arch_unmap_page will clear the entire 2MB mapping in one shot so we can skip ahead by PAGE_2MB
+        bool stepped_huge = false;
+        if ((virt_cur & (PAGE_2MB - 1)) == 0 && (length - offset) >= PAGE_2MB) {
+            uint64_t phys = arch_unmap_page(vmm->public.pt_root, (void*)virt_cur);
+            if (phys) {
+                // skip the full 2MB
+                stepped_huge = true;
+            }
+            // If phys == 0, we fall through to the 4kb step
+        }
+
+        if (stepped_huge) {
+            offset += PAGE_2MB;
+        } else {
+            arch_unmap_page(vmm->public.pt_root, (void*)virt_cur);
+            offset += PAGE_SIZE;
+        }
     }
 
     spinlock_release(&vmm->lock, lock_flags);
@@ -1479,10 +1508,7 @@ vmm_status_t vmm_resize(vmm_t* vmm_pub, void* addr, size_t new_length) {
         uint64_t phys_base = 0;
         pmm_status_t pmm_status = pmm_alloc(growth, &phys_base);
         if (pmm_status != PMM_OK) {
-            LOGF(
-                "[VMM ERROR] vmm_resize: Failed to allocate %zu bytes of "
-                "physical memory\n",
-                growth);
+            LOGF("[VMM ERROR] vmm_resize: Failed to allocate %zu bytes of physical memory\n", growth);
             spinlock_release(&vmm->lock, lock_flags);
             return VMM_ERR_NO_MEMORY;
         }
@@ -1499,13 +1525,10 @@ vmm_status_t vmm_resize(vmm_t* vmm_pub, void* addr, size_t new_length) {
                               pt_flags, is_user_vmm);
 
             if (map_status != VMM_OK) {
-                LOGF("[VMM ERROR] vmm_resize: Mapping failed at offset 0x%lx\n",
-                     offset);
+                LOGF("[VMM ERROR] vmm_resize: Mapping failed at offset 0x%lx\n", offset);
 
                 for (size_t rb = 0; rb < offset; rb += PAGE_SIZE) {
-                    arch_unmap_page(
-                        vmm->public.pt_root,
-                        (void*)(cur->public.base + old_length + rb));
+                    arch_unmap_page(vmm->public.pt_root, (void*)(cur->public.base + old_length + rb));
                 }
 
                 pmm_free(phys_base, growth);
