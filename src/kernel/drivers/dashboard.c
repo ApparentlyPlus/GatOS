@@ -106,6 +106,15 @@ static void set_col(console_t* c, uint8_t fg, uint8_t bg) {
 }
 
 /*
+ * set_deferred_render - Toggle deferred rendering for a console
+ */
+static void set_deferred_render(console_t* c, bool enabled) {
+    bool flags = spinlock_acquire(&c->lock);
+    c->defer_render = enabled;
+    spinlock_release(&c->lock, flags);
+}
+
+/*
  * pick_pct_color - Pick a color based on percentage
  */
 static uint8_t pick_pct_color(int percent) {
@@ -408,6 +417,12 @@ static void render_procs(console_t* c, const layout_t* L) {
                   L->gap + L->mem_w, fmt_size(virt_s, sizeof(virt_s), (uint64_t)vt));
         print_str(c, buf);
 
+        char proc_prefix[32];
+        ksnprintf(proc_prefix, sizeof(proc_prefix), "  %-*u%*s",
+                  L->pid_w, proc->pid,
+                  L->gap, "");
+        int proc_name_col = (int)kstrlen(proc_prefix);
+
         // Thread subrows
         for (thread_t* t = proc->threads; t; t = t->next) {
             if (c->cy >= c->height - 2) break;
@@ -420,12 +435,15 @@ static void render_procs(console_t* c, const layout_t* L) {
             }
 
             int badge_w = 20;
-            int left_len = 16 + L->gap + L->tnw;
+            int tree_indent = proc_name_col;
+            if (tree_indent < 0) tree_indent = 0;
+            int left_len = tree_indent + 4 + 4 + L->gap + L->tnw;
             int pad = (L->W - 4) - badge_w - left_len;
             if (pad < 1) pad = 1;
 
             set_col(c, CONSOLE_COLOR_DARK_GRAY, CONSOLE_COLOR_BLACK);
-            ksnprintf(buf, sizeof(buf), "        \xe2\x94\x94\xe2\x94\x80\xe2\x94\x80 %-*u%*s%-*.*s%*s",
+            ksnprintf(buf, sizeof(buf), "%*s\xe2\x94\x94\xe2\x94\x80\xe2\x94\x80 %-*u%*s%-*.*s%*s",
+                      tree_indent, "",
                       4,       t->tid,
                       L->gap,  "",
                       L->tnw,  L->tnw, t->name,
@@ -478,6 +496,7 @@ static void dashboard_draw(void) {
     ksnprintf(header, sizeof(header), "  GatOS Kernel Dashboard  |  Uptime: %02lu:%02lu:%02lu",
               hrs, mins, totalSec);
 
+    set_deferred_render(con, true);
     con_header_write(con, 0, header, CONSOLE_COLOR_WHITE, CONSOLE_COLOR_MAGENTA);
 
     con_clear(con, CONSOLE_COLOR_BLACK);
@@ -501,6 +520,7 @@ static void dashboard_draw(void) {
     print_str(con, " CTRL+SHIFT+ESC to close or ALT+TAB to cycle");
 
     con_refresh(con);
+    set_deferred_render(con, false);
 }
 
 #pragma region Thread

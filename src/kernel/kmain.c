@@ -254,12 +254,14 @@ void kernel_main(void* mb_info) {
 
 	    // Use scanset to read until newline
 	    if (kscanf(" %127[^\n]", tt) > 0) {
-	        kprintf("You typed: %s\n", tt);
 	        if (kstrcmp(tt, "shutdown") == 0) {
+				kprintf("Shutting down...\n");
 	            power_off();
 	        } else if (kstrcmp(tt, "reboot") == 0) {
+				kprintf("Rebooting...\n");
 	            reboot();
 	        }
+	        kprintf("You typed: %s\n", tt);
 	    }
 	}
 	
