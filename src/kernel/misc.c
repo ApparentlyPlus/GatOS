@@ -9,6 +9,7 @@
 
 #include <kernel/drivers/console.h>
 #include <klibc/stdio.h>
+#include <klibc/string.h>
 #include <stdint.h>
 
 /*

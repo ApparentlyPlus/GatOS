@@ -10,6 +10,7 @@
 #include <arch/x86_64/cpu/interrupts.h>
 #include <arch/x86_64/cpu/gdt.h>
 #include <klibc/stdio.h>
+#include <klibc/string.h>
 #include <arch/x86_64/cpu/cpu.h>
 #include <kernel/sys/panic.h>
 #include <kernel/sys/apic.h>

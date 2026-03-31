@@ -62,6 +62,7 @@ if not PLATFORM_TOOLCHAIN_DIR.exists():
 
 CC = PLATFORM_TOOLCHAIN_DIR / "gcc" / "bin" / f"x86_64-elf-gcc{EXE_EXT}"
 LD = PLATFORM_TOOLCHAIN_DIR / "gcc" / "bin" / f"x86_64-elf-ld{EXE_EXT}"
+STRIP = PLATFORM_TOOLCHAIN_DIR / "gcc" / "bin" / f"x86_64-elf-strip{EXE_EXT}"
 GRUB_MKSTANDALONE = GRUB_DIR / f"grub-mkstandalone{EXE_EXT}"
 GRUB_MKRESCUE_CMD = GRUB_DIR / f"grub-mkrescue{EXE_EXT}"
 
@@ -96,19 +97,19 @@ CFLAGS_VFAST = ["-O3", "-fpredictive-commoning", "-fstrict-aliasing", "-fno-dele
 # Profile Definitions
 BUILD_PROFILES = {
     "default": {
-        "flags": CFLAGS_BASE, 
+        "flags": [],
         "confirm": False
     },
     "test": {
-        "flags": CFLAGS_FAST + ["-DTEST_BUILD"], 
+        "flags": CFLAGS_FAST + ["-DTEST_BUILD"],
         "confirm": False
     },
     "fast": {
-        "flags": CFLAGS_FAST, 
+        "flags": CFLAGS_FAST,
         "confirm": False
     },
     "vfast": {
-        "flags": CFLAGS_VFAST, 
+        "flags": CFLAGS_VFAST,
         "confirm": True,
         "msg": "WARNING: 'vfast' uses aggressive optimizations (-O3, -fno-stack-protector) which may cause unexpected kernel behavior or instability."
     }
@@ -186,6 +187,9 @@ def compile_sources(c_files: List[Path], asm_files: List[Path], profile_name: st
     for src in c_files:
         src_flags = CFLAGS_BASE + profile["flags"]
         if not is_userspace(src):
+            # Kernel code gets LTO for better DCE
+            src_flags += ["-flto"]
+
             # Kernel code should NOT use SSE/AVX/etc to avoid FP state corruption in kernel mode
             src_flags += KERNEL_FPU_RESTRICTIONS
         jobs.append((CC, src, BUILD_DIR / src.relative_to(SRC_DIR).with_suffix(".o"), src_flags))
@@ -209,7 +213,15 @@ def compile_sources(c_files: List[Path], asm_files: List[Path], profile_name: st
 
 def link_kernel(obj_files: List[Path]):
     DIST_DIR.mkdir(parents=True, exist_ok=True)
-    run_cmd([LD, *LDFLAGS, "-o", KERNEL_BIN] + [str(f) for f in obj_files])
+    linker_script = ROOT_DIR / "targets/x86_64/linker.ld"
+    gcc_link_flags = [
+        "-nostdlib",
+        "-flto",
+        "-g",
+        f"-Wl,-n,--gc-sections,--no-relax,-T{linker_script}"
+    ]
+    run_cmd([CC, *gcc_link_flags, "-o", KERNEL_BIN] + [str(f) for f in obj_files])
+    run_cmd([STRIP, str(KERNEL_BIN)])
 
 def make_uefi_grub():
     UEFI_DIR.mkdir(parents=True, exist_ok=True)
@@ -270,7 +282,7 @@ def verify_environment() -> bool:
     print(f"{YELLOW}[INFO] Verifying environment...{NC}")
     fix_unix_permissions()
     missing = []
-    tools = {"QEMU": QEMU_EXEC, "GCC": CC, "LD": LD, "GRUB Standalone": GRUB_MKSTANDALONE, "GRUB Rescue": GRUB_MKRESCUE_CMD}
+    tools = {"QEMU": QEMU_EXEC, "GCC": CC, "LD": LD, "STRIP": STRIP, "GRUB Standalone": GRUB_MKSTANDALONE, "GRUB Rescue": GRUB_MKRESCUE_CMD}
     if OS_NAME in ["linux", "macos"]: tools["Xorriso"] = XORRISO_EXEC
     for name, path in tools.items():
         if path and not path.exists(): missing.append(f"{name} ({path})")
