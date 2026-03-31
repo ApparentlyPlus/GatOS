@@ -165,6 +165,27 @@ static inline bool validate_free_obj(slab_free_obj_t* obj) {
 
     return true;
 }
+ 
+/*
+ * b2kb - Convert bytes to kilobytes with 2 decimal places
+ */
+static uint64_t b2kb(uint64_t bytes) {
+    return (bytes * 100ULL) / 1024ULL;
+}
+
+/*
+ * b2mb - Convert bytes to megabytes with 2 decimal places
+ */
+static uint64_t b2mb(uint64_t bytes) {
+    return (bytes * 100ULL) / (1024ULL * 1024ULL);
+}
+
+/*
+ * ratio_to_tenths - Convert a ratio to tenths of a percent
+ */
+static uint64_t ratio_to_tenths(uint64_t num, uint64_t den) {
+    return den ? ((num * 1000ULL) / den) : 0;
+}
 
 #pragma endregion
 
@@ -783,10 +804,12 @@ void slab_dump_stats(void) {
         return;
     }
 
+    uint64_t total_pmm_mib = b2mb(stats.total_pmm_bytes);
+
     LOGF("\n=== Slab Allocator Statistics ===\n");
     LOGF("Total slabs: %lu\n", stats.total_slabs);
-    LOGF("Total PMM bytes: %lu (%.2f MiB)\n", stats.total_pmm_bytes,
-         stats.total_pmm_bytes / (1024.0 * 1024.0));
+    LOGF("Total PMM bytes: %lu (%lu.%02lu MiB)\n", stats.total_pmm_bytes,
+         total_pmm_mib / 100ULL, total_pmm_mib % 100ULL);
     LOGF("Active caches: %lu (dynamic allocation)\n", stats.cache_count);
     LOGF("Corruption events: %lu\n", stats.corruption_detected);
     LOGF("=================================\n");
@@ -817,15 +840,16 @@ void slab_cache_dump(slab_cache_t* cache) {
 
     uint64_t total_bytes = cache->stats.slab_count * PAGE_SIZE;
     uint64_t used_bytes = cache->stats.active_objects * cache->obj_size;
-    double utilization = 0.0;
-    if (total_bytes > 0) utilization = (double)used_bytes / total_bytes * 100.0;
+    uint64_t total_kib = b2kb(total_bytes);
+    uint64_t used_kib = b2kb(used_bytes);
+    uint64_t utilization_tenths = ratio_to_tenths(used_bytes, total_bytes);
 
     LOGF("\nMemory usage:\n");
-    LOGF("  Total:        %lu bytes (%.2f KiB)\n", total_bytes,
-         total_bytes / 1024.0);
-    LOGF("  Used:         %lu bytes (%.2f KiB)\n", used_bytes,
-         used_bytes / 1024.0);
-    LOGF("  Utilization:  %.1f%%\n", utilization);
+    LOGF("  Total:        %lu bytes (%lu.%02lu KiB)\n", total_bytes,
+         total_kib / 100ULL, total_kib % 100ULL);
+    LOGF("  Used:         %lu bytes (%lu.%02lu KiB)\n", used_bytes,
+         used_kib / 100ULL, used_kib % 100ULL);
+    LOGF("  Utilization:  %lu.%01lu%%\n", utilization_tenths / 10ULL, utilization_tenths % 10ULL);
     LOGF("========================\n");
 
     spinlock_release(&cache->lock, flags);
@@ -842,10 +866,12 @@ void slab_dump_all_caches(void) {
         return;
     }
 
+    uint64_t total_pmm_mib = b2mb(stats.total_pmm_bytes);
+
     LOGF("\n=== Slab Allocator Statistics ===\n");
     LOGF("Total slabs: %lu\n", stats.total_slabs);
-    LOGF("Total PMM bytes: %lu (%.2f MiB)\n", stats.total_pmm_bytes,
-         stats.total_pmm_bytes / (1024.0 * 1024.0));
+    LOGF("Total PMM bytes: %lu (%lu.%02lu MiB)\n", stats.total_pmm_bytes,
+         total_pmm_mib / 100ULL, total_pmm_mib % 100ULL);
     LOGF("Active caches: %lu (dynamic allocation)\n", stats.cache_count);
     LOGF("Corruption events: %lu\n", stats.corruption_detected);
     LOGF("=================================\n");

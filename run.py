@@ -85,6 +85,7 @@ elif OS_NAME == "macos":
 
 # Now with DCE!
 CFLAGS_BASE = ["-m64", "-ffreestanding", "-nostdlib", "-fno-pic", "-mcmodel=kernel", "-mno-red-zone", "-ffunction-sections", "-fdata-sections", f"-I{HEADER_DIR}"]
+KERNEL_FPU_RESTRICTIONS = ["-mno-sse", "-mno-sse2", "-mno-mmx", "-mno-80387"]
 CPPFLAGS = [f"-I{HEADER_DIR}", "-D__ASSEMBLER__"]
 LDFLAGS = ["-n", "-nostdlib", "--gc-sections", f"-T{ROOT_DIR / 'targets/x86_64/linker.ld'}", "--no-relax", "-g"]
 
@@ -159,6 +160,11 @@ def compile_worker(job):
     result = subprocess.run(cmd, text=True, capture_output=True)
     return f"{RED}[FAIL] {src.name}:{NC}\n{result.stderr}" if result.returncode != 0 else f"{BLUE}[OK] {src.name}{NC}"
 
+def is_userspace(src: Path) -> bool:
+    rel = src.relative_to(SRC_DIR)
+    rel_str = rel.as_posix()
+    return rel_str.startswith("ulibc/") or rel_str == "kernel/uproc.c"
+
 def compile_sources(c_files: List[Path], asm_files: List[Path], profile_name: str) -> bool:
     profile = BUILD_PROFILES.get(profile_name, BUILD_PROFILES["default"])
     
@@ -174,13 +180,15 @@ def compile_sources(c_files: List[Path], asm_files: List[Path], profile_name: st
             print(f"\n{RED}[ABORT] Build cancelled.{NC}")
             sys.exit(0)
 
-    final_cflags = CFLAGS_BASE + profile["flags"]
-    
     print(f"{YELLOW}[INFO] Starting parallel compilation (Profile: {profile_name.upper()})...{NC}")
     
     jobs = []
     for src in c_files:
-        jobs.append((CC, src, BUILD_DIR / src.relative_to(SRC_DIR).with_suffix(".o"), final_cflags))
+        src_flags = CFLAGS_BASE + profile["flags"]
+        if not is_userspace(src):
+            # Kernel code should NOT use SSE/AVX/etc to avoid FP state corruption in kernel mode
+            src_flags += KERNEL_FPU_RESTRICTIONS
+        jobs.append((CC, src, BUILD_DIR / src.relative_to(SRC_DIR).with_suffix(".o"), src_flags))
     for src in asm_files:
         jobs.append((CC, src, BUILD_DIR / src.relative_to(SRC_DIR).with_suffix(".o"), CPPFLAGS))
 

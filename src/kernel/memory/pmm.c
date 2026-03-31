@@ -38,6 +38,14 @@ static const uint64_t EMPTY_SENTINEL = UINT64_MAX;
 
 static pmm_stats_t stats;
 
+static uint64_t bytes_to_mib_hundredths(uint64_t bytes) {
+    return (bytes * 100ULL) / (1024ULL * 1024ULL);
+}
+
+static uint64_t ratio_to_tenths(uint64_t num, uint64_t den) {
+    return den ? ((num * 1000ULL) / den) : 0;
+}
+
 // We're declaring an exclusion table
 // that we populate before marking free ranges
 #define PMM_MAX_EXCLUSIONS 8
@@ -731,10 +739,13 @@ void pmm_dump_stats(void) {
         return;
     }
 
+    uint64_t managed_span = range_end - range_start;
+    uint64_t managed_span_mib = bytes_to_mib_hundredths(managed_span);
+
     LOGF("\n=== PMM Statistics ===\n");
-    LOGF("Managed range: [0x%lx - 0x%lx) (0x%lx bytes, %.2f MiB)\n",
-           range_start, range_end, range_end - range_start,
-           (range_end - range_start) / (1024.0 * 1024.0));
+    LOGF("Managed range: [0x%lx - 0x%lx) (0x%lx bytes, %lu.%02lu MiB)\n",
+           range_start, range_end, managed_span,
+           managed_span_mib / 100ULL, managed_span_mib % 100ULL);
     LOGF("Min block size: 0x%lx, Max order: %u\n", min_block, max_order);
 
     LOGF("\nOperation counts:\n");
@@ -769,15 +780,20 @@ void pmm_dump_stats(void) {
     uint64_t total_managed = pmm_managed_size();
     uint64_t used_bytes = total_managed - total_free_bytes;
     
+    uint64_t total_managed_mib = bytes_to_mib_hundredths(total_managed);
+    uint64_t total_free_mib = bytes_to_mib_hundredths(total_free_bytes);
+    uint64_t used_mib = bytes_to_mib_hundredths(used_bytes);
+    uint64_t utilization_tenths = ratio_to_tenths(used_bytes, total_managed);
+
     LOGF("\nMemory summary:\n");
-    LOGF("  Total managed: %lu bytes (%.2f MiB)\n", 
-           total_managed, total_managed / (1024.0 * 1024.0));
-    LOGF("  Free:          %lu bytes (%.2f MiB)\n",
-           total_free_bytes, total_free_bytes / (1024.0 * 1024.0));
-    LOGF("  Used:          %lu bytes (%.2f MiB)\n",
-           used_bytes, used_bytes / (1024.0 * 1024.0));
-    LOGF("  Utilization:   %.1f%%\n",
-           total_managed > 0 ? (double)used_bytes / total_managed * 100.0 : 0.0);
+    LOGF("  Total managed: %lu bytes (%lu.%02lu MiB)\n",
+           total_managed, total_managed_mib / 100ULL, total_managed_mib % 100ULL);
+    LOGF("  Free:          %lu bytes (%lu.%02lu MiB)\n",
+           total_free_bytes, total_free_mib / 100ULL, total_free_mib % 100ULL);
+    LOGF("  Used:          %lu bytes (%lu.%02lu MiB)\n",
+           used_bytes, used_mib / 100ULL, used_mib % 100ULL);
+    LOGF("  Utilization:   %lu.%01lu%%\n",
+           utilization_tenths / 10ULL, utilization_tenths % 10ULL);
     LOGF("======================\n");
     spinlock_release(&pmm_lock, flags);
 }

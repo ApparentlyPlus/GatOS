@@ -44,6 +44,11 @@
 #define PRINTF_FTOA_BUFFER_SIZE    32U
 #endif
 
+// Kernel printf intentionally disables floating point formatting so ring 0
+// code does not accidentally corrupt FPU state
+#define PRINTF_DISABLE_SUPPORT_FLOAT
+#define PRINTF_DISABLE_SUPPORT_EXPONENTIAL
+
 // support for the floating point type (%f)
 // default: activated
 #ifndef PRINTF_DISABLE_SUPPORT_FLOAT
