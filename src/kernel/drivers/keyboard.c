@@ -15,6 +15,7 @@
 #include <kernel/drivers/i8042.h>
 #include <kernel/drivers/input.h>
 #include <kernel/sys/spinlock.h>
+#include <kernel/sys/timers.h>
 #include <kernel/sys/apic.h>
 #include <kernel/debug.h>
 #include <klibc/string.h>
@@ -70,6 +71,8 @@ static void update_leds(void) {
     i8042_wait_read();
     if (i8042_read_data() == 0xFA) {
         i8042_write_data(locks & 0x07);
+        i8042_wait_read();
+        i8042_read_data(); // consume ACK for the LED state byte
     }
 }
 
@@ -104,7 +107,18 @@ void keyboard_init(void) {
     
     if (i8042_init()) {
         update_leds();
-        
+
+        /*
+            Author's Note: 
+            
+            Wait for any in flight PS/2 responses to arrive, then drain.
+            Without this delay, an unread byte can hold IRQ1 high and
+            prevent the IOAPIC from ever seeing an edge transition.
+
+            Ask me how I know.
+        */
+       
+        sleep_us(2000);
         while (inb(0x64) & 0x01) {
             inb(0x60);
         }

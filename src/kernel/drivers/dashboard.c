@@ -480,10 +480,6 @@ static void dashboard_draw(void) {
 
     con_header_write(con, 0, header, CONSOLE_COLOR_WHITE, CONSOLE_COLOR_MAGENTA);
 
-    // temporarily detach active tty
-    tty_t* current = active_tty;
-    active_tty = NULL;
-
     con_clear(con, CONSOLE_COLOR_BLACK);
     set_col(con, CONSOLE_COLOR_LIGHT_GRAY, CONSOLE_COLOR_BLACK);
 
@@ -503,9 +499,6 @@ static void dashboard_draw(void) {
 
     set_col(con, CONSOLE_COLOR_DARK_GRAY, CONSOLE_COLOR_BLACK);
     print_str(con, " CTRL+SHIFT+ESC to close or ALT+TAB to cycle");
-
-    // reattach active tty
-    active_tty = current;
 
     con_refresh(con);
 }
@@ -544,6 +537,9 @@ bool dash_active(void) {
 void dash_toggle(void) {
     if (active_tty == dashTTY) {
         tty_switch(lastTTY ? lastTTY : kernel_tty);
+        if (active_tty == dashTTY && kernel_tty) {
+            tty_switch(kernel_tty);
+        }
         lastTTY = NULL;
     } else {
         lastTTY = active_tty;

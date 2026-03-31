@@ -221,9 +221,7 @@ size_t tty_read(tty_t* tty, char* buf, size_t count) {
  */
 void tty_write(tty_t* tty, const char* buf, size_t count) {
     if (!tty || !tty->console) return;
-    for (size_t i = 0; i < count; i++) {
-        con_putc(tty->console, buf[i]);
-    }
+    con_write_batch(tty->console, buf, count);
 }
 
 /*
