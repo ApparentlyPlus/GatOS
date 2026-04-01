@@ -24,11 +24,13 @@ void *memcpy(void *dest, const void *src, size_t n) {
     uint8_t* d = (uint8_t*)dest;
     const uint8_t* s = (const uint8_t*)src;
     while (n && ((uintptr_t)d & 7)) { *d++ = *s++; n--; }
-    uint64_t* dq = (uint64_t*)d;
-    const uint64_t* sq = (const uint64_t*)s;
-    size_t words = n / 8; n &= 7;
-    while (words--) *dq++ = *sq++;
-    d = (uint8_t*)dq; s = (const uint8_t*)sq;
+    if (!((uintptr_t)s & 7)) {
+        uint64_t* dq = (uint64_t*)d;
+        const uint64_t* sq = (const uint64_t*)s;
+        size_t words = n / 8; n &= 7;
+        while (words--) *dq++ = *sq++;
+        d = (uint8_t*)dq; s = (const uint8_t*)sq;
+    }
     while (n--) *d++ = *s++;
     return dest;
 }
@@ -39,10 +41,12 @@ void *memmove(void *dest, const void *src, size_t n) {
     if (d == s || n == 0) return dest;
     if (d < s) {
         while (n && ((uintptr_t)d & 7)) { *d++ = *s++; n--; }
-        uint64_t* dq = (uint64_t*)d; const uint64_t* sq = (const uint64_t*)s;
-        size_t words = n / 8; n &= 7;
-        while (words--) *dq++ = *sq++;
-        d = (uint8_t*)dq; s = (const uint8_t*)sq;
+        if (!((uintptr_t)s & 7)) {
+            uint64_t* dq = (uint64_t*)d; const uint64_t* sq = (const uint64_t*)s;
+            size_t words = n / 8; n &= 7;
+            while (words--) *dq++ = *sq++;
+            d = (uint8_t*)dq; s = (const uint8_t*)sq;
+        }
         while (n--) *d++ = *s++;
     } else {
         d += n; s += n;

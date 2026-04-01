@@ -119,7 +119,7 @@ static uint8_t* get_glyph(uint32_t cp) {
  */
 static void render_cursor(console_t* con, bool on) {
     if (!fb) return;
-    extern tty_t* active_tty;
+    extern tty_t* volatile active_tty;
 
     // Checks
     if (!active_tty || active_tty->console != con) return;
@@ -173,7 +173,7 @@ static void render_cursor(console_t* con, bool on) {
  */
 static void flush_display(console_t* con) {
     if (!fb) return;
-    extern tty_t* active_tty;
+    extern tty_t* volatile active_tty;
 
     // Only flush if this console is active
     if (!active_tty || active_tty->console != con) return;
@@ -235,7 +235,7 @@ static void scroll(console_t* con) {
     if (con->cy < first) con->cy = first;
 
     if (fb) {
-        extern tty_t* active_tty;
+        extern tty_t* volatile active_tty;
         // If we have a framebuffer and this console is active
         // we can do an efficient pixel level scroll using memmove and a single fill for the new line
         if (active_tty && active_tty->console == con) {
@@ -276,7 +276,7 @@ static void scroll(console_t* con) {
  * emit_cp - Renders a Unicode codepoint or control character to the console
  */
 static void emit_cp(console_t* con, uint32_t cp) {
-    extern tty_t* active_tty;
+    extern tty_t* volatile active_tty;
     bool active = (active_tty && active_tty->console == con);
 
     if (cp == '\n')      { con->cx = 0; con->cy++; }
@@ -341,7 +341,7 @@ void con_clear(console_t* con, uint8_t background) {
 
     // reset dirty tracking
     DIRTY_SET_ALL(con);
-    extern tty_t* active_tty;
+    extern tty_t* volatile active_tty;
 
     // If this console is active and we're not deferring rendering, we can also clear the framebuffer immediately
     if (active_tty && active_tty->console == con && !con->defer_render) {
@@ -381,7 +381,7 @@ static void _con_process_byte(console_t* con, uint8_t byte) {
     } else if (con->ansi_st == 3) {
         if (byte == 'J') {
             con->ansi_st = 0;
-            extern tty_t* active_tty;
+            extern tty_t* volatile active_tty;
             bool active = (active_tty && active_tty->console == con);
             for (size_t y = con->header_rows; y < con->height; y++)
                 for (size_t x = 0; x < con->width; x++) {
@@ -420,7 +420,7 @@ static void _con_process_byte(console_t* con, uint8_t byte) {
 void con_putc(console_t* con, char character) {
     bool flags;
     if (!spinlock_try_acquire(&con->lock, &flags)) return;
-    extern tty_t* active_tty;
+    extern tty_t* volatile active_tty;
     bool active = (active_tty && active_tty->console == con);
     bool draw = active && !con->defer_render;
     if (draw && con->on) render_cursor(con, false);
@@ -434,7 +434,7 @@ void con_putc(console_t* con, char character) {
  */
 void con_write_batch(console_t* con, const char* buf, size_t count) {
     if (!con || !buf || !count) return;
-    extern tty_t* active_tty;
+    extern tty_t* volatile active_tty;
 
     bool active = (active_tty && active_tty->console == con);
     size_t i = 0;
@@ -534,7 +534,7 @@ void con_header_write(console_t* con, size_t row, const char* text, uint8_t fg, 
         con->buffer[row * con->width + pad + c] = (console_char_t){ (uint8_t)text[c], fg, bg };
         DIRTY_SET(con, row * con->width + pad + c);
     }
-    extern tty_t* active_tty;
+    extern tty_t* volatile active_tty;
     if (active_tty && active_tty->console == con && !con->defer_render) {
         size_t py = row * (fh + PADDING_Y);
         for (size_t x = 0; x < con->width; x++) {
@@ -673,7 +673,7 @@ void console_init(multiboot_parser_t* parser) {
  * console_print_char - Global accessor: prints a character to the active TTY
  */
 void console_print_char(char character) {
-    extern tty_t* active_tty;
+    extern tty_t* volatile active_tty;
     if (active_tty && active_tty->console)
         con_putc(active_tty->console, character);
 }
@@ -682,7 +682,7 @@ void console_print_char(char character) {
  * console_set_color - Global accessor: sets colors on the active TTY
  */
 void console_set_color(uint8_t foreground, uint8_t background) {
-    extern tty_t* active_tty;
+    extern tty_t* volatile active_tty;
     if (active_tty && active_tty->console)
         con_set_color(active_tty->console, foreground, background);
 }
@@ -691,7 +691,7 @@ void console_set_color(uint8_t foreground, uint8_t background) {
  * console_enable_cursor - Global accessor: toggles the cursor on the active TTY
  */
 void console_enable_cursor(bool enabled) {
-    extern tty_t* active_tty;
+    extern tty_t* volatile active_tty;
     if (active_tty && active_tty->console)
         con_enable_cursor(active_tty->console, enabled);
 }
@@ -700,7 +700,7 @@ void console_enable_cursor(bool enabled) {
  * console_clear - Global accessor: clears the active TTY's display
  */
 void console_clear(uint8_t background) {
-    extern tty_t* active_tty;
+    extern tty_t* volatile active_tty;
     if (active_tty && active_tty->console)
         con_clear(active_tty->console, background);
 }

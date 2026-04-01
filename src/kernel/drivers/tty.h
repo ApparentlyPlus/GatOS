@@ -18,6 +18,8 @@
 #include <kernel/drivers/console.h>
 #include <kernel/drivers/ldisc.h>
 
+struct thread; // forward declaration for wait queue
+
 #define TTY_BUFFER_SIZE 4096
 
 typedef struct tty {
@@ -26,6 +28,7 @@ typedef struct tty {
     uint32_t tail;      // Read index
 
     spinlock_t lock;
+    struct thread* wait_head;  // threads blocked waiting for input
 
     // Line Discipline
     ldisc_t ldisc;
@@ -56,5 +59,5 @@ void tty_switch(tty_t* tty);
 void tty_cycle(void);
 
 // Global active TTY
-extern tty_t* active_tty;
+extern tty_t* volatile active_tty;
 extern tty_t* kernel_tty;

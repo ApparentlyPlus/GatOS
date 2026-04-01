@@ -20,7 +20,7 @@ static tty_t* tty_list = NULL;
 static spinlock_t tty_lock = {0};
 static bool tty_lock_ok = false;
 
-tty_t* active_tty = NULL;
+tty_t* volatile active_tty = NULL;
 tty_t* kernel_tty = NULL;
 
 /*
@@ -33,7 +33,8 @@ static void tty_init(tty_t* tty, console_t* console) {
     tty->console = console;
     tty->next = NULL;
     tty->prev = NULL;
-    
+    tty->wait_head = NULL;
+
     spinlock_init(&tty->lock, "tty_lock");
     ldisc_init(&tty->ldisc);
 }
@@ -156,14 +157,41 @@ void tty_cycle(void) {
 }
 
 /*
- * tty_wait_for_input - Busy-waits or yields for data in the circular buffer
+ * tty_wake - Wake all threads blocked waiting for input on this TTY.
+ * Must be called with tty->lock held (interrupts already disabled).
  */
-static void tty_wait_for_input(tty_t* tty) {
-    while (tty->head == tty->tail) {
-        // Yield to other threads while waiting for keyboard input
-        // Combating busy waiting since 2009 interwebzzzzz
-        sched_yield();
+static void tty_wake(tty_t* tty) {
+    thread_t* t = tty->wait_head;
+    tty->wait_head = NULL;
+    while (t) {
+        thread_t* next = t->rnext;
+        t->rnext = NULL;
+        sched_add(t);
+        t = next;
     }
+}
+
+/*
+ * tty_block - Block the current thread until data arrives on this TTY.
+ * Re-checks the buffer with interrupts disabled to close the TOCTOU window
+ * between the caller's empty-check and the actual sleep.
+ */
+static void tty_block(tty_t* tty) {
+    if (!sched_active()) return;
+    thread_t* t = sched_current();
+    if (!t) return;
+
+    bool iflag = intr_save();
+    if (tty->head != tty->tail) {
+        // Data arrived between caller's check and here — no need to block.
+        intr_restore(iflag);
+        return;
+    }
+    t->state = T_BLOCKED;
+    t->rnext = tty->wait_head;
+    tty->wait_head = t;
+    intr_restore(iflag);
+    sched_yield();
 }
 
 /*
@@ -185,17 +213,19 @@ void tty_push_char_raw(tty_t* tty, char c) {
     if (next_idx != tty->tail) {
         tty->buffer[tty->head] = c;
         tty->head = next_idx;
+        tty_wake(tty);
     }
 
     spinlock_release(&tty->lock, flags);
 }
 
 /*
- * tty_read_char - Pops one character from the TTY buffer
+ * tty_read_char - Pops one character from the TTY buffer, blocking if empty.
  */
 char tty_read_char(tty_t* tty) {
     if (!tty) return 0;
-    tty_wait_for_input(tty);
+    while (tty->head == tty->tail)
+        tty_block(tty);
     bool flags = spinlock_acquire(&tty->lock);
     char c = tty->buffer[tty->tail];
     tty->tail = (tty->tail + 1) % TTY_BUFFER_SIZE;
@@ -204,14 +234,27 @@ char tty_read_char(tty_t* tty) {
 }
 
 /*
- * tty_read - High-level buffered read
+ * tty_read - Block until data is available, then drain as many bytes as
+ * possible in a single lock acquisition. Stops early on newline.
  */
 size_t tty_read(tty_t* tty, char* buf, size_t count) {
-    if (!tty) return 0;
+    if (!tty || !buf || count == 0) return 0;
     size_t i = 0;
     while (i < count) {
-        buf[i++] = tty_read_char(tty);
-        if (buf[i-1] == '\n') break;
+        while (tty->head == tty->tail)
+            tty_block(tty);
+
+        bool flags = spinlock_acquire(&tty->lock);
+        while (i < count && tty->head != tty->tail) {
+            char c = tty->buffer[tty->tail];
+            tty->tail = (tty->tail + 1) % TTY_BUFFER_SIZE;
+            buf[i++] = c;
+            if (c == '\n') {
+                spinlock_release(&tty->lock, flags);
+                return i;
+            }
+        }
+        spinlock_release(&tty->lock, flags);
     }
     return i;
 }

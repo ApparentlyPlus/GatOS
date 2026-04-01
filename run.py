@@ -192,6 +192,9 @@ def compile_sources(c_files: List[Path], asm_files: List[Path], profile_name: st
 
             # Kernel code should NOT use SSE/AVX/etc to avoid FP state corruption in kernel mode
             src_flags += KERNEL_FPU_RESTRICTIONS
+        else:
+            # Userspace code gets math optimizations
+            src_flags += ["-ffast-math"]
         jobs.append((CC, src, BUILD_DIR / src.relative_to(SRC_DIR).with_suffix(".o"), src_flags))
     for src in asm_files:
         jobs.append((CC, src, BUILD_DIR / src.relative_to(SRC_DIR).with_suffix(".o"), CPPFLAGS))

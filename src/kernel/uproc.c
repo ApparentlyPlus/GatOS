@@ -20,76 +20,100 @@
  * donut - Renders a spinning ASCII donut in the console using only syscalls
  */
 void donut(void) {
-    syscall_tty_ctrl(TTY_CTRL_CURSOR, 0); // Hide cursor for better aesthetics
-    
+    syscall_tty_ctrl(TTY_CTRL_CURSOR, 0);
+
     uint64_t dims = syscall_tty_ctrl(TTY_CTRL_GET_DIMS, 0);
-    int screen_width = (int)(dims & 0xFFFFFFFF);
+    int screen_width  = (int)(dims & 0xFFFFFFFF);
     int screen_height = (int)(dims >> 32);
-    
-    // Fallback just in case
-    if (screen_width <= 0) screen_width = 80;
+
+    if (screen_width  <= 0) screen_width  = 80;
     if (screen_height <= 0) screen_height = 24;
 
     int center_x = screen_width / 2;
     int center_y = screen_height / 2;
-
     int buffer_size = screen_width * screen_height;
+
     char* b = (char*)malloc(buffer_size);
     float* z = (float*)malloc(buffer_size * sizeof(float));
-    char* out_buf = (char*)malloc(buffer_size + 4); // +4 for \x1b[H
+    char* out_buf = (char*)malloc(buffer_size + 3);
 
-    if (!b || !z || !out_buf) return; // Silent fail if out of memory
+    if (!b || !z || !out_buf) return;
 
-    float A = 0, B = 0, i, j;
+    const float SIN_DJ = sin(0.07f), COS_DJ = cos(0.07f);
+    const float SIN_DI = sin(0.02f), COS_DI = cos(0.02f);
+    const int J_STEPS = 90;
+    const int I_STEPS = 314;
+
+    static const char shading[12] = ".,-~:;=!*#$@";
+
+    out_buf[0] = '\x1b';
+    out_buf[1] = '[';
+    out_buf[2] = 'H';
+
+    float A = 0.0f, B = 0.0f;
 
     syscall_tty_ctrl(TTY_CTRL_CLEAR, 0);
 
-    for(;;) {
+    for (;;) {
         memset(b, 32, buffer_size);
-        memset(z, 0, buffer_size * sizeof(float));
-        
-        // Hoist frame-constant math
+        memset(z, 0,  buffer_size * sizeof(float));
+
         float sinA = sin(A), cosA = cos(A);
         float sinB = sin(B), cosB = cos(B);
+        float cosA_cosB = cosA * cosB;
+        float cosA_sinB = cosA * sinB;
+        float cosA_cosB_plus_sinA = cosA_cosB + sinA;
+        float sinj = 0.0f, cosj = 1.0f;
 
-        for(j = 0; 6.28 > j; j += 0.07) {
-            // Hoist outer-loop-constant math
-            float sinj = sin(j), cosj = cos(j);
-            float h = cosj + 2;
-            
-            for(i = 0; 6.28 > i; i += 0.02) {
-                float sini = sin(i), cosi = cos(i);
-                
-                float D = 1 / (sini * h * sinA + sinj * cosA + 5);
-                float t = sini * h * cosA - sinj * sinA;
-                
-                // Scale factors adjusted for terminal aspect ratio (approx 2:1 character height:width)
-                int x = center_x + (int)(30 * D * (cosi * h * cosB - t * sinB));
-                int y = center_y + (int)(15 * D * (cosi * h * sinB + t * cosB));
-                
-                if(y >= 0 && y < screen_height && x >= 0 && x < screen_width) {
+        for (int jj = 0; jj < J_STEPS; jj++) {
+            float h = cosj + 2.0f;
+            float h_sinA = h * sinA;
+            float h_cosB = h * cosB;
+            float h_sinB = h * sinB;
+            float h_cosA_cosB = h * cosA_cosB;
+            float h_cosA_sinB = h * cosA_sinB;
+            float sinj_cosA = sinj * cosA;
+            float sinj_sinA = sinj * sinA;
+            float sinj_cosA_p5 = sinj_cosA + 5.0f;
+            float sinj_sinA_sinB = sinj_sinA * sinB;
+            float sinj_sinA_cosB = sinj_sinA * cosB;
+
+            float n_outer = sinj_sinA_cosB - sinj_cosA;
+            float cosj_ca = cosj * cosA_cosB_plus_sinA;
+            float cosj_sinB = cosj * sinB;
+            float sini = 0.0f, cosi = 1.0f;
+
+            for (int ii = 0; ii < I_STEPS; ii++) {
+                float D = 1.0f / (sini * h_sinA + sinj_cosA_p5);
+                int x = center_x + (int)(30.0f * D * (cosi * h_cosB - sini * h_cosA_sinB + sinj_sinA_sinB));
+                int y = center_y + (int)(15.0f * D * (cosi * h_sinB + sini * h_cosA_cosB - sinj_sinA_cosB));
+
+                if ((unsigned)x < (unsigned)screen_width && (unsigned)y < (unsigned)screen_height) {
                     int o = x + screen_width * y;
-                    int N = 8 * ((sinj * sinA - sini * cosj * cosA) * cosB - sini * cosj * sinA - sinj * cosA - cosi * cosj * sinB);
                     if (D > z[o]) {
                         z[o] = D;
-                        b[o] = ".,-~:;=!*#$@"[N > 0 ? N : 0];
+                        int N = (int)(8.0f * (n_outer - sini * cosj_ca - cosi * cosj_sinB));
+                        if (N < 0)  N = 0;
+                        if (N > 11) N = 11;
+                        b[o] = shading[N];
                     }
                 }
+
+                float ns = sini * COS_DI + cosi * SIN_DI;
+                float nc = cosi * COS_DI - sini * SIN_DI;
+                sini = ns; cosi = nc;
             }
+
+            float ns = sinj * COS_DJ + cosj * SIN_DJ;
+            float nc = cosj * COS_DJ - sinj * SIN_DJ;
+            sinj = ns; cosj = nc;
         }
-        
-        out_buf[0] = '\x1b';
-        out_buf[1] = '[';
-        out_buf[2] = 'H';
-        
-        for(int k = 0; k < buffer_size; k++) {
-            // Allow the console to naturally auto-wrap at width
-            out_buf[3 + k] = b[k];
-        }
+
+        memcpy(out_buf + 3, b, buffer_size);
         syscall_write(out_buf, buffer_size + 3);
 
-        A += 0.04;
-        B += 0.02;
+        A += 0.04f;
+        B += 0.02f;
     }
 }
 
