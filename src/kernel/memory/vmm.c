@@ -54,6 +54,7 @@ static vmm_ctx* kernel_vmm = NULL;
 static vmm_t* current_vmm = NULL;
 static slab_cache_t* vmm_cache = NULL;
 static slab_cache_t* vmo_cache = NULL;
+static volatile size_t mmio_bytes = 0;
 
 #pragma region Validation Helpers
 
@@ -700,6 +701,10 @@ vmm_status_t vmm_alloc(vmm_t* vmm_pub, size_t length, size_t flags, void* arg, v
     // pg_size > PAGE_SIZE means "has huge pages"
     obj->pg_size = any_huge ? PAGE_2MB : PAGE_SIZE;
 
+    // track MMIO usage for stats
+    if (flags & VM_FLAG_MMIO)
+        __atomic_add_fetch(&mmio_bytes, length, __ATOMIC_RELAXED);
+
     *out_addr = (void*)obj->public.base;
     spinlock_release(&vmm->lock, lock_flags);
     return VMM_OK;
@@ -829,6 +834,10 @@ vmm_status_t vmm_alloc_at(vmm_t* vmm_pub, void* desired_addr, size_t length, siz
 
     obj->pg_size = any_huge ? PAGE_2MB : PAGE_SIZE;
 
+    // MMIO tracking
+    if (flags & VM_FLAG_MMIO)
+        __atomic_add_fetch(&mmio_bytes, length, __ATOMIC_RELAXED);
+
     *out_addr = desired_addr;
     spinlock_release(&vmm->lock, lock_flags);
     return VMM_OK;
@@ -910,6 +919,10 @@ vmm_status_t vmm_free(vmm_t* vmm_pub, void* addr) {
             }
         }
     }
+
+    // track MMIO usage for stats
+    if (!has_pmm_backing)
+        __atomic_sub_fetch(&mmio_bytes, cur->public.length, __ATOMIC_RELAXED);
 
     vma_remove(vmm, cur);
     vmm_free_vm_object(cur);
@@ -1268,7 +1281,7 @@ static uint64_t vmm_walk_pte(uint64_t pt_root, void* virt) {
 
 /*
  * vmm_check_buffer - Check that every page of [ptr, ptr+size) is mapped in
- * the hardware page tables with the requested VM_FLAG_* permissions.
+ * the hardware page tables with the requested VM_FLAG_* permissions
  */
 bool vmm_check_buffer(vmm_t* vmm_pub, const void* ptr, size_t size, size_t required_flags) {
     vmm_ctx* vmm = vmm_get_instance(vmm_pub);
@@ -1618,6 +1631,20 @@ vmm_status_t vmm_protect(vmm_t* vmm_pub, void* addr, size_t new_flags) {
 }
 
 #pragma endregion
+
+/*
+ * vmm_mmio_total - Total bytes currently mapped as MMIO across all VMM instances
+ */
+size_t vmm_mmio_total(void) {
+    return __atomic_load_n(&mmio_bytes, __ATOMIC_RELAXED);
+}
+
+/*
+ * vmm_add_mmio - Add to the total MMIO byte count
+ */
+void vmm_add_mmio(size_t bytes) {
+    __atomic_add_fetch(&mmio_bytes, bytes, __ATOMIC_RELAXED);
+}
 
 #pragma region Debugging
 

@@ -189,11 +189,20 @@ void lapic_timer_periodic(uint32_t us, uint8_t vector) {
 }
 
 /*
- * lapic_timer_stop - Stops the Local APIC timer
+ * lapic_timer_stop - Stops the LAPIC timer (also disarms TSC Deadline mode)
  */
 void lapic_timer_stop(void) {
     lapic_write(LAPIC_LVT_TIMER, LVT_MASK);
     lapic_write(LAPIC_TICR, 0);
+}
+
+/*
+ * lapic_tsc_arm - Arms the LAPIC timer in TSC Deadline mode
+ */
+void lapic_tsc_arm(uint64_t tsc_deadline, uint8_t vector) {
+    lapic_write(LAPIC_LVT_TIMER, (uint32_t)vector | LVT_TIMER_TSC_DEADLINE);
+    __asm__ volatile("lfence" ::: "memory");
+    tsc_deadline_arm(tsc_deadline);
 }
 
 #pragma endregion

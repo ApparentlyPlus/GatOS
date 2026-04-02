@@ -26,6 +26,15 @@ static thread_t* cur = NULL;
 static thread_t* rq_head = NULL;
 static thread_t* rq_tail = NULL;
 
+// MONITOR/MWAIT power state support
+static bool cpu_has_mwait = false;
+static uint32_t mwait_hint = 0;    // C-state hint for MWAIT EAX (target C-state)
+static uint32_t mwait_ext  = 0;    // MWAIT ECX extensions (bit 0 = IBE: interrupt break event)
+
+// CPU utilisation counters (incremented in IRQ context, no locking needed)
+static volatile uint64_t ticks_total = 0;
+static volatile uint64_t ticks_idle  = 0;
+
 static avl_tree_t sleep_tree;
 static thread_t*  dead_head = NULL;
 
@@ -85,12 +94,19 @@ static void sched_add_dead(thread_t* thread);
 static void sched_add_sleep(thread_t* thread);
 
 /*
- * idle_thread_entry - The main function for the idle thread
+ * idle_thread_entry - MONITOR/MWAIT idle loop (falls back to HLT).
+ * Watches rq_head so any sched_add() store wakes MWAIT immediately.
  */
 static void idle_thread_entry(void* arg) {
     (void)arg;
     while (1) {
-        __asm__ volatile("hlt");
+        if (cpu_has_mwait) {
+            __asm__ volatile("monitor" :: "a"(&rq_head), "c"(0), "d"(0) : "memory");
+            if (rq_head) { sched_yield(); continue; }
+            __asm__ volatile("mwait" :: "a"(mwait_hint), "c"(mwait_ext) : "memory");
+        } else {
+            __asm__ volatile("hlt");
+        }
     }
 }
 
@@ -125,6 +141,30 @@ void sched_init(void) {
     sched_stack_top = (uint64_t)sched_stack + KERNEL_STACK_SIZE;
     LOGF("[SCHED] Scheduler stack allocated at 0x%lx\n", sched_stack_top);
 
+    // Detect MONITOR/MWAIT (CPUID.01H:ECX[3]), pick deepest C-state from CPUID.05H
+    {
+        uint32_t a, b, c, d;
+        cpuid(1, 0, &a, &b, &c, &d);
+        if (c & (1u << 3)) {
+            cpu_has_mwait = true;
+            cpuid(5, 0, &a, &b, &c, &d);
+            mwait_ext = (c & 1u);
+
+            if      ((d >> 28) & 0xF) mwait_hint = 0x60;
+            else if ((d >> 24) & 0xF) mwait_hint = 0x50;
+            else if ((d >> 20) & 0xF) mwait_hint = 0x40;
+            else if ((d >> 16) & 0xF) mwait_hint = 0x30;
+            else if ((d >> 12) & 0xF) mwait_hint = 0x20;
+            else if ((d >>  8) & 0xF) mwait_hint = 0x10;
+            else                      mwait_hint = 0x00;
+
+            LOGF("[SCHED] MONITOR/MWAIT: deepest C-state hint=0x%02x IBE=%u\n",
+                 mwait_hint, mwait_ext);
+        } else {
+            LOGF("[SCHED] MONITOR/MWAIT not available; idle using HLT.\n");
+        }
+    }
+
     sched_on = true;
     LOGF("[SCHED] Scheduler initialized and enabled.\n");
 }
@@ -134,6 +174,23 @@ void sched_init(void) {
  */
 bool sched_active(void) {
     return sched_on;
+}
+
+/*
+ * sched_next_wake - Returns the timestamp of the next sleeping thread to wake up, or UINT64_MAX if none
+ */
+uint64_t sched_next_wake(void) {
+    avl_node_t *mn = avl_min(&sleep_tree);
+    if (!mn) return UINT64_MAX;
+    return AVL_ENTRY(mn, thread_t, sleep_node)->wake_at;
+}
+
+/*
+ * sched_cpu_usage - Returns total and idle tick counts for CPU usage calculation
+ */
+void sched_cpu_usage(uint64_t *out_idle, uint64_t *out_total) {
+    *out_idle  = ticks_idle;
+    *out_total = ticks_total;
 }
 
 /*
@@ -160,7 +217,7 @@ void sched_add(thread_t* thread) {
 }
 
 /*
- * sched_add_sleep - Inserts a thread into the AVL sleep tre
+ * sched_add_sleep - Inserts a thread into the AVL sleep tree
  */
 static void sched_add_sleep(thread_t* thread) {
     if (!thread) return;
@@ -353,6 +410,11 @@ cpu_context_t* sched_schedule(cpu_context_t* ctx) {
 
     cur = nxt;
     cur->state = T_RUNNING;
+
+    ticks_total++;
+    if (cur == idle) ticks_idle++;
+
+    timer_arm_next(cur == idle);
 
     // fpu_nm_handler will lazily restore state on first use
     set_cr0_ts();

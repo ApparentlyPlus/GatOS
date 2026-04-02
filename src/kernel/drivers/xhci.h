@@ -11,6 +11,7 @@
 #include <stddef.h>
 #include <arch/x86_64/cpu/interrupts.h>
 #include <kernel/sys/spinlock.h>
+#include <kernel/sys/process.h>
 
 #define XHCI_CAPLEN         0x00
 #define XHCI_HCIVERSION     0x02
@@ -171,6 +172,13 @@ typedef struct {
     uint8_t tt_port;
 } xhci_slot_t;
 
+// IRQ driven completion slot
+typedef struct {
+    volatile int  done;
+    trb_t         result;
+    thread_t     *waiter;
+} xhci_completion_t;
+
 typedef struct {
     uint8_t *cap;
     uint8_t *op;
@@ -194,6 +202,10 @@ typedef struct {
     xhci_slot_t dev_slots[256];
     spinlock_t lock;
     uint8_t msi_vec;
+
+    // Per HC completion slots
+    xhci_completion_t cmd_comp;
+    xhci_completion_t xfer_comp;
 } xhci_hc_t;
 
 #define XHCI_MSI_VEC_BASE   50

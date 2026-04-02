@@ -75,6 +75,8 @@ vmm_t* vmm_kernel_get(void);
 
 // Introspection
 
+size_t vmm_mmio_total(void);
+void vmm_add_mmio(size_t bytes);
 uintptr_t vmm_get_alloc_base(vmm_t* vmm);
 uintptr_t vmm_get_alloc_end(vmm_t* vmm);
 size_t vmm_get_alloc_size(vmm_t* vmm);
@@ -85,7 +87,7 @@ bool vmm_table_is_empty(uint64_t *table);
 bool vmm_get_physical(vmm_t* vmm, void* virt, uint64_t* out_phys);
 vm_object* vmm_find_mapped_object(vmm_t* vmm, void* addr);
 bool vmm_check_flags(vmm_t* vmm, void* addr, size_t required_flags);
-bool vmm_check_buffer(vmm_t* vmm, const void* ptr, size_t size, size_t required_flags);
+bool vmm_check_buffer(vmm_t* vmm_pub, const void* ptr, size_t size, size_t required_flags);
 
 // Page Table Manipulation
 

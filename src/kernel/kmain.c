@@ -119,7 +119,7 @@ void kernel_main(void* mb_info) {
 		if (multiboot_get_memory_region(&multiboot, i, &region_start, &region_end, &region_type) != 0)
 			continue;
 		if (region_type != MULTIBOOT_MEMORY_AVAILABLE)
-			continue;
+			vmm_add_mmio(region_end - region_start);
 		pmm_populate((uint64_t)region_start, (uint64_t)region_end);
 	}
 	QEMU_LOG("Initialized physical memory manager", TOTAL_DBG);
@@ -170,6 +170,7 @@ void kernel_main(void* mb_info) {
 	
 	// Timers before scheduler
 	timer_init();
+	power_rapl_init(); // RAPL needs uptime (TSC calibrated by timer_init)
 	QEMU_LOG("Initialized system timers", TOTAL_DBG);
 	
 	// Syscalls before userspace

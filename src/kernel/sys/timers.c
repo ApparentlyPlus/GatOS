@@ -31,6 +31,10 @@ static uint64_t boot_tsc = 0;
 
 static volatile uint64_t ticks = 0;
 
+// Set to true when TSC Deadline mode is active (tickless)
+// When false, we fall back to a 10ms periodic LAPIC timer for compatibility
+static bool tsc_deadline_mode = false;
+
 #pragma endregion
 
 #pragma region PIT Implementation
@@ -236,14 +240,15 @@ void timer_init(void) {
     irq_register(INT_FIRST_INTERRUPT, (irq_handler_t)timer_handler);
     ioapic_unmask(0);
 
-    // kick off the LAPIC timer, 10ms periodic for preemption
-    lapic_timer_periodic(10000, INT_FIRST_INTERRUPT);
-
-    // Check for TSC Deadline support
+    // Enable TSC Deadline tickless mode if supported
     uint32_t a, b, c, d;
     cpuid(1, 0, &a, &b, &c, &d);
-    if (c & (1 << 24)) {
-        LOGF("[TIMER] TSC-Deadline mode supported.\n");
+    if (c & (1u << 24)) {
+        tsc_deadline_mode = true;
+        LOGF("[TIMER] TSC-Deadline tickless mode enabled.\n");
+    } else {
+        lapic_timer_periodic(10000, INT_FIRST_INTERRUPT);
+        LOGF("[TIMER] TSC-Deadline not available; using 10ms periodic timer.\n");
     }
 }
 
@@ -304,6 +309,50 @@ uint64_t get_uptime_ms(void) {
 uint64_t get_uptime_ns(void) {
     if (tsc_tpm == 0) return 0;
     return ((tsc_read() - boot_tsc) * 1000000) / tsc_tpm;
+}
+
+/*
+ * timer_arm_next - Arms the LAPIC timer for the next scheduler event
+ */
+void timer_arm_next(bool going_idle) {
+    if (!tsc_deadline_mode) return;
+
+    // this is a cool function for efficiency
+    uint64_t now_tsc = tsc_read();
+
+    if (going_idle) {
+        uint64_t next_ms = sched_next_wake();
+
+        if (next_ms == UINT64_MAX) {
+            lapic_timer_stop();
+            return;
+        }
+
+        uint64_t now_ms = get_uptime_ms();
+        if (next_ms <= now_ms) {
+            lapic_tsc_arm(now_tsc, INT_FIRST_INTERRUPT);
+            return;
+        }
+        uint64_t deadline_tsc = now_tsc + ((next_ms - now_ms) * tsc_tpm);
+        lapic_tsc_arm(deadline_tsc, INT_FIRST_INTERRUPT);
+
+    } else {
+        uint64_t quantum_tsc = now_tsc + ((uint64_t)SCHED_QUANTUM_MS * tsc_tpm);
+
+        uint64_t next_ms = sched_next_wake();
+        if (next_ms != UINT64_MAX) {
+            uint64_t now_ms = get_uptime_ms();
+            if (next_ms <= now_ms) {
+                lapic_tsc_arm(now_tsc, INT_FIRST_INTERRUPT);
+                return;
+            }
+            uint64_t sleep_tsc = now_tsc + ((next_ms - now_ms) * tsc_tpm);
+            if (sleep_tsc < quantum_tsc)
+                quantum_tsc = sleep_tsc;
+        }
+
+        lapic_tsc_arm(quantum_tsc, INT_FIRST_INTERRUPT);
+    }
 }
 
 #pragma endregion

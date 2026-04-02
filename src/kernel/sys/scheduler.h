@@ -20,4 +20,6 @@ thread_t* sched_current(void);
 void sched_sleep(uint64_t ms);
 void sched_exit(void);
 bool sched_active(void);
-void sched_drop_proc(struct process* proc);
+void sched_drop_proc(process_t* proc);
+uint64_t sched_next_wake(void);
+void sched_cpu_usage(uint64_t *out_idle, uint64_t *out_total);

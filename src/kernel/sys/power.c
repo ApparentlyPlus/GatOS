@@ -1,14 +1,17 @@
 /*
  * power.c - Kernel Power Management
  *
- * This file implements system reboot and shutdown functionality using ACPI
+ * This file implements system reboot, shutdown, and RAPL power measurement.
  *
  * Author: u/ApparentlyPlus
  */
 
 #include <arch/x86_64/cpu/interrupts.h>
 #include <arch/x86_64/cpu/io.h>
+#include <arch/x86_64/cpu/cpu.h>
+#include <arch/x86_64/cpu/msr.h>
 #include <kernel/sys/power.h>
+#include <kernel/sys/timers.h>
 #include <kernel/sys/acpi.h>
 #include <kernel/debug.h>
 #include <klibc/string.h>
@@ -151,4 +154,90 @@ void power_off(void) {
 
     LOGF("[POWER] Shutdown failed.\n");
     for(;;);
+}
+
+// rapl decls
+typedef enum {
+    RAPL_NONE = 0,
+    RAPL_INTEL,
+    RAPL_AMD,
+} rapl_vendor_t;
+
+// globals
+static rapl_vendor_t rapl_vendor = RAPL_NONE;
+static uint32_t rapl_esu = 0;
+static uint32_t rapl_prev = 0;
+static uint64_t rapl_prev_ms = 0;
+static bool rapl_primed = false;
+
+/*
+ * power_rapl_init - Detect and initialise RAPL energy counters
+ */
+void power_rapl_init(void) {
+    const char *vendor = cpu_get_info()->vendor;
+    bool is_intel = (kstrcmp(vendor, "GenuineIntel") == 0);
+    bool is_amd = (kstrcmp(vendor, "AuthenticAMD") == 0);
+
+    if (is_intel) {
+        uint32_t a, b, c, d;
+        cpuid(6, 0, &a, &b, &c, &d);
+        if (!(a & (1u << 3))) {
+            LOGF("[POWER] RAPL not advertised by CPUID.06H (Intel).\n");
+            return;
+        }
+        uint64_t unit_msr = read_msr(MSR_RAPL_POWER_UNIT);
+        rapl_esu = (uint32_t)((unit_msr >> 8) & 0x1F);
+        rapl_vendor = RAPL_INTEL;
+        LOGF("[POWER] Intel RAPL ready. ESU=%u\n", rapl_esu);
+
+    } else if (is_amd) {
+        uint64_t unit_msr = read_msr(MSR_AMD_ENERGY_UNIT);
+        rapl_esu = (uint32_t)((unit_msr >> 8) & 0x1F);
+        rapl_vendor = RAPL_AMD;
+        LOGF("[POWER] AMD RAPL ready. ESU=%u\n", rapl_esu);
+
+    } else {
+        LOGF("[POWER] RAPL not supported (vendor=%s).\n", vendor);
+    }
+}
+
+/*
+ * power_rapl_available - Returns true if RAPL was initialised
+ */
+bool power_rapl_available(void) {
+    return rapl_vendor != RAPL_NONE;
+}
+
+/*
+ * power_avg_watts - Average package power since last call
+ */
+uint32_t power_avg_watts(void) {
+    if (rapl_vendor == RAPL_NONE) return 0;
+
+    uint32_t msr_addr = (rapl_vendor == RAPL_AMD) ? MSR_AMD_PKG_ENERGY : MSR_PKG_ENERGY_STATUS;
+
+    uint32_t raw = (uint32_t)(read_msr(msr_addr) & 0xFFFFFFFF);
+    uint64_t now_ms = get_uptime_ms();
+
+    if (!rapl_primed) {
+        rapl_prev = raw;
+        rapl_prev_ms = now_ms;
+        rapl_primed = true;
+        return 0;
+    }
+
+    uint32_t delta_raw = raw - rapl_prev;
+    uint64_t delta_ms = now_ms - rapl_prev_ms;
+
+    rapl_prev = raw;
+    rapl_prev_ms = now_ms;
+
+    if (delta_ms == 0 || rapl_esu == 0 || rapl_esu >= 32) return 0;
+
+    uint64_t denom = delta_ms * ((uint64_t)1u << rapl_esu);
+    if (denom == 0) return 0;
+
+    uint64_t watts_x10 = ((uint64_t)delta_raw * 10000ULL) / denom;
+    if (watts_x10 > 9999) watts_x10 = 9999;
+    return (uint32_t)watts_x10;
 }

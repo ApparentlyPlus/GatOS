@@ -30,6 +30,7 @@
 #include <kernel/sys/apic.h>
 #include <kernel/sys/spinlock.h>
 #include <kernel/sys/timers.h>
+#include <kernel/sys/scheduler.h>
 #include <kernel/debug.h>
 #include <klibc/stdio.h>
 #include <klibc/string.h>
@@ -144,9 +145,9 @@ static trb_t *deq(xhci_hc_t *hc) {
 }
 
 /*
- * wait_ev - spin on the event ring until we see the expected TRB type or timeout
+ * wait_ev_poll - Busy poll fallback used before the scheduler is active
  */
-static trb_t wait_ev(xhci_hc_t *hc, uint8_t type, uint32_t tmo) {
+static trb_t wait_ev_poll(xhci_hc_t *hc, uint8_t type, uint32_t tmo) {
     trb_t res = {0};
     uint64_t dl = get_uptime_ms() + tmo;
     while (get_uptime_ms() < dl) {
@@ -166,6 +167,33 @@ static trb_t wait_ev(xhci_hc_t *hc, uint8_t type, uint32_t tmo) {
         __asm__ volatile("pause");
     }
     return res;
+}
+
+/*
+ * wait_ev - Wait for an xHCI event TRB of the given type
+ */
+static trb_t wait_ev(xhci_hc_t *hc, uint8_t type, uint32_t tmo) {
+    if (!sched_active()) {
+        return wait_ev_poll(hc, type, tmo);
+    }
+
+    xhci_completion_t *comp = (type == TRB_EV_CMD) ? &hc->cmd_comp : &hc->xfer_comp;
+
+    bool iflag = intr_save();
+    comp->done   = 0;
+    comp->waiter = sched_current();
+    kmemset(&comp->result, 0, sizeof(comp->result));
+    comp->waiter->state = T_BLOCKED;
+    intr_restore(iflag);
+
+    sched_yield();
+
+    if (comp->done)
+        return comp->result;
+
+    // Spurious wakeup
+    LOGF("[XHCI] wait_ev: spurious wakeup for type=%u, falling back to poll\n", type);
+    return wait_ev_poll(hc, type, tmo);
 }
 
 /*
@@ -696,7 +724,20 @@ static void arm_int(xhci_hc_t *hc, xhci_slot_t *s) {
 }
 
 /*
- * proc_evts - Processes pending events from the host controller's event ring
+ * complete - Wake a thread blocked on a completion slot
+ */
+static void complete(xhci_completion_t *comp, trb_t ev) {
+    if (comp->waiter && !comp->done) {
+        comp->result        = ev;
+        comp->done          = 1;
+        comp->waiter->state = T_READY;
+        sched_add(comp->waiter);
+        comp->waiter        = NULL;
+    }
+}
+
+/*
+ * proc_evts - Process all pending events from the host controller's event ring
  */
 static void proc_evts(xhci_hc_t *hc) {
     for (;;) {
@@ -705,12 +746,18 @@ static void proc_evts(xhci_hc_t *hc) {
         if (!t) { spinlock_release(&hc->lock, was); break; }
         trb_t ev = *t;
         spinlock_release(&hc->lock, was);
-        
+
         ow32(hc, XHCI_STS, STS_EINT);
         iw32(hc, IR_IMAN, ir32(hc, IR_IMAN) | IMAN_IP);
-        
-        if (GET_TYPE(ev.ctrl) == TRB_EV_XFER) {
-            uint8_t cc = GET_CC(ev.dw2);
+
+        uint8_t ev_type = GET_TYPE(ev.ctrl);
+
+        if (ev_type == TRB_EV_CMD) {
+            complete(&hc->cmd_comp, ev);
+        } else if (ev_type == TRB_EV_XFER) {
+            complete(&hc->xfer_comp, ev);
+
+            uint8_t cc      = GET_CC(ev.dw2);
             uint8_t slot_id = GET_SLOT(ev.ctrl);
             if (slot_id < 256) {
                 xhci_slot_t *s = &hc->dev_slots[slot_id];

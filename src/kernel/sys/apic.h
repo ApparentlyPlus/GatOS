@@ -62,6 +62,7 @@
 // LVT Masks
 #define LVT_MASK                (1 << 16)
 #define LVT_TIMER_PERIODIC      (1 << 17)
+#define LVT_TIMER_TSC_DEADLINE  (1 << 18)
 
 // I/O APIC Register Selectors
 #define IOAPIC_REGSEL           0x00
@@ -158,3 +159,4 @@ void lapic_set_tpm(uint64_t ticks_per_ms);
 void lapic_timer_oneshot(uint32_t us, uint8_t vector);
 void lapic_timer_periodic(uint32_t us, uint8_t vector);
 void lapic_timer_stop(void);
+void lapic_tsc_arm(uint64_t tsc_deadline, uint8_t vector);
