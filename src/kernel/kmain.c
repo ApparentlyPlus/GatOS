@@ -118,8 +118,10 @@ void kernel_main(void* mb_info) {
 		uint32_t region_type;
 		if (multiboot_get_memory_region(&multiboot, i, &region_start, &region_end, &region_type) != 0)
 			continue;
-		if (region_type != MULTIBOOT_MEMORY_AVAILABLE)
+		if (region_type != MULTIBOOT_MEMORY_AVAILABLE){
 			vmm_add_mmio(region_end - region_start);
+			continue;
+		}
 		pmm_populate((uint64_t)region_start, (uint64_t)region_end);
 	}
 	QEMU_LOG("Initialized physical memory manager", TOTAL_DBG);
