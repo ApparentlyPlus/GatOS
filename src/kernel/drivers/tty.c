@@ -100,6 +100,19 @@ void tty_destroy(tty_t* tty) {
     
     procs_kill_tty(tty);
 
+    // flush any threads still parked in the wait queue into the dead queue
+    // they're already T_DEAD from procs_kill_tty, so sched_add routes them straight to reaping
+    bool iflags = intr_save();
+    thread_t* wt = tty->wait_head;
+    tty->wait_head = NULL;
+    while (wt) {
+        thread_t* next = wt->rnext;
+        wt->rnext = NULL;
+        sched_add(wt);
+        wt = next;
+    }
+    intr_restore(iflags);
+
     ensure_lock();
     bool flags = spinlock_acquire(&tty_lock);
 
