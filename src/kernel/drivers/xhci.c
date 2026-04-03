@@ -32,12 +32,18 @@
 #include <kernel/sys/timers.h>
 #include <kernel/sys/scheduler.h>
 #include <kernel/debug.h>
-#include <klibc/stdio.h>
 #include <klibc/string.h>
 #include <kernel/sys/panic.h>
 
 static xhci_hc_t *hcs[16];
 static int hc_cnt = 0;
+
+// New additions here, hehehe
+// These are used for a monitor thread that handles hot plug events
+static process_t *hotplug_proc = NULL;
+static thread_t *hotplug_thread = NULL;
+static tty_t *hotplug_tty = NULL;
+static volatile bool worker_idle = false;
 
 static inline uint32_t cr32(xhci_hc_t *hc, uint32_t o) { return *(volatile uint32_t *)(hc->cap + o); }
 static inline uint8_t  cr8 (xhci_hc_t *hc, uint32_t o) { return *(volatile uint8_t  *)(hc->cap + o); }
@@ -130,7 +136,7 @@ static void evt_init(xhci_hc_t *hc) {
 }
 
 /*
- * deq - pop next event if the cycle bit matches, advance ERDP
+ * deq - pop next event if the cycle bit matches, also caller must flush ERDP after draining
  */
 static trb_t *deq(xhci_hc_t *hc) {
     trb_t *t = &hc->evt.trbs[hc->evt.deq];
@@ -140,22 +146,31 @@ static trb_t *deq(xhci_hc_t *hc) {
         hc->evt.deq = 0;
         hc->evt.cyc ^= 1;
     }
-    iw64(hc, IR_ERDP_LO, (hc->evt.phys + hc->evt.deq * sizeof(trb_t)) | ERDP_EHB);
     return t;
+}
+
+/*
+ * flush_erdp - Write the current dequeue pointer back to the hardware and clear EHB
+ */
+static void flush_erdp(xhci_hc_t *hc) {
+    iw64(hc, IR_ERDP_LO, (hc->evt.phys + hc->evt.deq * sizeof(trb_t)) | ERDP_EHB);
 }
 
 /*
  * wait_ev_poll - Busy poll fallback used before the scheduler is active
  */
 static trb_t wait_ev_poll(xhci_hc_t *hc, uint8_t type, uint32_t tmo) {
+    xhci_completion_t *comp = (type == TRB_EV_CMD) ? &hc->cmd_comp : &hc->xfer_comp;
     trb_t res = {0};
     uint64_t dl = get_uptime_ms() + tmo;
     while (get_uptime_ms() < dl) {
+        if (comp->done) return comp->result;
         bool was = spinlock_acquire(&hc->lock);
         trb_t *t = deq(hc);
         if (t) {
             uint8_t ty = GET_TYPE(t->ctrl);
             res = *t;
+            flush_erdp(hc);
             spinlock_release(&hc->lock, was);
             ow32(hc, XHCI_STS, STS_EINT);
             iw32(hc, IR_IMAN, ir32(hc, IR_IMAN) | IMAN_IP);
@@ -170,6 +185,20 @@ static trb_t wait_ev_poll(xhci_hc_t *hc, uint8_t type, uint32_t tmo) {
 }
 
 /*
+ * prepare_wait - Clear the completion slot BEFORE ringing the doorbell.
+ * Author's Note: Call before enq and dbw for any command that expects an event
+ */
+static void prepare_wait(xhci_hc_t *hc, uint8_t type) {
+    if (!sched_active()) return;
+    xhci_completion_t *comp = (type == TRB_EV_CMD) ? &hc->cmd_comp : &hc->xfer_comp;
+    bool iflag = intr_save();
+    comp->done   = 0;
+    comp->waiter = NULL;
+    kmemset(&comp->result, 0, sizeof(comp->result));
+    intr_restore(iflag);
+}
+
+/*
  * wait_ev - Wait for an xHCI event TRB of the given type
  */
 static trb_t wait_ev(xhci_hc_t *hc, uint8_t type, uint32_t tmo) {
@@ -180,9 +209,14 @@ static trb_t wait_ev(xhci_hc_t *hc, uint8_t type, uint32_t tmo) {
     xhci_completion_t *comp = (type == TRB_EV_CMD) ? &hc->cmd_comp : &hc->xfer_comp;
 
     bool iflag = intr_save();
-    comp->done   = 0;
+
+    // Check if the event was already posted by an interrupt handler before we went to sleep
+    if (comp->done) {
+        trb_t r = comp->result;
+        intr_restore(iflag);
+        return r;
+    }
     comp->waiter = sched_current();
-    kmemset(&comp->result, 0, sizeof(comp->result));
     comp->waiter->state = T_BLOCKED;
     intr_restore(iflag);
 
@@ -191,8 +225,7 @@ static trb_t wait_ev(xhci_hc_t *hc, uint8_t type, uint32_t tmo) {
     if (comp->done)
         return comp->result;
 
-    // Spurious wakeup
-    LOGF("[XHCI] wait_ev: spurious wakeup for type=%u, falling back to poll\n", type);
+    // Safety fallback, go and poll brrrr
     return wait_ev_poll(hc, type, tmo);
 }
 
@@ -231,7 +264,7 @@ static void bios_handoff(xhci_hc_t *hc, pci_dev_t *pci) {
 }
 
 /*
- * reset_hc - stop the HC then issue a full reset — wait up to 100ms each
+ * reset_hc - stop the HC then issue a full reset
  */
 static bool reset_hc(xhci_hc_t *hc) {
     ow32(hc, XHCI_CMD, or32(hc, XHCI_CMD) & ~CMD_RS);
@@ -266,6 +299,7 @@ static void start_hc(xhci_hc_t *hc) {
  * cmd_slot - allocate a device slot, return slot_id or 0 on fail
  */
 static uint8_t cmd_slot(xhci_hc_t *hc) {
+    prepare_wait(hc, TRB_EV_CMD);
     enq(&hc->cmd, RING_SZ, 0, 0, 0, TRB_TYPE(TRB_EN_SLOT));
     dbw(hc, 0, 0);
     trb_t ev = wait_ev(hc, TRB_EV_CMD, 500);
@@ -279,6 +313,7 @@ static uint8_t cmd_slot(xhci_hc_t *hc) {
  * cmd_addr - address a slot (bsr=true skips SET_ADDRESS for hubs)
  */
 static bool cmd_addr(xhci_hc_t *hc, uint64_t ctx, uint8_t slot, bool bsr) {
+    prepare_wait(hc, TRB_EV_CMD);
     enq(&hc->cmd, RING_SZ, (uint32_t)ctx, (uint32_t)(ctx >> 32), 0, TRB_TYPE(TRB_ADDR_DEV) | TRB_SLOT(slot) | (bsr ? TRB_BSR : 0));
     dbw(hc, 0, 0);
     trb_t ev = wait_ev(hc, TRB_EV_CMD, 500);
@@ -291,6 +326,7 @@ static bool cmd_addr(xhci_hc_t *hc, uint64_t ctx, uint8_t slot, bool bsr) {
  * cmd_cfg - configure endpoints for a slot
  */
 static bool cmd_cfg(xhci_hc_t *hc, uint64_t ctx, uint8_t slot) {
+    prepare_wait(hc, TRB_EV_CMD);
     enq(&hc->cmd, RING_SZ, (uint32_t)ctx, (uint32_t)(ctx >> 32), 0, TRB_TYPE(TRB_CFG_EP) | TRB_SLOT(slot));
     dbw(hc, 0, 0);
     uint8_t cc = GET_CC(wait_ev(hc, TRB_EV_CMD, 500).dw2);
@@ -299,9 +335,10 @@ static bool cmd_cfg(xhci_hc_t *hc, uint64_t ctx, uint8_t slot) {
 }
 
 /*
- * cmd_eval - evaluate context (update MPS etc.)
+ * cmd_eval - evaluate context
  */
 static bool cmd_eval(xhci_hc_t *hc, uint64_t ctx, uint8_t slot) {
+    prepare_wait(hc, TRB_EV_CMD);
     enq(&hc->cmd, RING_SZ, (uint32_t)ctx, (uint32_t)(ctx >> 32), 0, TRB_TYPE(TRB_EVAL_CTX) | TRB_SLOT(slot));
     dbw(hc, 0, 0);
     uint8_t cc = GET_CC(wait_ev(hc, TRB_EV_CMD, 500).dw2);
@@ -333,6 +370,7 @@ static int ctrl_xfer(xhci_hc_t *hc, xhci_slot_t *s, usb_setup_t *req, uint64_t b
     kmemcpy(&d0, req, 4);
     kmemcpy(&d1, (uint8_t *)req + 4, 4);
     uint32_t trt = req->wLength ? (in ? 3 << 16 : 2 << 16) : 0;
+    prepare_wait(hc, TRB_EV_XFER);
     enq(&s->ep0, RING_SZ, d0, d1, 8, TRB_TYPE(TRB_SETUP) | TRB_IDT | trt);
     if (req->wLength) enq(&s->ep0, RING_SZ, (uint32_t)buf, (uint32_t)(buf >> 32), req->wLength, TRB_TYPE(TRB_DATA) | (in ? TRB_DIR_IN : 0));
     enq(&s->ep0, RING_SZ, 0, 0, 0, TRB_TYPE(TRB_STATUS) | TRB_IOC | (in && req->wLength ? 0 : TRB_DIR_IN));
@@ -439,6 +477,7 @@ static bool reset_port(xhci_hc_t *hc, uint8_t p) {
     return false;
 }
 
+static void cmd_disable_slot(xhci_hc_t *hc, uint8_t slot_id);
 static bool enum_hub(xhci_hc_t *hc, xhci_slot_t *hs);
 static bool enum_dev(xhci_hc_t *hc, uint8_t p, uint8_t spd, uint32_t route_string, uint8_t root_hub_port, uint8_t tt_slot, uint8_t tt_port);
 
@@ -457,6 +496,7 @@ static bool enum_hub(xhci_hc_t *hc, xhci_slot_t *hs) {
         return false;
     }
     uint8_t num_ports = hc->scratch[2];
+    hs->hub_num_ports = num_ports;
     LOGF("[XHCI] Hub slot %u has %u ports\n", hs->id, num_ports);
 
     for (uint8_t i = 1; i <= num_ports; i++) {
@@ -573,9 +613,77 @@ static bool enum_dev(xhci_hc_t *hc, uint8_t p, uint8_t spd, uint32_t route_strin
             if (total_len > 2048) total_len = 2048;
             n = get_desc(hc, s, USB_DESC_CONFIG, 0, total_len);
             if (n > 0) {
-                uint8_t cfg_val = ((usb_config_desc_t *)hc->scratch)->bConfigurationValue;
+                // New code handling hubs
+                // Find the hub's interrupt IN endpoint for status change notifications
+                uint8_t *buf = hc->scratch;
+                uint16_t p = 0;
+                uint8_t hub_ep_addr = 0, hub_ep_ival = 0;
+                uint16_t hub_ep_mps = 0;
+                uint8_t cfg_val = ((usb_config_desc_t *)buf)->bConfigurationValue;
+                while (p < (uint16_t)n) {
+                    if (buf[p] < 2 || p + buf[p] > (uint16_t)n) break;
+                    if (buf[p + 1] == USB_DESC_ENDPOINT) {
+                        usb_endpoint_desc_t *ed = (void *)(buf + p);
+                        if ((ed->bEndpointAddress & USB_EP_DIR_IN) &&
+                            (ed->bmAttributes & 3) == USB_EP_TYPE_INTERRUPT) {
+                            hub_ep_addr = ed->bEndpointAddress;
+                            hub_ep_mps  = ed->wMaxPacketSize & 0x7FF;
+                            hub_ep_ival = ed->bInterval;
+                            break;
+                        }
+                    }
+                    p += buf[p];
+                }
+
                 set_cfg(hc, s, cfg_val);
                 bool kbd = enum_hub(hc, s);
+
+                // Arm the hub's interrupt endpoint for status change polling
+                if (hub_ep_addr && hub_ep_mps) {
+                    s->ep_addr = hub_ep_addr;
+                    s->ep_mps  = hub_ep_mps;
+                    s->ep_ival = hub_ep_ival;
+                    s->ep_idx  = (hub_ep_addr & 0xF) * 2 + 1;
+
+                    ring_init(hc, &s->intr, RING_SZ);
+                    s->hid_buf = dma_alloc(hc, PAGE_SIZE, &s->hid_phys);
+
+                    kmemset(in, 0, PAGE_SIZE);
+                    c = get_ctrl(in);
+                    c->add = 1 | (1u << s->ep_idx);
+                    kmemcpy(get_slot(hc, in), (void *)PHYSMAP_P2V(s->out_phys), hc->ctx_sz);
+                    get_slot(hc, in)->dw0 = (get_slot(hc, in)->dw0 & ~(0x1F << 27)) | SLOT_CTX_ENT(s->ep_idx);
+
+                    ep_ctx_t *ei = get_ep(hc, in, s->ep_idx - 1);
+                    uint8_t iv = 0;
+                    if (spd == SPD_FS || spd == SPD_LS) {
+                        uint8_t b = hub_ep_ival;
+                        if (b == 0) b = 1;
+                        uint8_t msb = 0;
+                        while (b > 1) { msb++; b >>= 1; }
+                        iv = msb + 3;
+                    } else {
+                        iv = hub_ep_ival ? hub_ep_ival - 1 : 0;
+                    }
+                    ei->dw0 = EP_IVAL(iv);
+                    ei->dw1 = EP_CERR(3) | EP_TYPE(7) | EP_PKT(hub_ep_mps);
+                    ei->deq_lo = (uint32_t)s->intr.phys | EP_DCS;
+                    ei->deq_hi = (uint32_t)(s->intr.phys >> 32);
+                    ei->dw4 = EP_AVG(1) | EP_ESIT(hub_ep_mps);
+
+                    if (cmd_cfg(hc, in_phys, s->id)) {
+                        s->is_hub = true;
+                        s->active = true;
+                        // arm the first interrupt transfer
+                        enq(&s->intr, RING_SZ,
+                            (uint32_t)s->hid_phys, (uint32_t)(s->hid_phys >> 32),
+                            hub_ep_mps,
+                            TRB_TYPE(TRB_NORMAL) | TRB_IOC | TRB_INTR(0));
+                        dbw(hc, s->id, s->ep_idx);
+                        LOGF("[XHCI] hub slot %u: SC endpoint armed (ep_idx=%u)\n", s->id, s->ep_idx);
+                    }
+                }
+
                 pmm_free(in_phys, PAGE_SIZE);
                 return kbd;
             }
@@ -627,16 +735,18 @@ static bool enum_dev(xhci_hc_t *hc, uint8_t p, uint8_t spd, uint32_t route_strin
     s->led_buf = dma_alloc(hc, PAGE_SIZE, &s->led_phys);
     pmm_free(in_phys, PAGE_SIZE);
     s->active = true;
-    kprintf("[XHCI] USB keyboard found (VID=0x%04x PID=0x%04x) and configured!\n", vid, pid);
     return true;
 
 fail:
+    cmd_disable_slot(hc, s->id);
+    hc->dcbaa[s->id] = 0;
     if (in_phys) pmm_free(in_phys, PAGE_SIZE);
     if (s->ep0.phys) pmm_free(s->ep0.phys, PAGE_SIZE);
     if (s->intr.phys) pmm_free(s->intr.phys, PAGE_SIZE);
-    if (s->out_phys) { pmm_free(s->out_phys, PAGE_SIZE); hc->dcbaa[s->id] = 0; }
+    if (s->out_phys) pmm_free(s->out_phys, PAGE_SIZE);
     if (s->hid_phys) pmm_free(s->hid_phys, PAGE_SIZE);
     if (s->led_phys) pmm_free(s->led_phys, PAGE_SIZE);
+    kmemset(s, 0, sizeof(*s));
     return false;
 }
 
@@ -727,12 +837,12 @@ static void arm_int(xhci_hc_t *hc, xhci_slot_t *s) {
  * complete - Wake a thread blocked on a completion slot
  */
 static void complete(xhci_completion_t *comp, trb_t ev) {
-    if (comp->waiter && !comp->done) {
-        comp->result        = ev;
-        comp->done          = 1;
+    comp->result = ev;
+    comp->done = 1;
+    if (comp->waiter) {
         comp->waiter->state = T_READY;
         sched_add(comp->waiter);
-        comp->waiter        = NULL;
+        comp->waiter = NULL;
     }
 }
 
@@ -740,32 +850,292 @@ static void complete(xhci_completion_t *comp, trb_t ev) {
  * proc_evts - Process all pending events from the host controller's event ring
  */
 static void proc_evts(xhci_hc_t *hc) {
+    bool got_any = false;
+
     for (;;) {
         bool was = spinlock_acquire(&hc->lock);
         trb_t *t = deq(hc);
-        if (!t) { spinlock_release(&hc->lock, was); break; }
+        if (!t) {
+            if (got_any) flush_erdp(hc);
+            spinlock_release(&hc->lock, was);
+            break;
+        }
         trb_t ev = *t;
+        got_any = true;
         spinlock_release(&hc->lock, was);
-
-        ow32(hc, XHCI_STS, STS_EINT);
-        iw32(hc, IR_IMAN, ir32(hc, IR_IMAN) | IMAN_IP);
 
         uint8_t ev_type = GET_TYPE(ev.ctrl);
 
         if (ev_type == TRB_EV_CMD) {
             complete(&hc->cmd_comp, ev);
         } else if (ev_type == TRB_EV_XFER) {
-            complete(&hc->xfer_comp, ev);
-
             uint8_t cc      = GET_CC(ev.dw2);
             uint8_t slot_id = GET_SLOT(ev.ctrl);
+            uint8_t ev_ep   = GET_EP(ev.ctrl);
+            bool handled = false;
             if (slot_id < 256) {
                 xhci_slot_t *s = &hc->dev_slots[slot_id];
-                if (s->active && GET_EP(ev.ctrl) == s->ep_idx) {
-                    if (cc == CC_SUCCESS || cc == CC_SHORT_PKT) handle_hid(hc, s, s->hid_buf);
-                    arm_int(hc, s);
+                if (s->active && ev_ep == s->ep_idx) {
+                    if (s->is_hub) {
+                        // Hub status change notification
+                        if (slot_id < 32)
+                            hc->pending_hub_slots |= (1u << slot_id);
+                        if (hc->worker && worker_idle && hc->worker->state == T_BLOCKED)
+                            sched_add(hc->worker);
+
+                        // Rearm hub interrupt endpoint
+                        enq(&s->intr, RING_SZ,
+                            (uint32_t)s->hid_phys, (uint32_t)(s->hid_phys >> 32),
+                            s->ep_mps,
+                            TRB_TYPE(TRB_NORMAL) | TRB_IOC | TRB_INTR(0));
+                        dbw(hc, s->id, s->ep_idx);
+                    } else {
+                        if (cc == CC_SUCCESS || cc == CC_SHORT_PKT) handle_hid(hc, s, s->hid_buf);
+                        arm_int(hc, s);
+                    }
+                    handled = true;
                 }
             }
+            if (!handled)
+                complete(&hc->xfer_comp, ev);
+        } else if (ev_type == TRB_EV_PORT) {
+            uint8_t port = (ev.dw0 >> 24) & 0xFF;
+            if (port > 0 && port <= 32) {
+                hc->pending_ports |= (1u << (port - 1));
+                if (hc->worker && worker_idle && hc->worker->state == T_BLOCKED)
+                    sched_add(hc->worker);
+            }
+        }
+    }
+
+    if (got_any) {
+        ow32(hc, XHCI_STS, STS_EINT);
+        iw32(hc, IR_IMAN, ir32(hc, IR_IMAN) | IMAN_IP);
+    }
+}
+
+/*
+ * cmd_disable_slot - Issue a Disable Slot command to free the device slot
+ */
+static void cmd_disable_slot(xhci_hc_t *hc, uint8_t slot_id) {
+    prepare_wait(hc, TRB_EV_CMD);
+    enq(&hc->cmd, RING_SZ, 0, 0, 0, TRB_TYPE(TRB_DIS_SLOT) | TRB_SLOT(slot_id));
+    dbw(hc, 0, 0);
+    trb_t ev = wait_ev(hc, TRB_EV_CMD, 500);
+    uint8_t cc = GET_CC(ev.dw2);
+    if (cc != CC_SUCCESS)
+        LOGF("[XHCI] cmd_disable_slot %u failed: cc=%u\n", slot_id, cc);
+}
+
+/*
+ * handle_hub_changes - Process status changes on external USB hub downstream ports
+ */
+static void handle_hub_changes(xhci_hc_t *hc, uint32_t hub_mask) {
+    for (uint8_t sid = 1; sid < 32; sid++) {
+        if (!(hub_mask & (1u << sid))) continue;
+        xhci_slot_t *hs = &hc->dev_slots[sid];
+        if (!hs->active || !hs->is_hub) continue;
+
+        for (uint8_t i = 1; i <= hs->hub_num_ports; i++) {
+            // GET_STATUS on each hub downstream port
+            usb_setup_t sts = { USB_DIR_IN | USB_TYPE_CLASS | USB_RECIP_OTHER, USB_REQ_GET_STATUS, 0, i, 4 };
+            if (ctrl_xfer(hc, hs, &sts, hc->scratch_phys) != 4) continue;
+            uint32_t status = *(uint32_t *)hc->scratch;
+            bool connected  = (status & 1) != 0;
+            bool c_connect  = (status & (1u << 16)) != 0; // C_PORT_CONNECTION
+            bool c_reset    = (status & (1u << 20)) != 0; // C_PORT_RESET
+
+            // Clear change bits
+            if (c_connect) {
+                usb_setup_t clr = { USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_OTHER,
+                                    USB_REQ_CLEAR_FEATURE, 16 /* C_PORT_CONNECTION */, i, 0 };
+                ctrl_xfer(hc, hs, &clr, 0);
+            }
+            if (c_reset) {
+                usb_setup_t clr = { USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_OTHER,
+                                    USB_REQ_CLEAR_FEATURE, 20 /* C_PORT_RESET */, i, 0 };
+                ctrl_xfer(hc, hs, &clr, 0);
+            }
+
+            if (!c_connect) continue;
+
+            if (!connected) {
+
+                // Device disconnected from hub port
+                // so tear down downstream slots
+                for (int j = 1; j < 256; j++) {
+                    xhci_slot_t *ds = &hc->dev_slots[j];
+                    if (ds->active && !ds->is_hub &&
+                        ds->root_hub_port == hs->root_hub_port && ds->port == i) {
+                        ds->active = false;
+                        cmd_disable_slot(hc, j);
+                        hc->dcbaa[j] = 0;
+                        if (ds->ep0.phys)  pmm_free(ds->ep0.phys,  PAGE_SIZE);
+                        if (ds->intr.phys) pmm_free(ds->intr.phys, PAGE_SIZE);
+                        if (ds->out_phys)  pmm_free(ds->out_phys,  PAGE_SIZE);
+                        if (ds->hid_phys)  pmm_free(ds->hid_phys,  PAGE_SIZE);
+                        if (ds->led_phys)  pmm_free(ds->led_phys,  PAGE_SIZE);
+                        kmemset(ds, 0, sizeof(*ds));
+                    }
+                }
+                LOGF("[XHCI] hub slot %u port %u: device disconnected\n", sid, i);
+                continue;
+            }
+
+            // Device connected
+            usb_setup_t rst = { USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_OTHER,  USB_REQ_SET_FEATURE, 4 /* PORT_RESET */, i, 0 };
+            ctrl_xfer(hc, hs, &rst, 0);
+            sleep_ms(50);
+
+            // Clear C_PORT_RESET after the reset completes
+            usb_setup_t sts2 = { USB_DIR_IN | USB_TYPE_CLASS | USB_RECIP_OTHER, USB_REQ_GET_STATUS, 0, i, 4 };
+            if (ctrl_xfer(hc, hs, &sts2, hc->scratch_phys) == 4) {
+                uint32_t s2 = *(uint32_t *)hc->scratch;
+                if (s2 & (1u << 20)) {
+                    usb_setup_t clr = { USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_OTHER, USB_REQ_CLEAR_FEATURE, 20, i, 0 };
+                    ctrl_xfer(hc, hs, &clr, 0);
+                }
+                if (!(s2 & 1)) continue; // device gone after reset
+
+                uint8_t dspd = SPD_FS;
+                if (s2 & (1 << 9))  dspd = SPD_LS;
+                else if (s2 & (1 << 10)) dspd = SPD_HS;
+
+                // Determine the correct TT slot/port to use for this device
+                uint8_t tt_s = hs->tt_slot ? hs->tt_slot : (hs->spd == SPD_HS && dspd != SPD_HS ? hs->id : 0);
+                uint8_t tt_p = hs->tt_slot ? hs->tt_port : (hs->spd == SPD_HS && dspd != SPD_HS ? i : 0);
+                uint32_t route = hs->route_string;
+                if (hs->spd == SPD_SS || hs->spd == SPD_SSP) {
+                    for (int shift = 0; shift < 20; shift += 4) {
+                        if ((route & (0xF << shift)) == 0) {
+                            route |= (i & 0xF) << shift;
+                            break;
+                        }
+                    }
+                }
+                
+                // Enumerate the new device on the hub port
+                if (enum_dev(hc, i, dspd, route, hs->root_hub_port, tt_s, tt_p)) {
+                    for (int j = 1; j < 256; j++) {
+                        xhci_slot_t *ds = &hc->dev_slots[j];
+                        if (ds->active && ds->root_hub_port == hs->root_hub_port && ds->port == i)
+                            arm_int(hc, ds);
+                    }
+                    LOGF("[XHCI] hub slot %u port %u: device enumerated\n", sid, i);
+                }
+            }
+        }
+    }
+}
+
+static void handle_pending_ports(xhci_hc_t *hc, uint32_t ports) {
+    for (uint8_t p = 0; p < hc->ports && p < 32; p++) {
+        if (!(ports & (1u << p))) continue;
+
+        uint32_t sc = or32(hc, XHCI_PORTSC(p));
+
+        // ack ALL change bits so the controller stops asserting interrupts
+        ow32(hc, XHCI_PORTSC(p), (sc & PORT_PRESERVE) | (sc & PORT_RW1C));
+
+        // only react to actual connect/disconnect (CSC)
+        if (!(sc & PORT_CSC)) continue;
+
+        if (!(sc & PORT_CCS)) {
+            // device disconnected, so tear down the slot
+            for (int j = 1; j < 256; j++) {
+                xhci_slot_t *s = &hc->dev_slots[j];
+                if (s->active && s->root_hub_port == p + 1) {
+                    s->active = false;
+                    cmd_disable_slot(hc, j);
+                    hc->dcbaa[j] = 0;
+                    if (s->ep0.phys)  pmm_free(s->ep0.phys, PAGE_SIZE);
+                    if (s->intr.phys) pmm_free(s->intr.phys, PAGE_SIZE);
+                    if (s->out_phys)  pmm_free(s->out_phys, PAGE_SIZE);
+                    if (s->hid_phys)  pmm_free(s->hid_phys, PAGE_SIZE);
+                    if (s->led_phys)  pmm_free(s->led_phys, PAGE_SIZE);
+                    kmemset(s, 0, sizeof(*s));
+                }
+            }
+            LOGF("[XHCI] port %u disconnected\n", p + 1);
+            continue;
+        }
+
+        LOGF("[XHCI] port %u connected, debouncing\n", p + 1);
+
+        // USB 2.0 spec: debounce for 100ms, verify still connected
+        sleep_ms(100);
+        sc = or32(hc, XHCI_PORTSC(p));
+        if (!(sc & PORT_CCS)) {
+            LOGF("[XHCI] port %u bounced away during debounce\n", p + 1);
+            continue;
+        }
+
+        if (!reset_port(hc, p)) continue;
+        sleep_ms(50);
+
+        sc = or32(hc, XHCI_PORTSC(p));
+        if (!(sc & PORT_CCS) || !(sc & (1 << 1))) continue;
+
+        uint8_t spd = (sc >> PORT_SPD_SHIFT) & PORT_SPD_MASK;
+        if (!spd) spd = SPD_FS;
+
+        if (enum_dev(hc, p, spd, 0, p + 1, 0, 0)) {
+            for (int j = 1; j < 256; j++) {
+                if (hc->dev_slots[j].active && hc->dev_slots[j].root_hub_port == p + 1)
+                    arm_int(hc, &hc->dev_slots[j]);
+            }
+            LOGF("[XHCI] keyboard on port %u is live\n", p + 1);
+        }
+    }
+}
+
+/*
+ * any_pending - Check if there are any pending port or hub events that need processing
+ */
+static bool any_pending(void) {
+    for (int i = 0; i < hc_cnt; i++) {
+        xhci_hc_t *hc = hcs[i];
+        if (hc && (hc->pending_ports || hc->pending_hub_slots)) return true;
+    }
+    return false;
+}
+
+/*
+ * xhci_worker - Kernel thread that handles hotplug port events
+ */
+static void xhci_worker(void *arg) {
+    (void)arg;
+
+    for (;;) {
+        // Check each controller for pending port/hub events, process them if found
+        for (int i = 0; i < hc_cnt; i++) {
+            xhci_hc_t *hc = hcs[i];
+            if (!hc) continue;
+
+            bool iflag = intr_save();
+            uint32_t ports = hc->pending_ports;
+            uint32_t hubs  = hc->pending_hub_slots;
+            hc->pending_ports = 0;
+            hc->pending_hub_slots = 0;
+            intr_restore(iflag);
+
+            if (ports)
+                handle_pending_ports(hc, ports);
+            if (hubs)
+                handle_hub_changes(hc, hubs);
+        }
+
+        // go back to sleep until the IRQ fires again
+        // efficiency stuff
+        bool iflag = intr_save();
+        if (!any_pending() && hotplug_thread) {
+            worker_idle = true;
+            hotplug_thread->state = T_BLOCKED;
+            intr_restore(iflag);
+            sched_yield();
+            worker_idle = false;
+        } else {
+            intr_restore(iflag); // more work arrived while we were processing, loop again
         }
     }
 }
@@ -788,19 +1158,23 @@ bool xhci_init(void) {
     int cnt = pci_get_xhci_controllers(pcis, 16);
     if (cnt == 0) return false;
 
-    bool any_kbd = false;
-
     for (int i = 0; i < cnt; i++) {
         pci_dev_t *pci = &pcis[i];
         pci_enable(pci);
 
         xhci_hc_t *hc = (xhci_hc_t *)kmalloc(sizeof(xhci_hc_t));
+        if (!hc) {
+            LOGF("[XHCI] failed to allocate controller state for %02x:%02x.%x\n", pci->bus, pci->dev, pci->func);
+            continue;
+        }
         kmemset(hc, 0, sizeof(xhci_hc_t));
-        hcs[hc_cnt++] = hc;
 
         uint32_t ms = align_up(pci->bar0_size, PAGE_SIZE);
         if (ms < PAGE_SIZE) ms = PAGE_SIZE;
-        if (vmm_alloc(NULL, ms, VM_FLAG_WRITE | VM_FLAG_MMIO, (void *)pci->bar0_phys, (void **)&hc->cap) != VMM_OK) continue;
+        if (vmm_alloc(NULL, ms, VM_FLAG_WRITE | VM_FLAG_MMIO, (void *)pci->bar0_phys, (void **)&hc->cap) != VMM_OK) {
+            LOGF("[XHCI] failed to map BAR0 for %02x:%02x.%x\n", pci->bus, pci->dev, pci->func);
+            continue;
+        }
 
         hc->op = hc->cap + cr8(hc, XHCI_CAPLEN);
         hc->slots = HCS1_SLOTS(cr32(hc, XHCI_HCSPARAMS1));
@@ -813,7 +1187,10 @@ bool xhci_init(void) {
         hc->msi_vec = XHCI_MSI_VEC_BASE + i;
 
         bios_handoff(hc, pci);
-        if (!reset_hc(hc)) continue;
+        if (!reset_hc(hc)) {
+            LOGF("[XHCI] controller reset failed for %02x:%02x.%x\n", pci->bus, pci->dev, pci->func);
+            continue;
+        }
         spinlock_init(&hc->lock, "xhci_evts");
 
         hc->dcbaa = dma_alloc(hc, align_up((hc->slots + 1) * 8, 64), &hc->dcbaa_phys);
@@ -848,21 +1225,79 @@ bool xhci_init(void) {
             uint8_t spd = (sc >> PORT_SPD_SHIFT) & PORT_SPD_MASK;
             if (!spd) spd = SPD_FS;
 
-            if (enum_dev(hc, p, spd, 0, p + 1, 0, 0)) {
-                any_kbd = true;
-            }
+            enum_dev(hc, p, spd, 0, p + 1, 0, 0);
         }
 
         irq_register(hc->msi_vec, (irq_handler_t)xhci_irq_handler);
         pci_cfg_msi(pci, hc->msi_vec, lapic_get_id());
 
+        // Author's Note: This is quite critical.
+        // Drain any stale events left from enumeration 
+        // If IMAN IP is still set the controller won't
+        // generate a new MSI for future events, blocking hotplug forever
+
+        proc_evts(hc);
+        flush_erdp(hc);
+        ow32(hc, XHCI_STS, STS_EINT);
+        iw32(hc, IR_IMAN, ir32(hc, IR_IMAN) | IMAN_IE | IMAN_IP);
+
         for (int j = 0; j < 256; j++) {
             if (hc->dev_slots[j].active) arm_int(hc, &hc->dev_slots[j]);
         }
+
+        hcs[hc_cnt++] = hc;
+        LOGF("[XHCI] controller %02x:%02x.%x ready (ports=%u slots=%u vec=%u)\n",
+             pci->bus, pci->dev, pci->func, hc->ports, hc->slots, hc->msi_vec);
     }
 
-    if (!any_kbd) {
-        return false;
+    // return true if any controller came up, a keyboard might be plugged in later
+    return hc_cnt > 0;
+}
+
+/*
+ * xhci_hotplug_init - Initializes the hotplug worker thread and shared resources for handling dynamic device events
+ * Author's Note: You can ignore calling this if you don't care about hotplugging
+ */
+void xhci_hotplug_init(void) {
+    if (hc_cnt == 0) {
+        LOGF("[XHCI] hotplug init skipped: no active controllers\n");
+        return;
     }
-    return true;
+
+    if (!hotplug_tty) {
+        hotplug_tty = tty_create();
+        if (!hotplug_tty) {
+            LOGF("[XHCI] failed to create hidden hotplug TTY\n");
+            return;
+        }
+        hotplug_tty->hidden = true;
+    }
+
+    if (!hotplug_proc) {
+        hotplug_proc = process_create("xhci_hotplug", hotplug_tty);
+        if (!hotplug_proc) {
+            LOGF("[XHCI] failed to create shared hotplug process\n");
+            return;
+        }
+    }
+
+    if (!hotplug_thread) {
+        hotplug_thread = thread_create(hotplug_proc, "xhci_hotplug", xhci_worker, NULL, false, 0);
+        if (!hotplug_thread) {
+            LOGF("[XHCI] failed to create shared hotplug thread\n");
+            process_destroy(hotplug_proc);
+            hotplug_proc = NULL;
+            return;
+        }
+
+        sched_add(hotplug_thread);
+        LOGF("[XHCI] shared hotplug worker launched (PID=%u TID=%u)\n",
+             hotplug_proc->pid, hotplug_thread->tid);
+    }
+
+    for (int i = 0; i < hc_cnt; i++) {
+        xhci_hc_t *hc = hcs[i];
+        if (!hc) continue;
+        hc->worker = hotplug_thread;
+    }
 }

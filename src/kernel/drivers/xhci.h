@@ -52,7 +52,7 @@
 #define PORT_CSC            (1 << 17)
 #define PORT_PRC            (1 << 21)
 #define PORT_RW1C           (PORT_CSC | PORT_PRC | (1<<18) | (1<<19) | (1<<20) | (1<<22) | (1<<23))
-#define PORT_PRESERVE       (~PORT_RW1C)
+#define PORT_PRESERVE       ((1<<9) | (3<<14) | (7<<25))  // PP, PIC, wake enables only
 
 #define SPD_FS              1
 #define SPD_LS              2
@@ -99,11 +99,13 @@ typedef struct {
 #define TRB_STATUS          4
 #define TRB_LINK            6
 #define TRB_EN_SLOT         9
+#define TRB_DIS_SLOT        10
 #define TRB_ADDR_DEV        11
 #define TRB_CFG_EP          12
 #define TRB_EVAL_CTX        13
 #define TRB_EV_XFER         32
 #define TRB_EV_CMD          33
+#define TRB_EV_PORT         34
 
 #define CC_SUCCESS          1
 #define CC_SHORT_PKT        13
@@ -170,6 +172,10 @@ typedef struct {
     uint8_t root_hub_port;
     uint8_t tt_slot;
     uint8_t tt_port;
+
+    // Hub support
+    bool is_hub;
+    uint8_t hub_num_ports;
 } xhci_slot_t;
 
 // IRQ driven completion slot
@@ -206,9 +212,15 @@ typedef struct {
     // Per HC completion slots
     xhci_completion_t cmd_comp;
     xhci_completion_t xfer_comp;
+
+    // Hotplug worker thread
+    thread_t *worker;
+    volatile uint32_t pending_ports;     // bitmask, bit N = root port N needs attention
+    volatile uint32_t pending_hub_slots; // bitmask, bit N = hub in slot N has port changes
 } xhci_hc_t;
 
 #define XHCI_MSI_VEC_BASE   50
 
 bool xhci_init(void);
+void xhci_hotplug_init(void);
 cpu_context_t *xhci_irq_handler(cpu_context_t *ctx);

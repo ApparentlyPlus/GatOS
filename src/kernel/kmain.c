@@ -230,6 +230,7 @@ void kernel_main(void* mb_info) {
 	// Enable multitasking and userspace
     process_init();
     sched_init();
+	xhci_hotplug_init();
 	QEMU_LOG("Initialized Multitasking (Process & Scheduler)", TOTAL_DBG);
 
 	// Enqueue userspace apps
