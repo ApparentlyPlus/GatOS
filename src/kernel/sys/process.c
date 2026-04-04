@@ -135,13 +135,21 @@ process_t* process_create(const char* name, tty_t* existing_tty) {
         if (st != VMM_OK) goto map_fail;
     }
 
-    uintptr_t b_phys = (uintptr_t)&USER_BSS_LOAD_ADDR;
     size_t bsz = align_up((uintptr_t)&USER_BSS_END - (uintptr_t)&USER_BSS_START, PAGE_SIZE);
     if (bsz > 0) {
         void* out = NULL;
         uintptr_t b_virt = (uintptr_t)&USER_BSS_START;
-        vmm_status_t st = vmm_alloc_at(proc->vmm, (void*)b_virt, bsz, VM_FLAG_USER | VM_FLAG_WRITE | VM_FLAG_MMIO, (void*)b_phys, &out);
+        
+        // Allocate fresh physical pages for bss
+        vmm_status_t st = vmm_alloc_at(proc->vmm, (void*)b_virt, bsz, VM_FLAG_USER | VM_FLAG_WRITE, NULL, &out);
         if (st != VMM_OK) goto map_fail;
+
+        // Explicitly zero via physmap
+        for (uintptr_t off = 0; off < bsz; off += PAGE_SIZE) {
+            uint64_t phys;
+            if (vmm_get_physical(proc->vmm, (void*)(b_virt + off), &phys))
+                kmemset((void*)PHYSMAP_P2V(phys), 0, PAGE_SIZE);
+        }
     }
 
     // If the caller provided a TTY, use it. Otherwise, create a new one for this process.
