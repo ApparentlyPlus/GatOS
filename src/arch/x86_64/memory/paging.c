@@ -171,6 +171,8 @@ uint64_t reserve_required_tablespace(multiboot_parser_t* multiboot) {
     uint64_t table_bytes = (total_PTs + total_PDs + total_PDPTs + total_PML4s) * 4 * MEASUREMENT_UNIT_KB;
     table_bytes = align_up(table_bytes, PAGE_SIZE);
 
+    PANIC_ASSERT(KEND + table_bytes < (1UL << 30) && KEND + table_bytes < total_RAM);
+
     // Store fb info for build_physmap, don't inflate table_bytes
     uint64_t fb_phys = 0, fb_size = 0;
     multiboot_framebuffer_t* fb = multiboot_get_framebuffer(multiboot);
