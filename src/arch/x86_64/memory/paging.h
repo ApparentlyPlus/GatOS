@@ -107,7 +107,6 @@ void flush_tlb(void);
 void PML4_switch(uint64_t pml4);
 void QEMU_DUMP_PML4(void);
 
-void unmap_identity();
 void cleanup_kpt(uintptr_t start, uintptr_t end);
 void build_physmap();
 

@@ -41,7 +41,7 @@
 // Forward declaration of userspace app launcher
 extern void uapps(void);
 
-#define TOTAL_DBG 26
+#define TOTAL_DBG 25
 
 static char* KERNEL_VERSION = "v2.0.0";
 
@@ -88,10 +88,7 @@ void kernel_main(void* mb_info) {
 	QEMU_LOG("Reserved the required space for page tables in the kernel region", TOTAL_DBG);
 
 	cleanup_kpt(0x0, get_kend(false));
-	QEMU_LOG("Unmapped all memory besides the kernel range", TOTAL_DBG);
-
-	unmap_identity();
-	QEMU_LOG("Unmapped identity mapping, only higher half remains", TOTAL_DBG);
+	QEMU_LOG("Unmapped all memory besides the higher half kernel range", TOTAL_DBG);
 
 	// With this I cast memory management
 	build_physmap();

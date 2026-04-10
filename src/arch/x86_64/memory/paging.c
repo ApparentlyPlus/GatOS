@@ -67,18 +67,6 @@ uint64_t* getPML4(void) {
 }
 
 /*
- * unmap_identity - Removes lower memory identity mapping
- */
-void unmap_identity(){
-    int64_t* PML4 = getPML4();
-    uint64_t* PDPT = PML4 + PAGE_ENTRIES * PREALLOC_PML4s;
-    PML4[0] = 0;
-    PDPT[0] = 0;
-    flush_tlb();
-    LOGF("[PAGING] Removed identity mapping\n");
-}
-
-/*
  * cleanup_kpt - Removes unused page table entries, keeps only the given range in higher half
  */
 void cleanup_kpt(uintptr_t start, uintptr_t end) {
