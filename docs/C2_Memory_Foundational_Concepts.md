@@ -550,7 +550,7 @@ Well, that’s why we chose the **GNU Assembler (GAS)** over **NASM**. Yours tru
 
 Since GAS is integrated with the C preprocessor, we can just include C headers and let macros do the heavy lifting for us.
 
-For example, in `paging.h`:
+For example, in [`paging.h`](/src/arch/x86_64/memory/paging.h):
 
 ```c
 #define KERNEL_VIRTUAL_BASE 0xFFFFFFFF80000000
