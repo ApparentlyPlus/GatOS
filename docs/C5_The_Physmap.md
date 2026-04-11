@@ -1,10 +1,10 @@
 # Chapter 5: The Physmap
 
-In the previous chapter, we established a solid C environment: setting up a fully functional `printf`, parsing the multiboot2 structure, and finally removing the lower-half identity mapping.
+In the previous chapter, we established a solid C environment: serial ports for early output, a simple `klibc`, a multiboot2 parser that safely relocates its data into the higher half, and `cleanup_kpt` to strip away every mapping outside the kernel's virtual range. We are fully in the higher half now, and everything below `KERNEL_VIRTUAL_BASE` has been unmapped.
 
-Now, we will revisit paging with a new goal: mapping the entirety of physical memory (as reported by the multiboot2 structure) into virtual space. Unlike before, I won’t spend any time explaining how paging works; Chapter 2 already covered that in depth.
+The plan for this chapter is to map all of physical memory into a dedicated region of virtual space, the physmap, so that every physical address has a predictable, kernel-accessible virtual counterpart. Once the physmap is in place, every subsystem we write afterwards (allocators, DMA buffers, device drivers) can reach any physical page through a simple offset calculation. It is one of the first things a real kernel needs.
 
-From here on, I’ll assume familiarity with everything we’ve built so far. That means no re-explaining functions or concepts introduced in earlier chapters. Starting with this chapter, I’ll address you as a fellow OS developer, so expect explanations for the more obvious details to be left out.
+Starting from this chapter, I will be assuming knowledge of everything the docs have covered so far. This means bootstrapping, linkage, higher half, virtual memory, etc. Therefore, I will not be holding the reader's hand, as I have been doing in the past chapters. I am treating you as a fellow OS dev! Be proud!
 
 >[!NOTE]
 >Most of what's discussed in this chapter, along with a few concepts we covered earlier, is implemented in the branch [`paging-refactored`](https://github.com/ApparentlyPlus/GatOS/tree/paging-refactored).
@@ -12,15 +12,24 @@ From here on, I’ll assume familiarity with everything we’ve built so far. Th
 
 ## What is the Physmap?
 
-The physmap is a direct, linear mapping of all available physical memory into the kernel’s higher-half virtual address space. In practice, this means that every physical address has a fixed, predictable virtual counterpart.
+The physmap is a direct, linear mapping of all available physical memory into the kernel's higher-half virtual address space. In practice, this means that every physical address has a fixed, predictable virtual counterpart.
 
 Linux uses the same idea, commonly referred to as the **direct mapping of all physical memory**. On x86-64, Linux reserves a large region of the higher-half kernel space starting at `PAGE_OFFSET` (usually `0xFFFF880000000000`) where every physical frame is mapped linearly. For example, physical address `0x1000` might be accessible at virtual address `0xFFFF880000001000`. This covers all normal RAM, while special mappings (I/O memory, highmem, vmalloc, etc.) are placed in separate regions of the kernel address space.
+
+>[!CAUTION]
+> `KERNEL_VIRTUAL_BASE = 0xFFFFFFFF80000000` **is different from** `PHYSMAP_VIRTUAL_BASE = 0xFFFF880000000000`. 
+>
+>However, they are both located in the higher half of the canonical address space. As a result, they are completely inaccessible to userspace programs, which operate exclusively in the lower half.
+>
+> The gap between the physmap base and the kernel base is approximately **122,878 GiB (~122 TiB)** of virtual address space. This vast separation ensures that the physmap region can accommodate any realistic amount of physical memory without ever overlapping with the kernel’s virtual space.
+>
+> In practice, this guarantees that the physmap remains both **consistently accessible** and **safely isolated** within high memory.
 
 There are multiple advantages to loading the entirety of RAM into higher-half virtual space, including:
 
 * **Constant-Time Translation:** Any physical address can be trivially converted into a virtual address with a fixed offset (and vice versa).
 * **Simplified Memory Access:** Kernel subsystems like the page frame allocator, slab allocator, or DMA buffers can directly access any physical page without extra mapping steps.
-* **Uniform Addressing:** Drivers and low-level subsystems don’t need to worry about temporary mappings or special-purpose page tables. Everything is already in place.
+* **Uniform Addressing:** Drivers and low-level subsystems don't need to worry about temporary mappings or special-purpose page tables. Everything is already in place.
 * **Debugging Convenience:** Having RAM linearly mapped makes tools like memory dumps, page frame debugging, or direct memory inspection significantly easier.
 
 In GatOS, the physmap virtual base is defined as:
@@ -47,28 +56,37 @@ We also define the following conversion macros:
 
 ## Page Attributes and Constants
 
-We have seen in past chapters that whenever we map a new page, we declare some attributes like `PAGE_PRESENT` or `PAGE_WRITABLE`. Here's a list of attributes that GatOS defines in `paging.h`:
+We have seen in past chapters that whenever we map a new page, we declare some attributes like `PAGE_PRESENT` or `PAGE_WRITABLE`. Here is the full set of flags GatOS defines in `paging.h`:
 
 ```c
 #define PAGE_PRESENT        (1ULL << 0)
 #define PAGE_WRITABLE       (1ULL << 1)
 #define PAGE_USER           (1ULL << 2)
+#define PAGE_PWT            (1ULL << 3)  // Page Write Through
+#define PAGE_PCD            (1ULL << 4)  // Page Cache Disable
+#define PAGE_ACCESSED       (1ULL << 5)
+#define PAGE_DIRTY          (1ULL << 6)
+#define PAGE_HUGE           (1ULL << 7)
+#define PAGE_GLOBAL         (1ULL << 8)
 #define PAGE_NO_EXECUTE     (1ULL << 63)
 ```
 
 These correspond directly to hardware-defined bits in the x86-64 page table entries.
 
 * `PAGE_PRESENT`: Marks the page as present in memory; required for valid mappings.
-* `PAGE_WRITABLE`: Allows writes to the page (otherwise it’s read-only).
+* `PAGE_WRITABLE`: Allows writes to the page (otherwise it's read-only).
 * `PAGE_USER`: Grants access from user-space (otherwise kernel-only).
+* `PAGE_PWT` / `PAGE_PCD`: Write-through and cache-disable. Combined, they mark a range as uncacheable, which is important for MMIO regions like the framebuffer where you want writes to reach the hardware rather than sit in a cache line.
+* `PAGE_HUGE`: When set at the PD level, the entry maps 2 MiB directly instead of pointing to a PT. We will use this for the framebuffer mapping.
 * `PAGE_NO_EXECUTE`: Disables instruction fetches from this page (NX bit).
 
-GatOS also declares a few other constants:
+GatOS also declares a few other important constants:
 
 ```c
 #define PAGE_SIZE     0x1000UL
+#define PAGE_2MB      0x200000UL
 #define PAGE_ENTRIES  512
-#define PAGE_MASK     0xFFFFF000
+#define FRAME_MASK    0xFFFFF000
 #define ADDR_MASK     0x000FFFFFFFFFF000UL
 
 #define PREALLOC_PML4s  1
@@ -77,15 +95,14 @@ GatOS also declares a few other constants:
 #define PREALLOC_PTs    512
 ```
 
-These constants define the structural layout of paging. 
-
 * `PAGE_SIZE`: Standard x86-64 page size: 4 KiB.
+* `PAGE_2MB`: Size of a huge page at the PD level.
 * `PAGE_ENTRIES`: Number of entries in each paging structure: 512.
-* `PAGE_MASK`: Bitmask (`0xFFFFF000`) to align addresses to 4 KiB boundaries or strip page flags.
-* `ADDR_MASK`: Bitmask (`0x000FFFFFFFFFF000UL`) to isolate the physical address portion of a page table entry (removing metadata bits).
-* The `PREALLOC_*` constants simply declare how many of each table type was reserved at boot time.
+* `FRAME_MASK`: Bitmask to align addresses to 4 KiB boundaries or strip page flags in a 32-bit context.
+* `ADDR_MASK`: Bitmask to isolate the full physical address from a page table entry, stripping the metadata bits.
+* The `PREALLOC_*` constants declare how many of each table type was statically reserved at boot time.
 
-Finally, in `multiboot2.h`, we also define some measurement units:
+Finally, `paging.h` also defines some measurement unit helpers:
 
 ```c
 #define MEASUREMENT_UNIT_BYTES  1
@@ -94,48 +111,89 @@ Finally, in `multiboot2.h`, we also define some measurement units:
 #define MEASUREMENT_UNIT_GB     1024*1024*1024
 ```
 
-These units are simply helpers for readability.
+These are purely for readability when calculating memory sizes.
 
 ## The Core Idea
 
-Creating the physmap boils down to a very simple idea. Right now, our kernel occupies `[KERNEL_VIRTUAL_BASE, KEND]`. However, thanks to the preallocated page tables, we actually have mappings that extend all the way up to `KERNEL_VIRTUAL_BASE + 1GB`, which is well past `KEND`. This is a huge advantage: the range `[KEND, KERNEL_VIRTUAL_BASE + 1GB]` is mapped but completely empty, essentially giving us leaway to use it however we want.
+Creating the physmap boils down to a very simple idea. Right now, our kernel occupies `[KERNEL_VIRTUAL_BASE, KEND]`. However, thanks to the preallocated page tables, we actually have mappings that extend all the way up to `KERNEL_VIRTUAL_BASE + 1GB`, which is well past `KEND`. This is a huge advantage: the range `[KEND, KERNEL_VIRTUAL_BASE + 1GB]` is mapped but completely empty, essentially giving us leeway to use it however we want.
 
-Since we’re running in 64-bit C, and the multiboot2 struct has been copied into the higher half and parsed, we can now see exactly how much physical memory exists on the system. With that information, we can figure out exactly how many page tables (`PML4s`, `PDPTs`, `PDs`, and `PTs`) it will take to map all of RAM into virtual memory.
+Since we're running in 64-bit C, and the multiboot2 struct has been copied into the higher half and parsed, we can now see exactly how much physical memory exists on the system. With that information, we can figure out exactly how many page tables (`PML4s`, `PDPTs`, `PDs`, and `PTs`) it will take to map all of RAM into virtual memory.
 
-Once we know the number of tables, we can sum up their sizes (remember, each table is `4KB`) and “reserve” that exact amount of space from `[KEND, KERNEL_VIRTUAL_BASE + 1GB]`. After reserving it, we adjust `KEND` to account for this new reserved area, ensuring the kernel knows this space is off-limits for other purposes. Any leftover space between this new `KEND` and `KERNEL_VIRTUAL_BASE + 1GB` can then be unmapped, since it’s no longer needed.
+Once we know the number of tables, we can sum up their sizes (remember, each table is `4KB`) and "reserve" that exact amount of space from `[KEND, KERNEL_VIRTUAL_BASE + 1GB]`. After reserving it, we adjust `KEND` to account for this new reserved area, ensuring the kernel knows this space is off-limits for other purposes. Any leftover space between this new `KEND` and `KERNEL_VIRTUAL_BASE + 1GB` can then be unmapped, since it's no longer needed.
 
-The final step is to actually populate these new page tables and point `cr3` to them. Here, we have to be careful: the old page tables contain the kernel range where we are currently executing. The new tables map the entirety of physical RAM, but not for execution. This means the execution will still happen in `[KERNEL_VIRTUAL_BASE, KEND]`, and our physical memory will be accessible starting at `PHYSMAP_VIRTUAL_BASE`. 
+Here's a little ASCII diagram to help you visualize it:
 
-This means that in order to avoid breaking anything, we need to incorporate the old kernel tables into the new tables, ensuring that the kernel’s virtual range continues to function exactly as before.
+```
+Our higher half virtual memory now:
 
+KERNEL_VIRTUAL_BASE                                      KERNEL_VIRTUAL_BASE + 1GB
+        |-----------------------------------------------------------|
+        |                       Pre-mapped                          |
+        |-----------------------------------------------------------|
+        |      Kernel      |        Free / Usable for Physmap       |
+        | [KV_BASE, KEND]  |          [KEND, KV_BASE + 1GB]         |
+        |------------------|----------------------------------------|
 
-## The `physmapInfo` Struct
+After reserving space for physmap page tables:
 
-Before we begin implementing the physmap, it’s a good idea to define a struct that holds all the information we need to access, modify, or create it. This way, we can easily make changes later if necessary. We define it as follows:
+        |------------------|-------------|--------------------------|
+        |      Kernel      |  Reserved   |  Free / Rest of the 1GB  |
+        | [KV_BASE, KEND]  |  Tables     |    (to be cleaned up)    |
+        |------------------|-------------|--------------------------|
+
+After integrating reserved space into the kernel (KEND updated):
+
+        |-----------------------------|-----------------------------|
+        |           Kernel            |          Unmapped           |
+        |     [KV_BASE, NEW_KEND]     | (Cleaned up - inaccessible) |
+        |-----------------------------|-----------------------------|
+
+```
+
+The final step is to actually populate these new page tables and point `cr3` to them. Here, we have to be careful: the old page tables contain the kernel range where we are currently executing. The new tables map the entirety of physical RAM, but not for execution. This means the execution will still happen in `[KERNEL_VIRTUAL_BASE, KEND]`, and our physical memory will be accessible starting at `PHYSMAP_VIRTUAL_BASE`.
+
+This means that in order to avoid breaking anything, we need to incorporate the old kernel tables into the new tables, ensuring that the kernel's virtual range continues to function exactly as before.
+
+## The `physmap_t` Struct
+
+Before we begin implementing the physmap, it's a good idea to define a struct that holds all the information we need to access, modify, or create it. This way, we can easily make changes later if necessary. We define it as follows:
 
 ```c
 typedef struct{
-    uint64_t total_RAM;
+    uint64_t total_RAM;   // RAM (physical boundary)
+    uint64_t fb_phys;     // framebuffer physical base (crash console)
+    uint64_t fb_size;     // framebuffer size in bytes
     uint64_t total_pages;
     uintptr_t tables_base;
     uint64_t total_PTs;
     uint64_t total_PDs;
     uint64_t total_PDPTs;
     uint64_t total_PML4s;
-} physmapInfo;
+} physmap_t;
 
-static physmapInfo physmapStruct = {0};
+static physmap_t physmap = {0};
 ```
 
-This struct centralizes all the key data for the physmap. 
+This struct centralizes all the key data for the physmap.
 
-Initializing `physmapStruct` to zero ensures that all fields start in a clean, predictable state, preventing any leftover or random values from interfering with our calculations. Once this struct is in place, the next step is to populate it with real values derived from the multiboot2 memory map, which will guide the allocation and setup of the new page tables.
+The `total_RAM`, `total_pages`, and table count fields are what you would expect: they track the total RAM size and how many page table structures we need to cover it. The two additions worth highlighting are `fb_phys` and `fb_size`. The framebuffer lives at a physical address the firmware tells us about, and on real hardware that address is almost always outside of RAM — it sits in an MMIO region well above the top of usable memory. Mapping RAM alone therefore won't cover it. We store the framebuffer's physical base and byte size here so that `build_physmap` can add a separate MMIO mapping for it. More on that shortly.
+
+Initializing `physmap` to zero ensures that all fields start in a clean, predictable state. Once this struct is in place, the next step is to populate it with real values derived from the multiboot2 memory map.
+
+>[!IMPORTANT]
+>What is MMIO?
+>
+>Not all physical addresses correspond to actual RAM. Some regions are reserved for memory-mapped I/O (MMIO), where reads and writes interact directly with hardware devices instead of memory. A common example is the framebuffer, where writing to its address updates pixels on the screen. These regions are special because they appear to be memory but aren't.
+>
+>They must still be mapped into **virtual memory** if we want to interact with them, but they should be treated carefully. Caching, permissions, and access patterns differ from normal RAM, and incorrect handling can lead to undefined behavior.
+>
+>You can think of MMIO as special addresses that need to be mapped to be interacted with, but are NOT actual memory. They are hardware! Therefore, we also learn that the virtual adress space is not *just* for memory, but for other devices too!
 
 ## Reserving the Required Tablespace
 
 To implement the physmap, we first need to reserve a contiguous block of virtual memory to store all the page tables that will map physical RAM, as discussed.
 
-We do this with a function called `reserve_required_tablespace`, which takes our multiboot parser as a parameter. This allows us to query the total RAM, determine how many page tables are needed, and reserve the corresponding virtual space by moving `KEND`. Let’s break down the implementation piece by piece.
+We do this with a function called `reserve_required_tablespace`, which takes our multiboot parser as a parameter. This allows us to query the total RAM, determine how many page tables are needed, and reserve the corresponding virtual space by moving `KEND`. Let's break down the implementation piece by piece.
 
 
 ### Aligning Values
@@ -175,7 +233,7 @@ Next, we calculate how many page tables of each level are needed to map all of R
 * `total_PML4s`: Number of top-level PML4 tables, each pointing to 512 PDPTs.
 
 >[!NOTE]
-> We use `CEIL_DIV` to round up, ensuring we allocate enough tables even if the number of pages isn’t an exact multiple of 512. Here, not having `math.h` is costing us the gimmick of defining `CEIL_DIV` as:
+> We use `CEIL_DIV` to round up, ensuring we allocate enough tables even if the number of pages isn't an exact multiple of 512. Here, not having `math.h` is costing us the gimmick of defining `CEIL_DIV` as:
 >```c
 >#define CEIL_DIV(x, y) (((x) + (y) - 1) / (y))
 >```
@@ -184,25 +242,58 @@ Next, we calculate how many page tables of each level are needed to map all of R
 
 ```c
 uint64_t table_bytes = (total_PTs + total_PDs + total_PDPTs + total_PML4s) * 4 * MEASUREMENT_UNIT_KB;
-table_bytes = align_up(table_bytes, PAGE_SIZE); //align to 4kb
+table_bytes = align_up(table_bytes, PAGE_SIZE);
 ```
 
 Here we compute the total amount of memory needed to store all the tables. Each table is `4KB` in size, so we multiply the total number of tables by `4KB`. We then align the total table size to a page boundary using `align_up` to ensure proper alignment in virtual memory.
 
-
-### Updating the Physmap Struct
+### Safety Checks
 
 ```c
-physmapStruct.total_RAM = total_RAM;
-physmapStruct.total_pages = total_pages;
-physmapStruct.total_PTs = total_PTs;
-physmapStruct.total_PDs = total_PDs;
-physmapStruct.total_PDPTs = total_PDPTs;
-physmapStruct.total_PML4s = total_PML4s;
-physmapStruct.tables_base = (uintptr_t)get_kend(true);
+PANIC_ASSERT(KEND + table_bytes < (1UL << 30) && KEND + table_bytes < total_RAM);
 ```
 
-All the calculated values are stored in `physmapStruct`. This centralizes all the information about the physmap, making it easy to reference or modify later. `tables_base` is set to the current `KVIRT_END`, marking the start of the reserved space for our new tables, and pointing to the first table.
+Before committing to the reserved range, we confirm two things: that the extended kernel region still fits within the 1 GiB preallocated window, and that it doesn't extend past the end of RAM itself. If either condition fails, we have either underestimated the required space or the machine simply doesn't have enough contiguous memory in the right place — either way, there is no safe path forward, so a panic is warranted.
+
+We also walk the multiboot memory map to verify that the reserved table range does not land inside a region the firmware has marked unavailable:
+
+```c
+for (size_t i = 0; i < multiboot->memory_map_length; i++) {
+    uintptr_t region_start, region_end;
+    uint32_t region_type;
+    if (multiboot_get_memory_region(multiboot, i, &region_start, &region_end, &region_type) != 0)
+        continue;
+    PANIC_ASSERT(region_type != MULTIBOOT_MEMORY_AVAILABLE
+                    && KEND + table_bytes > region_start
+                    && KEND + table_bytes < region_end);
+}
+```
+
+### Probing the Framebuffer
+
+```c
+uint64_t fb_phys = 0, fb_size = 0;
+multiboot_framebuffer_t* fb = multiboot_get_framebuffer(multiboot);
+if (fb) { fb_phys = fb->addr; fb_size = (uint64_t)fb->height * fb->pitch; }
+```
+
+While we have the multiboot structure open, we grab the framebuffer's physical address and size. This does not affect `table_bytes` at all, there is no extra space being reserved here. We are simply recording where the framebuffer lives so that `build_physmap` can add a separate MMIO mapping for it later. The size is calculated as `height * pitch` rather than `height * width * (bpp / 8)` because `pitch` is the actual stride in bytes between rows, which the firmware may pad for alignment reasons.
+
+### Updating the `physmap` Struct
+
+```c
+physmap.total_RAM = total_RAM;
+physmap.fb_phys = fb_phys;
+physmap.fb_size = fb_size;
+physmap.total_pages = total_pages;
+physmap.total_PTs = total_PTs;
+physmap.total_PDs = total_PDs;
+physmap.total_PDPTs = total_PDPTs;
+physmap.total_PML4s = total_PML4s;
+physmap.tables_base = (uintptr_t)get_kend(true);
+```
+
+All the calculated values are stored in `physmap`. `tables_base` is set to the current `KEND` virtual address, marking the start of the reserved space for our new tables.
 
 ### Reserving the Space
 
@@ -211,179 +302,39 @@ KEND += table_bytes;
 return table_bytes;
 ```
 
-Finally, we increase `KEND` by the total size of the reserved tables, effectively carving out this region in the kernel’s virtual memory. The function returns the total number of bytes reserved.
+Finally, we increase `KEND` by the total size of the reserved tables, effectively carving out this region in the kernel's virtual memory. The function returns the total number of bytes reserved.
 
 ## Unmapping the Excess
 
-After moving `KEND` to account for the reserved page table space, we no longer need the old, now-unused mappings beyond the kernel range. To clean these up, we use the function `cleanup_kernel_page_tables`, which carefully preserves the kernel’s higher-half mapping while zeroing out everything else. Let’s break it down segment by segment.
+After moving `KEND` to account for the reserved page table space, we call `cleanup_kpt(0x0, get_kend(false))`. We covered this function's implementation in full in the previous chapter: it zeroes out every page table entry outside the kernel's higher-half range, including the identity map at `PML4[0]` that the assembler boot code originally set up. By the time it returns, the only valid virtual region is the kernel itself together with the newly reserved tablespace, exactly what we want before handing things off to `build_physmap`.
 
-### Function Signature
-
-```c
-void cleanup_kernel_page_tables(uintptr_t start, uintptr_t end)
-```
-
-This function takes two parameters: `start` and `end`, which define the kernel’s **physical** memory range that we want to preserve. Everything outside this range can be safely unmapped.
-
-### Getting Page Table Pointers
-
-```c
-uint64_t* PML4 = getPML4();
-uint64_t* PDPT = PML4 + 512 * PREALLOC_PML4s;
-uint64_t* PD = PDPT + 512 * PREALLOC_PDPTs;
-uint64_t* PT = PD + 512 * PREALLOC_PDs;
-```
-
-Here, we retrieve the top-level PML4 pointer and calculate the locations of the PDPT, PD, and PT structures in memory. These offsets rely on the preallocated table counts defined earlier.
-
----
-
-### Sanity Checks
-
-```c
-uintptr_t kernel_size = end - start;
-if (kernel_size > (1UL << 30)) return; // > 1 GiB not allowed
-if ((start & 0xFFF) != 0 || (end & 0xFFF) != 0) return; // alignment check
-```
-
-We perform basic sanity checks: the kernel size must not exceed 1 GiB, and both `start` and `end` must be page-aligned. This ensures that we don’t accidentally zero out invalid memory or misalign page table entries.
-
----
-
-### Computing Higher-Half Virtual Addresses
-
-```c
-uintptr_t virt_start = start + KERNEL_VIRTUAL_BASE;
-uintptr_t virt_end   = end   + KERNEL_VIRTUAL_BASE;
-```
-
-Since the kernel runs in the higher-half, we compute the corresponding virtual addresses for the start and end of the kernel range. All subsequent calculations are done in terms of higher-half virtual addresses.
-
----
-
-### Calculating Page Table Indices
-
-```c
-size_t hh_pml4 = (virt_start >> 39) & 0x1FF;
-size_t hh_pdpt = (virt_start >> 30) & 0x1FF;
-size_t hh_pd_start = (virt_start >> 21) & 0x1FF;
-size_t hh_pd_end   = ((virt_end - 1) >> 21) & 0x1FF;
-
-uintptr_t start_page = start >> 12;
-uintptr_t end_page   = (end - 1) >> 12;
-size_t total_pages = end_page - start_page + 1;
-size_t total_pds = hh_pd_end + 1;
-```
-
-These lines compute the indices into the PML4, PDPT, and PD tables for the kernel’s virtual memory range. They also calculate the first and last physical pages covered and the total number of pages to preserve.
-
----
-
-### Cleaning PML4 Entries
-
-```c
-for (size_t i = 0; i < 512; i++) {
-    if (i != hh_pml4) {
-        PML4[i] = 0;
-    }
-}
-PML4[hh_pml4] = KERNEL_V2P(PDPT) | (PAGE_PRESENT | PAGE_WRITABLE);
-```
-
-We zero out all PML4 entries except the one corresponding to the higher-half kernel. Then, we set that entry to point to our PDPT with present and writable flags.
-
----
-
-### Cleaning PDPT Entries
-
-```c
-for (size_t i = 0; i < 512; i++) {
-    if (i != hh_pdpt) {
-        PDPT[i] = 0;
-    }
-}
-PDPT[hh_pdpt] = KERNEL_V2P(PD) | (PAGE_PRESENT | PAGE_WRITABLE);
-```
-
-Similarly, all PDPT entries except the one for the kernel are cleared. The remaining entry is updated to point to the PD.
-
----
-
-### Cleaning PD Entries
-
-```c
-for (size_t i = 0; i < 512; i++) {
-    if (!(i >= hh_pd_start && i <= hh_pd_end)) {
-        PD[i] = 0;
-    }
-}
-for (size_t pd_index = hh_pd_start; pd_index <= hh_pd_end; ++pd_index) {
-    PD[pd_index] = KERNEL_V2P(PT + ((pd_index - hh_pd_start) << 9)) | (PAGE_PRESENT | PAGE_WRITABLE);
-}
-```
-
-All PD entries outside the kernel range are cleared. For the ones covering the kernel, we set them to point to the corresponding PTs with present and writable flags.
-
----
-
-### Cleaning PT Entries
-
-```c
-for (size_t i = 0; i < (512 * (hh_pd_end - hh_pd_start + 1)); i++) {
-    if (i >= total_pages) {
-        PT[i] = 0;
-    }
-}
-for (uintptr_t i = 0; i < total_pages; ++i) {
-    uintptr_t phys = (start_page + i) << 12;
-    PT[i] = phys | (PAGE_PRESENT | PAGE_WRITABLE);
-}
-```
-
-We first clear any PT entries beyond the kernel’s pages, then populate the PTs with mappings to the kernel’s physical pages, ensuring all higher-half kernel memory remains mapped and writable.
-
----
-
-### Flushing the TLB
-
-```c
-flush_tlb();
-```
-
-Finally, we flush the TLB to ensure the CPU doesn’t use stale translations. This step is crucial to guarantee that our newly cleaned page tables are correctly recognized by the MMU.
-
+The only difference here is that we make sure to move that call *after* `reserve_required_tablespace`, so that the required tablespace has been incorporated into the kernel region. Then, we can nuke everything else. Remember, `get_kend` returns the *current* kernel end, meaning it returns a runtime adjusted value, not the linker symbol.
 
 ## Building the Physmap
 
-The final step in our approach is constructing the physmap itself. The groundwork is already in place: we have reserved space for all page tables and cleaned up unnecessary mappings. The main thing to be careful about now is integrating the old page tables to preserve the kernel range while mapping the entirety of physical RAM. We will implement everything in a function called `build_physmap`.
-
----
+The final step is constructing the physmap itself. The groundwork is already in place: we have reserved space for all page tables and cleaned up unnecessary mappings. The main thing to be careful about now is integrating the old page tables to preserve the kernel range while mapping the entirety of physical RAM. Everything lives in a function called `build_physmap`.
 
 ### Function Setup
 
 ```c
-if(physmapStruct.total_RAM == 0){
-    printf("[ERROR] No physmapStruct has been built. The required tablespace has not been reserved.");
+if (physmap.total_RAM == 0) {
+    LOGF("[ERROR] No physmap has been built.\n");
     return;
 }
 ```
 
-We begin by checking that `physmapStruct` has been properly populated. If it hasn’t, it means the required tablespace hasn’t been reserved yet, and we cannot proceed.
-
----
+We begin by checking that `physmap` has been properly populated. If it hasn't, it means the required tablespace hasn't been reserved yet, and we cannot proceed safely.
 
 ### Calculating Table Base Addresses
 
 ```c
-uintptr_t pt_base    = physmapStruct.tables_base;
-uintptr_t pd_base    = pt_base + physmapStruct.total_PTs * PAGE_SIZE;
-uintptr_t pdpt_base  = pd_base + physmapStruct.total_PDs * PAGE_SIZE;
-uintptr_t pml4_base  = pdpt_base + physmapStruct.total_PDPTs * PAGE_SIZE;
+uintptr_t pt_base    = physmap.tables_base;
+uintptr_t pd_base    = pt_base   + physmap.total_PTs   * PAGE_SIZE;
+uintptr_t pdpt_base  = pd_base   + physmap.total_PDs   * PAGE_SIZE;
+uintptr_t pml4_base  = pdpt_base + physmap.total_PDPTs * PAGE_SIZE;
 ```
 
-Here we calculate the starting addresses for each level of the new page tables within the reserved region. Each base is offset by the total size of the lower-level tables to ensure tables do not overlap.
-
----
+Here we calculate the starting addresses for each level of the new page tables within the reserved region. Each base is offset by the total size of the lower-level tables to ensure nothing overlaps.
 
 ### Typedefs and Table Pointers
 
@@ -397,90 +348,98 @@ page_table_t* PDPTs  = (page_table_t*)pdpt_base;
 page_table_t* PML4   = (page_table_t*)pml4_base;
 ```
 
-We define `pte_t` for individual page entries and `page_table_t` for arrays of 512 entries. We then create typed pointers to the PTs, PDs, PDPTs, and PML4 tables based on the base addresses calculated above.
-
----
+We define `pte_t` for individual page entries and `page_table_t` for arrays of 512 entries. We then create typed pointers to each table level based on the base addresses calculated above.
 
 ### Clearing Reserved Space
 
 ```c
-memset((void*)physmapStruct.tables_base, 0, 
-    (physmapStruct.total_PTs
-        +physmapStruct.total_PDs
-        +physmapStruct.total_PDPTs
-        +physmapStruct.total_PML4s) * PAGE_SIZE);
+kmemset((void*)physmap.tables_base, 0,
+    (physmap.total_PTs + physmap.total_PDs +
+     physmap.total_PDPTs + physmap.total_PML4s) * PAGE_SIZE);
 ```
 
-We zero out the entire reserved tables region to ensure a clean starting point for the new mappings.
-
----
+We zero out the entire reserved tables region to ensure a clean starting point for the new mappings. This region is accesible because it is within that 1GB preallocated boundary. Otherwise, we would page fault here. `physmap.tables_base` points to the new `KEND`, so right after our kernel's *linker* defined region.
 
 ### Filling Page Tables (PTs)
 
 ```c
-uintptr_t phys_addr = 0;
-for (uint64_t pt_index = 0; pt_index < physmapStruct.total_PTs; pt_index++) {
-    for (int e = 0; e < PAGE_ENTRIES && phys_addr < physmapStruct.total_RAM; e++) {
-        PTs[pt_index][e] = phys_addr | (PAGE_PRESENT | PAGE_WRITABLE);
-        phys_addr += PAGE_SIZE;
+uint64_t pa = 0;
+while (pa < physmap.total_RAM) {
+    uint64_t pti = (pa >> 12) / PAGE_ENTRIES;
+    uint64_t pte = (pa >> 12) % PAGE_ENTRIES;
+    PTs[pti][pte] = pa | (PAGE_PRESENT | PAGE_WRITABLE);
+    pa += PAGE_SIZE;
+}
+```
+
+**What's happening here:**
+
+* We step through physical memory `4KB` at a time. For each address, we compute which PT it belongs to (`pti`) and which slot within that PT (`pte`), then write the mapping.
+* The stop condition `pa < physmap.total_RAM` means the last PT is left partially filled if RAM isn't an exact multiple of 2 MiB — that's fine, the unused entries stay at zero from the `kmemset` above.
+
+### Mapping the Framebuffer
+
+If the framebuffer's physical address falls outside of RAM, the PT loop above won't cover it. Rather than extending RAM-style 4 KiB mappings all the way up to wherever the firmware placed the framebuffer, we handle it separately using 2 MiB huge pages.
+
+```c
+if (physmap.fb_phys && physmap.fb_phys >= physmap.total_RAM) {
+    uint64_t fb_end = physmap.fb_phys + physmap.fb_size;
+    uint64_t pdpt_s = (physmap.fb_phys >> 30) & 0x1FF;
+    uint64_t pdpt_e = ((fb_end - 1) >> 30) & 0x1FF;
+    if (pdpt_s == pdpt_e) {
+        kmemset(fb_pd, 0, sizeof(fb_pd));
+        uint64_t base2m = physmap.fb_phys & ~(uint64_t)(0x1FFFFF);
+        uint64_t end2m  = (fb_end + 0x1FFFFF) & ~(uint64_t)(0x1FFFFF);
+        for (uint64_t pa2m = base2m; pa2m < end2m; pa2m += 0x200000)
+            fb_pd[(pa2m >> 21) & 0x1FF] =
+                pa2m | (PAGE_PRESENT | PAGE_WRITABLE | PAGE_HUGE | PAGE_PWT | PAGE_PCD);
+        PDPTs[0][pdpt_s] = KERNEL_V2P(fb_pd) | (PAGE_PRESENT | PAGE_WRITABLE);
     }
 }
 ```
 
 **What's happening here:**
 
-* `phys_addr` keeps track of the current physical address we are mapping.
-* The outer loop iterates over each PT in the reserved region. Remember, each PT can hold 512 entries (`PAGE_ENTRIES`).
-* The inner loop fills each entry of the current PT with the next physical page address, marking it as present and writable.
-* The `&& phys_addr < total_RAM` condition ensures we stop once all physical memory has been mapped, even if the last PT is not fully used.
+* We compute the PDPT index range the framebuffer spans. If the entire framebuffer fits within a single 1 GiB PDPT region (`pdpt_s == pdpt_e`), we can cover it with a single PD — that's `fb_pd`.
+* We round the framebuffer down and up to 2 MiB boundaries, then write one `PAGE_HUGE` entry per 2 MiB chunk into `fb_pd`. Each of those entries maps 2 MiB directly without a PT level beneath it, which is what `PAGE_HUGE` means at the PD layer.
+* `PAGE_PWT | PAGE_PCD` disable caching entirely. A framebuffer is MMIO — writes must reach the display hardware, not stall in a cache line.
+* We wire the relevant `PDPTs[0]` entry to point to `fb_pd`.
 
-Effectively, this loop “flattens” all physical memory into page-sized chunks and stores them sequentially in the PTs.
+If the framebuffer happens to fall inside RAM (unusual, but possible on some embedded platforms), the PT loop already mapped it and we just go back to fix the cache attributes on those entries to make them uncacheable.
 
----
+>[!TIP]
+>Keeep an eye out for this `fb_pd` variable. 
+>
+>Here's a little trivia for you: A framebuffer spans the entire screen. If we do NOT know what screen our kernel will run on, how can we map it into virtual memory? We need a number of page tables that we cannot know at compile time. A 720p display framebuffer is much smaller than a 4k framebuffer, and mapping either of them requires certain page tables.
+>
+> One could argue we could do the same thing we did with the physmap. Just see how big of a framebuffer it is at runtime, then reserve the required tablespace out of that preallocated 1GB, then use it to map the framebuffer into virtual memory. And they would be right!
+>
+>But... is there a simpler solution? Hmmmm...
 
 ### Filling Page Directories (PDs)
 
 ```c
 uint64_t used_pt = 0;
-for (uint64_t i = 0; i < physmapStruct.total_PDs; i++) {
-    for (int e = 0; e < PAGE_ENTRIES && used_pt < physmapStruct.total_PTs; e++) {
-        PDs[i][e] = KERNEL_V2P(&PTs[used_pt]) | (PAGE_PRESENT | PAGE_WRITABLE);
-        used_pt++;
-    }
-}
+for (uint64_t i = 0; i < physmap.total_PDs; i++)
+    for (int e = 0; e < PAGE_ENTRIES && used_pt < physmap.total_PTs; e++)
+        PDs[i][e] = KERNEL_V2P(&PTs[used_pt++]) | (PAGE_PRESENT | PAGE_WRITABLE);
 ```
 
 **What's happening here:**
 
-* Each PD entry points to a PT. `used_pt` tracks how many PTs we have already assigned.
-* The outer loop iterates over all PDs we reserved, and the inner loop fills each PD with pointers to up to 512 PTs.
-* `KERNEL_V2P(&PTs[used_pt])` converts the virtual address of the PT into a physical address, which the page directory requires.
-
-In short, this loop organizes the PTs into 512-entry blocks, letting the page directory reference every PT sequentially.
-
----
+* Each PD entry points to a PT. `used_pt` tracks how many PTs have already been assigned.
+* `KERNEL_V2P(&PTs[used_pt])` converts the virtual address of the PT into its physical address, since that is what the MMU reads from a PD entry.
 
 ### Filling PDPTs
 
 ```c
 uint64_t used_pd = 0;
-for (uint64_t i = 0; i < physmapStruct.total_PDPTs; i++) {
-    for (int e = 0; e < PAGE_ENTRIES && used_pd < physmapStruct.total_PDs; e++) {
-        PDPTs[i][e] = KERNEL_V2P(&PDs[used_pd]) | (PAGE_PRESENT | PAGE_WRITABLE);
-        used_pd++;
-    }
-}
+for (uint64_t i = 0; i < physmap.total_PDPTs; i++)
+    for (int e = 0; e < PAGE_ENTRIES && used_pd < physmap.total_PDs; e++)
+        PDPTs[i][e] = KERNEL_V2P(&PDs[used_pd++]) | (PAGE_PRESENT | PAGE_WRITABLE);
 ```
 
-**What's happening here:**
-
-* Each PDPT entry points to a PD. `used_pd` tracks how many PDs we have already assigned.
-* The outer loop iterates over all PDPTs we reserved, and the inner loop fills each PDPT with up to 512 PDs.
-* Again, `KERNEL_V2P` converts the virtual pointer to a physical one, which the MMU requires.
-
-This loop essentially groups PDs into 512-entry blocks, forming the next level of the hierarchy.
-
----
+Same pattern, one level up: each PDPT entry points to a PD.
 
 ### Integrating Kernel and Physmap into the PML4
 
@@ -517,7 +476,7 @@ In other words, our new PML4 must contain **two separate entries**:
 > 
 > It might seem tempting to point both PML4 entries to the same PDPT and rely on a single PDPT to handle both mappings. However, this is risky:
 >
-> 1. We don’t know in advance how much memory the physmap will occupy. Using the same PDPT could overwrite existing kernel entries.
+> 1. We don't know in advance how much memory the physmap will occupy. Using the same PDPT could overwrite existing kernel entries.
 > 2. Keeping two separate PDPTs provides a clean separation between the kernel and the physmap, making it easier to manage, debug, and extend.
 > 3. It also simplifies context switches and reduces the risk of accidentally remapping critical kernel memory.
 >
@@ -526,13 +485,12 @@ In other words, our new PML4 must contain **two separate entries**:
 Implementing this in C is quite trivial, after you've grasped the logic:
 
 ```c
-memset(PML4, 0, PAGE_SIZE);
-
-uint64_t *old_pml4 = getPML4();
-size_t kernel_index = (KERNEL_VIRTUAL_BASE >> 39) & 0x1FF;
-PML4[0][kernel_index] = old_pml4[kernel_index];
-
-size_t physmap_index = (PHYSMAP_VIRTUAL_BASE >> 39) & 0x1FF;
+kmemset(PML4, 0, PAGE_SIZE);
+uint64_t* old_pml4   = getPML4();
+size_t kernel_index  = PML4_INDEX(KERNEL_VIRTUAL_BASE);
+size_t physmap_index = PML4_INDEX(PHYSMAP_VIRTUAL_BASE);
+PANIC_ASSERT(kernel_index != physmap_index);
+PML4[0][kernel_index]  = old_pml4[kernel_index];
 PML4[0][physmap_index] = KERNEL_V2P(&PDPTs[0]) | (PAGE_PRESENT | PAGE_WRITABLE);
 ```
 
@@ -541,87 +499,66 @@ PML4[0][physmap_index] = KERNEL_V2P(&PDPTs[0]) | (PAGE_PRESENT | PAGE_WRITABLE);
 * The PML4 is cleared to start fresh.
 * We copy the old kernel entry into its exact index so the kernel remains mapped in the higher-half.
 * Then, we place the physmap PDPT at its designated virtual address in the PML4.
+* The assertion confirms that the two indexes are distinct — if they weren't, writing the physmap entry would silently clobber the kernel mapping, which would be catastrophic.
 
-No loops are needed here because the PML4 only has 512 entries, and we only need two specific slots: one for the kernel, one for the physmap.
-
----
+No loops are needed here because we only need two specific slots: one for the kernel, one for the physmap.
 
 ### Activating the New PML4
 
 ```c
-uintptr_t pml4_phys = KERNEL_V2P(pml4_base);
-asm volatile("mov %0, %%cr3" :: "r"(pml4_phys));
+PML4_switch(KERNEL_V2P(pml4_base));
 flush_tlb();
 ```
 
 Finally, we load the physical address of the new PML4 into `CR3` to switch the CPU to the new page tables, and flush the TLB to ensure all stale entries are cleared.
 
-## Putting It All Together
+## The Static `fb_pd` Array
 
-With all the pieces in place, we can now refactor GatOS's `kernel_main` to match the `v1.5.7` release. Everything we’ve discussed — multiboot parsing, extending the kernel region, cleaning up old mappings, and building the physmap — comes together here:
+You might have noticed in the framebuffer mapping code that `fb_pd` was used without any allocation. It is declared at file scope in `paging.c`:
 
 ```c
-#include <memory/paging.h>
-#include <libc/string.h>
-#include <multiboot2.h>
-#include <vga_console.h>
-#include <vga_stdio.h>
-#include <misc.h>
-#include <serial.h>
-#include <debug.h>
+static uint64_t fb_pd[PAGE_ENTRIES] __attribute__((aligned(PAGE_SIZE)));
+```
 
-#define TOTAL_DBG 7
+That's it. One `4KB` array in `.bss`, zero allocation needed. Because `fb_pd` is `static` with no initializer, the compiler places it in the BSS segment, which the linker zeroes before the kernel starts executing. It is already in memory the moment we enter `build_physmap`, properly aligned, and requires nothing from the heap or the physmap itself.
 
-static char* KERNEL_VERSION = "v1.5.7";
+A single PD covers 512 entries × 2 MiB each = 1 GiB of virtual address space. That is more than enough to cover any framebuffer at any resolution. In practice, even a 4K display at 32 bpp (`3840 × 2160 × 4 bytes ≈ 31 MiB`) fits in a handful of those entries. The rest stay zero and are never touched.
+
+The alternative would be to pull the same trick we did with physmap: use that 1GB preallocated virtual memory to reserve the tables we need. But isn't a single `4KB` BSS table smarter and easier?
+
+## Putting It All Together
+
+With all the pieces in place, here is the relevant slice of `kernel_main` as it stands today:
+
+```c
 static uint8_t multiboot_buffer[8 * 1024];
 
 void kernel_main(void* mb_info) {
-    DEBUG_LOG("Kernel main reached, normal assembly boot succeeded", TOTAL_DBG);
-
-    console_clear();
-    print_banner(KERNEL_VERSION);
+    serial_init_port(COM1_PORT);
+    serial_init_port(COM2_PORT);
+    QEMU_LOG("Kernel main reached, normal assembly boot succeeded", TOTAL_DBG);
 
     multiboot_parser_t multiboot = {0};
-    
-    // Initialize multiboot parser (copies all data to higher half)
     multiboot_init(&multiboot, mb_info, multiboot_buffer, sizeof(multiboot_buffer));
 
     if (!multiboot.initialized) {
-        printf("[KERNEL] Failed to initialize multiboot2 parser!\n");
+        QEMU_LOG("[KERNEL] Failed to initialize multiboot2 parser!", TOTAL_DBG);
         return;
     }
 
-    DEBUG_LOG("Multiboot structure parsed and copied to higher half", TOTAL_DBG);
+    QEMU_LOG("Multiboot structure parsed and copied to higher half", TOTAL_DBG);
 
-    // Extend kernel region to reserve space for the page tables mapping all physical memory
     reserve_required_tablespace(&multiboot);
-    printf("[MEM] Kernel region extended to include page tables.\n");
-    DEBUG_LOG("Reserved the required space for page tables in the kernel region", TOTAL_DBG);
+    QEMU_LOG("Reserved the required space for page tables in the kernel region", TOTAL_DBG);
 
-    // Clean up everything outside the kernel range
-    cleanup_kernel_page_tables(0x0, get_kend(false));
-    printf("[MEM] Cleaned up page tables, unmapped everything besides the kernel range.\n");
-    DEBUG_LOG("Unmapped all memory besides the kernel range", TOTAL_DBG);
-    
-    // Remove the identity mapping; only the higher half remains
-    unmap_identity();
-    printf("[MEM] Unmapped identity mapping, only higher half remains.\n");
-    DEBUG_LOG("Unmapped identity mapping, only higher half remains", TOTAL_DBG);
+    cleanup_kpt(0x0, get_kend(false));
+    QEMU_LOG("Unmapped all memory besides the higher half kernel range", TOTAL_DBG);
 
-    // Build the physmap to map all physical RAM into virtual space
     build_physmap();
-    printf("[MEM] Built physmap, all physical memory is now accessible.\n");
-    DEBUG_LOG("Built physmap at PHYSMAP_VIRTUAL_BASE", TOTAL_DBG);
-
-    // Final sanity check to ensure kernel is correctly positioned
-    check_kernel_position();
-    DEBUG_LOG("Reached kernel end", TOTAL_DBG);
+    QEMU_LOG("Built physmap at PHYSMAP_VIRTUAL_BASE", TOTAL_DBG);
 }
 ```
 
-> [!NOTE]
-> Some helper functions, like `print_banner` or `check_kernel_position`, are implemented in a separate helper file, [`misc.c`](/src/impl/kernel/misc.c).
+This version of `kernel_main` ties together all previous steps: the multiboot structure is parsed and relocated into the higher half before we strip the identity map, `reserve_required_tablespace` claims the virtual space for the new page tables, `cleanup_kpt` removes everything we no longer need, and `build_physmap` constructs the final address space layout.
 
-This version of `kernel_main` now ties together all previous steps: the kernel runs entirely in the higher half, the physmap provides access to all physical memory, and the old mappings have been safely removed.
-
-In the next chapter, we will finally dive into the long-awaited interrupts. Until then, take care!
+Next chapter? Interrupts, Panics, and Spinlocks. Stay tuned!

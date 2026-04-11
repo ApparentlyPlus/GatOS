@@ -161,6 +161,19 @@ uint64_t reserve_required_tablespace(multiboot_parser_t* multiboot) {
 
     PANIC_ASSERT(KEND + table_bytes < (1UL << 30) && KEND + table_bytes < total_RAM);
 
+    // We need to ensure that we are still within usable memory
+	for (size_t i = 0; i < (*multiboot).memory_map_length; i++) {
+		uintptr_t region_start, region_end;
+		uint32_t region_type;
+		if (multiboot_get_memory_region(&multiboot, i, &region_start, &region_end, &region_type) != 0)
+			continue;
+        
+        // If we are overlapping unavailable memory, we need to panic
+		PANIC_ASSERT(region_type != MULTIBOOT_MEMORY_AVAILABLE 
+                        && KEND + table_bytes > region_start
+                        && KEND + table_bytes < region_end);
+	}
+
     // Store fb info for build_physmap, don't inflate table_bytes
     uint64_t fb_phys = 0, fb_size = 0;
     multiboot_framebuffer_t* fb = multiboot_get_framebuffer(multiboot);
