@@ -65,7 +65,6 @@ void kernel_test(void* mb_info, char* KERNEL_VERSION) {
 	// Memory management setup
 	reserve_required_tablespace(&multiboot);
 	cleanup_kpt(0x0, get_kend(false));
-	unmap_identity();
 	build_physmap();
 
 	// Run tests for each subsystem
