@@ -7,7 +7,7 @@ The plan for this chapter is to map all of physical memory into a dedicated regi
 Starting from this chapter, I will be assuming knowledge of everything the docs have covered so far. This means bootstrapping, linkage, higher half, virtual memory, etc. Therefore, I will not be holding the reader's hand, as I have been doing in the past chapters. I am treating you as a fellow OS dev! Be proud!
 
 >[!NOTE]
->Most of what's discussed in this chapter, along with a few concepts we covered earlier, is implemented in the branch [`paging-refactored`](https://github.com/ApparentlyPlus/GatOS/tree/paging-refactored).
+>Most of what's discussed in this chapter, along with a few concepts we covered earlier, is implemented in the branch [`refactor`](https://github.com/ApparentlyPlus/GatOS/tree/refactor).
 
 
 ## What is the Physmap?
