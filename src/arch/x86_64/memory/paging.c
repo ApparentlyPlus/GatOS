@@ -168,10 +168,10 @@ uint64_t reserve_required_tablespace(multiboot_parser_t* multiboot) {
 		if (multiboot_get_memory_region(&multiboot, i, &region_start, &region_end, &region_type) != 0)
 			continue;
         
-        // If we are overlapping unavailable memory, we need to panic
-		PANIC_ASSERT(region_type != MULTIBOOT_MEMORY_AVAILABLE 
-                        && KEND + table_bytes > region_start
-                        && KEND + table_bytes < region_end);
+        // If the tablespace end falls within this region, it must be available RAM
+        if (KEND + table_bytes > region_start && KEND + table_bytes < region_end) {
+            PANIC_ASSERT(region_type == MULTIBOOT_MEMORY_AVAILABLE);
+        }
 	}
 
     // Store fb info for build_physmap, don't inflate table_bytes

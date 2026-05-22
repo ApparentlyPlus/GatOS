@@ -258,14 +258,16 @@ Before committing to the reserved range, we confirm two things: that the extende
 We also walk the multiboot memory map to verify that the reserved table range does not land inside a region the firmware has marked unavailable:
 
 ```c
-for (size_t i = 0; i < multiboot->memory_map_length; i++) {
+for (size_t i = 0; i < (*multiboot).memory_map_length; i++) {
     uintptr_t region_start, region_end;
     uint32_t region_type;
     if (multiboot_get_memory_region(multiboot, i, &region_start, &region_end, &region_type) != 0)
         continue;
-    PANIC_ASSERT(region_type != MULTIBOOT_MEMORY_AVAILABLE
-                    && KEND + table_bytes > region_start
-                    && KEND + table_bytes < region_end);
+
+    // If the tablespace end falls within this region, it must be available RAM
+    if (KEND + table_bytes > region_start && KEND + table_bytes < region_end) {
+        PANIC_ASSERT(region_type == MULTIBOOT_MEMORY_AVAILABLE);
+    }
 }
 ```
 
