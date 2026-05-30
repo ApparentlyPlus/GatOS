@@ -57,8 +57,6 @@ At its core, PMM allocation is nothing more than marking a page as "used" and re
 
 We will go into the PMM's algorithms in more detail later in this chapter.
 
-Here's the same treatment for the slab allocator section — same depth, same style, just tightening the physmap explanation and making the problem statement sharper:
-
 ### What does the Slab Allocator do?
 
 Picture this: we want to dynamically allocate an integer at runtime, assuming the PMM is online. Given what we know so far, we could do something like:
