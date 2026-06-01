@@ -980,6 +980,25 @@ int vscanf_(const char* format, va_list va) {
             }
         }
 
+        bool is_long = false;
+        bool is_long_long = false;
+        if (*format == 'l') {
+            is_long = true;
+            format++;
+            if (*format == 'l') {
+                is_long_long = true;
+                format++;
+            }
+        } else if (*format == 'L') {
+            is_long = true;
+            format++;
+        } else if (*format == 'h') {
+            format++;
+            if (*format == 'h') {
+                format++;
+            }
+        }
+
         // Handle scansets %[...]
         if (*format == '[') {
             format++;
@@ -1104,17 +1123,37 @@ int vscanf_(const char* format, va_list va) {
 
                 if (!suppress) {
                     if (*format == 'd' || *format == 'i') {
-                        int* p = va_arg(va, int*);
-                        *p = (int)kstrtol(buf, NULL, (*format == 'i') ? 0 : 10);
+                        if (is_long || is_long_long) {
+                            long* p = va_arg(va, long*);
+                            *p = (long)kstrtol(buf, NULL, (*format == 'i') ? 0 : 10);
+                        } else {
+                            int* p = va_arg(va, int*);
+                            *p = (int)kstrtol(buf, NULL, (*format == 'i') ? 0 : 10);
+                        }
                     } else if (*format == 'o') {
-                        unsigned int* p = va_arg(va, unsigned int*);
-                        *p = (unsigned int)kstrtoul(buf, NULL, 8);
+                        if (is_long || is_long_long) {
+                            unsigned long* p = va_arg(va, unsigned long*);
+                            *p = (unsigned long)kstrtoul(buf, NULL, 8);
+                        } else {
+                            unsigned int* p = va_arg(va, unsigned int*);
+                            *p = (unsigned int)kstrtoul(buf, NULL, 8);
+                        }
                     } else if (*format == 'u') {
-                        unsigned int* p = va_arg(va, unsigned int*);
-                        *p = (unsigned int)kstrtoul(buf, NULL, 10);
+                        if (is_long || is_long_long) {
+                            unsigned long* p = va_arg(va, unsigned long*);
+                            *p = (unsigned long)kstrtoul(buf, NULL, 10);
+                        } else {
+                            unsigned int* p = va_arg(va, unsigned int*);
+                            *p = (unsigned int)kstrtoul(buf, NULL, 10);
+                        }
                     } else if (*format == 'x') {
-                        unsigned int* p = va_arg(va, unsigned int*);
-                        *p = (unsigned int)kstrtoul(buf, NULL, 16);
+                        if (is_long || is_long_long) {
+                            unsigned long* p = va_arg(va, unsigned long*);
+                            *p = (unsigned long)kstrtoul(buf, NULL, 16);
+                        } else {
+                            unsigned int* p = va_arg(va, unsigned int*);
+                            *p = (unsigned int)kstrtoul(buf, NULL, 16);
+                        }
                     }
                     count++;
                 }
