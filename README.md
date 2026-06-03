@@ -40,9 +40,9 @@ The whole toolchain is comprised of 3 components:
 
 | Component | Description | Status |
 |-----------|-------------|--------|
-| **GatOS** | The current project. It is a modular kernel forming the core of PawStack. It aims to expose APIs and syscalls for core OS functionality. | **In Development** |
-| **Gata** | A custom high-level programming language for writing operating systems. It will *feel* like a modern language but will be built with features that make low-level development simpler and more approachable. | **Planned** |
-| **Appa** | The compiler for Gata. It takes in Gata source code and transpiles it into C code that calls GatOS's APIs. Appa constructs the kernel depending on the code's logic by leveraging the modularity of GatOS's design. The end result is a custom-configured version of GatOS for that specific Gata project. | **Planned** |
+| **GatOS** | The current project. It is a modular kernel forming the core of PawStack. It aims to expose APIs and syscalls for core OS functionality. | **Nearly Complete** |
+| **Gata** | A custom high-level programming language for writing operating systems. It will *feel* like a modern language but will be built with features that make low-level development simpler and more approachable. | **In Development** |
+| **Appa** | The compiler for Gata. It takes in Gata source code and transpiles it into C code that calls GatOS's APIs. Appa constructs the kernel depending on the code's logic by leveraging the modularity of GatOS's design. The end result is a custom-configured version of GatOS for that specific Gata project. | **In Development** |
 
 Technically, GatOS is not the end of the toolchain. Even after you have a version of GatOS generated for your Gata logic, the kernel itself still needs to be compiled into bare-metal machine code. This final build stage is handled by a GCC-based compilation toolchain, with packaging done through tools like grub-mkrescue and xorriso to produce a bootable image.
 
