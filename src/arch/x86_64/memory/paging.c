@@ -165,7 +165,7 @@ uint64_t reserve_required_tablespace(multiboot_parser_t* multiboot) {
 	for (size_t i = 0; i < (*multiboot).memory_map_length; i++) {
 		uintptr_t region_start, region_end;
 		uint32_t region_type;
-		if (multiboot_get_memory_region(&multiboot, i, &region_start, &region_end, &region_type) != 0)
+		if (multiboot_get_memory_region(multiboot, i, &region_start, &region_end, &region_type) != 0)
 			continue;
         
         // If the tablespace end falls within this region, it must be available RAM
