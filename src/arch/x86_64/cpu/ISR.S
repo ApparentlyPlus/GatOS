@@ -27,11 +27,16 @@
  * Optionally, for some vectors the cpu will push a 64-bit error code (see the table below for specifics). 
  * This structure is known as an iret frame, because to return from an interrupt we use the iret instruction, 
  * which pops those five values from the stack.
+ *
+ * Author: u/ApparentlyPlus
  */
+
+#include <arch/x86_64/memory/layout.h>
 
 .intel_syntax noprefix
 
 .extern interrupt_dispatcher
+.extern sched_stack_top
 
 .section .text
 .code64
@@ -74,12 +79,44 @@ generic_interrupt_handler:
     push r14
     push r15
     
-    // Call our C interrupt dispatcher
-    // Ensure 16-byte stack alignment at call boundary (SysV ABI)
+    // Pass a pointer to the saved-context frame to the dispatcher.
     mov rdi, rsp
-    sub rsp, 8
+
+    // Switch to the per CPU scheduler stack before calling into C
+    
+    // If sched_stack_top is still 0 (early boot, before sched_init), we stay
+    // on the current stack
+    mov rax, [sched_stack_top + rip]
+    test rax, rax
+    jz .no_sched_stack
+    
+    // Check if we are already on the scheduler stack (nested interrupts)
+    // If rsp is within [stack_top - KERNEL_STACK_SIZE, stack_top), skip the switch
+    mov rbx, rax
+
+    // rbx = stack bottom
+    sub rbx, KERNEL_STACK_SIZE 
+    cmp rsp, rbx
+
+    // rsp below stack bottom, not on sched stack
+    jb .do_switch 
+    cmp rsp, rax
+
+    // rsp at or above top, not on sched stack
+    jae .do_switch 
+
+    // inside bounds, already on sched stack
+    jmp .no_sched_stack  
+
+.do_switch:
+    mov rsp, rax
+.no_sched_stack:
+
+    // Force 16b alignment before call. Works for both the sched stack case
+    // (rsp = page aligned sched_stack_top) and the non switched case (rsp
+    // offset is a multiple of 16 from original RSP since we pushed 22 QWORDs)
+    and rsp, -16
     call interrupt_dispatcher
-    add rsp, 8
 
     // Restore the stack pointer
     mov rsp, rax

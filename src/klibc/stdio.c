@@ -44,6 +44,7 @@
 #define PRINTF_FTOA_BUFFER_SIZE    32U
 #endif
 
+
 // support for the floating point type (%f)
 // default: activated
 #ifndef PRINTF_DISABLE_SUPPORT_FLOAT
@@ -116,7 +117,7 @@ typedef struct {
 
 
 void _putchar(char character){
-    tty_t* target_tty = g_active_tty;
+    tty_t* target_tty = active_tty;
 
     // Route to the calling thread's own TTY if the scheduler is running
     if (sched_active()) {
@@ -916,23 +917,23 @@ int fctprintf(void (*out)(char character, void* arg), void* arg, const char* for
 ///////////////////////////////////////////////////////////////////////////////
 // Input Implementation
 
-static int g_next_char = -1;
+static int next_char = -1;
 
 int _getchar(void) {
-    if (g_next_char != -1) {
-        int ch = g_next_char;
-        g_next_char = -1;
+    if (next_char != -1) {
+        int ch = next_char;
+        next_char = -1;
         return ch;
     }
-    // Always read from the kernel's own fixed TTY, not g_active_tty.
-    // g_active_tty may be switched to a user process TTY; the kernel loop
+    // Always read from the kernel's own fixed TTY, not active_tty.
+    // active_tty may be switched to a user process TTY; the kernel loop
     // must not compete with userspace for input.
-    if (!g_kernel_tty) return 0;
-    return (int)tty_read_char(g_kernel_tty);
+    if (!kernel_tty) return 0;
+    return (int)tty_read_char(kernel_tty);
 }
 
 static void _ungetchar(int ch) {
-    g_next_char = ch;
+    next_char = ch;
 }
 
 int vscanf_(const char* format, va_list va) {
@@ -971,6 +972,25 @@ int vscanf_(const char* format, va_list va) {
             max_width = 0;
             while (kisdigit((unsigned char)*format)) {
                 max_width = max_width * 10 + (*format - '0');
+                format++;
+            }
+        }
+
+        bool is_long = false;
+        bool is_long_long = false;
+        if (*format == 'l') {
+            is_long = true;
+            format++;
+            if (*format == 'l') {
+                is_long_long = true;
+                format++;
+            }
+        } else if (*format == 'L') {
+            is_long = true;
+            format++;
+        } else if (*format == 'h') {
+            format++;
+            if (*format == 'h') {
                 format++;
             }
         }
@@ -1099,17 +1119,37 @@ int vscanf_(const char* format, va_list va) {
 
                 if (!suppress) {
                     if (*format == 'd' || *format == 'i') {
-                        int* p = va_arg(va, int*);
-                        *p = (int)kstrtol(buf, NULL, (*format == 'i') ? 0 : 10);
+                        if (is_long || is_long_long) {
+                            long* p = va_arg(va, long*);
+                            *p = (long)kstrtol(buf, NULL, (*format == 'i') ? 0 : 10);
+                        } else {
+                            int* p = va_arg(va, int*);
+                            *p = (int)kstrtol(buf, NULL, (*format == 'i') ? 0 : 10);
+                        }
                     } else if (*format == 'o') {
-                        unsigned int* p = va_arg(va, unsigned int*);
-                        *p = (unsigned int)kstrtoul(buf, NULL, 8);
+                        if (is_long || is_long_long) {
+                            unsigned long* p = va_arg(va, unsigned long*);
+                            *p = (unsigned long)kstrtoul(buf, NULL, 8);
+                        } else {
+                            unsigned int* p = va_arg(va, unsigned int*);
+                            *p = (unsigned int)kstrtoul(buf, NULL, 8);
+                        }
                     } else if (*format == 'u') {
-                        unsigned int* p = va_arg(va, unsigned int*);
-                        *p = (unsigned int)kstrtoul(buf, NULL, 10);
+                        if (is_long || is_long_long) {
+                            unsigned long* p = va_arg(va, unsigned long*);
+                            *p = (unsigned long)kstrtoul(buf, NULL, 10);
+                        } else {
+                            unsigned int* p = va_arg(va, unsigned int*);
+                            *p = (unsigned int)kstrtoul(buf, NULL, 10);
+                        }
                     } else if (*format == 'x') {
-                        unsigned int* p = va_arg(va, unsigned int*);
-                        *p = (unsigned int)kstrtoul(buf, NULL, 16);
+                        if (is_long || is_long_long) {
+                            unsigned long* p = va_arg(va, unsigned long*);
+                            *p = (unsigned long)kstrtoul(buf, NULL, 16);
+                        } else {
+                            unsigned int* p = va_arg(va, unsigned int*);
+                            *p = (unsigned int)kstrtoul(buf, NULL, 16);
+                        }
                     }
                     count++;
                 }

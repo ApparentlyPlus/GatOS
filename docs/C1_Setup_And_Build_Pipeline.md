@@ -2,7 +2,7 @@
 
 In the last chapter, we chose x86_64 as the instruction set for GatOS, with the goal of running the kernel in 64-bit long mode. That naturally leads to the next question: *where do we actually begin?* Most developers, at this point, are eager to jump straight into coding.
 
-Tmpting though this might be, it is also where many projects go off the rails. If we start hacking things together just to get something running, the setup quickly becomes fragile. It works fine while the project is small, but as soon as complexity grows, every change demands extra manual steps or a round of painful refactoring. Tiny mistakes can cost hours. Before long, the “quick and dirty” approach ends up slowing progress instead of speeding it up. 
+Tempting though this might be, it is also where many projects go off the rails. If we start hacking things together just to get something running, the setup quickly becomes fragile. It works fine while the project is small, but as soon as complexity grows, every change demands extra manual steps or a round of painful refactoring. Tiny mistakes can cost hours. Before long, the “quick and dirty” approach ends up slowing progress instead of speeding it up.
 
 Picture being deep into the project and discovering that your whole foundation was flawed, and now, everything has to change.
 
@@ -269,414 +269,279 @@ This separation allows the kernel to start executing before paging is enabled (a
    * Maps `KERNEL_VIRTUAL_BASE + X → Physical Address X`.
    * Once paging is enabled, the kernel continues execution **at the high virtual address**, as linked.
 
-## What is a Makefile (and make)?
+## GatOS’s Project Structure
 
-A **Makefile** is a script-like file that defines how a project is built, and `make` is the tool that reads this script and executes it. In a complex project like an operating system kernel, there are many moving parts: C source files, assembly files, header files, linker scripts, and tools to package the final image. `make` **orchestrates all of these elements**, making sure everything happens in the correct order.
-
-Instead of manually running compiler commands, assembling files, invoking the linker, and then creating a bootable image, `make` automates the entire workflow. It determines which files have changed and only rebuilds the necessary parts, saving time while avoiding human error. A Makefile tells `make`:
-
-* **Which files to compile:** C, C++, or assembly sources.
-* **Which compiler, assembler, and linker to invoke:** For example, `gcc` for C, `as` or GAS for assembly, and `ld` for linking.
-* **Which linker scripts to use:** Ensuring the kernel is loaded at the correct virtual and physical addresses.
-* **How to package the final output:** Such as creating a bootable ISO or copying the kernel to a disk image.
-* **Dependency management:** If a header or assembly file changes, `make` ensures all affected files are rebuilt automatically.
-
-TL;DR: `make` is the **central coordinator of the build process**. It connects the compiler, assembler, linker, and auxiliary tools into a single, repeatable pipeline. Without `make`, you would have to manually track every file, command, and build step, which is an error-prone and time-consuming task. With `make` and a well-structured Makefile, building even a complex kernel becomes reliable, efficient, and fully automated.
-
-
-## Makefile Targets and Structure
-
-At the heart of a Makefile are **targets**. A target is essentially a goal that `make` tries to produce: it could be a compiled object file, a linked kernel image, or even a fully bootable ISO. Each target is associated with:
-
-1. **Dependencies:** Files that the target depends on. If any dependency changes, `make` knows the target must be rebuilt. For example, a compiled object file depends on its corresponding C or assembly source file and any headers it includes.
-2. **Commands:** The shell commands `make` executes to build the target from its dependencies. For a C source file, this might be invoking `gcc` with the correct flags; for an assembly file, calling `as` or GAS; and for the final kernel image, invoking the linker with a linker script.
-
-A typical Makefile target looks like this:
-
-```make
-kernel.bin: main.o start.o linker.ld
-    ld -T linker.ld -o kernel.bin main.o start.o
-```
-
-* **`kernel.bin`** is the target.
-* **`main.o start.o linker.ld`** are the dependencies.
-* **`ld -T linker.ld -o kernel.bin main.o start.o`** is the command that builds the target.
-
----
-
-### Common Types of Targets
-
-* **Object files (`*.o`)** – Individual compilation units generated from C or assembly files.
-* **Executable/kernel image (`kernel.bin`)** – The final linked output that the bootloader can load.
-* **Clean target** – Deletes temporary or intermediate files to start a fresh build:
-
-```make
-clean:
-    rm -f *.o kernel.bin
-```
-
-* **Phony targets** – Targets that don’t correspond to actual files, like `all` or `install`. These are often used to group multiple build steps.
-
----
-
-### How `make` Orchestrates Everything
-
-When you run `make kernel.bin`, it performs the following automatically:
-
-1. Checks all dependencies (`*.c`, `*.h`, `*.S`) to see if they have changed since the last build.
-2. Compiles C and assembly files into object files if needed.
-3. Links all object files using the correct linker script.
-4. Produces the final kernel binary at the correct load address.
-5. Optionally packages the kernel into a bootable image or ISO.
-
-All of this happens in the correct order without requiring you to manually run dozens of commands. In a kernel project, this ensures that changes in a single header or assembly file trigger all necessary rebuilds automatically, saving time and preventing errors.
-
-## GatOS's Makefile
-
-The Makefile of GatOS is essentially the cornerstone of the build process. It's what ties everything that was said above together!
-
-Before we dissect it, it is helpful to have a tree of the project folder structure:
+Before we get to the build system, it helps to know where everything lives. Here’s the full layout of the `src/` directory:
 
 ```
-.
-├── docs                            # The documentation
-├── Makefile                        # The makefile is in the root folder
-├── src                             # The root source code folder
-│   ├── headers                     # Folder that contains the headers (.h files)
-│   │   ├── libc                    # Ported libc function headers
-│   │   └── memory                  # Headers that are related to memory management
-│   └── impl                        # Folder that contains the implementations (.c files)
-│       ├── kernel                  # Kernel implementation source files
-│       ├── libc                    # libc implementation source files  
-│       └── memory                  # Memory related implementation source files
-│       └── x86_64                  # Early boot function implementations
-│           └── boot                # Boot time assembly implementation files
-└── targets                         # Targets (for makefile) output folder
-    └── x86_64
-        ├── iso                     # ISO generation folder
-        │   ├── boot                
-        │   │   └── grub
-        │   │       └── grub.cfg    # GRUB config file (how to load the kernel)    
-        │   └── EFI                 # EFI BOOT files for UEFI support
-        │       └── BOOT            
-        └── linker.ld               # The linker script for the project
+src/
+├── arch/
+│   └── x86_64/
+│       ├── boot/          # Early boot assembly (header.S, boot32.S, boot64.S)
+│       ├── cpu/           # CPU-level code (GDT, IDT, ISR.S, syscall_entry.S, io.h, msr.h)
+│       └── memory/        # Paging structures and early memory setup (paging.c/h, layout.h)
+├── kernel/
+│   ├── kmain.c            # The kernel entry point
+│   ├── drivers/           # Device drivers (console, serial, tty, keyboard, font, dashboard, pci, xhci…)
+│   ├── memory/            # Dynamic memory management (pmm, slab, vmm, heap)
+│   └── sys/               # Core subsystems (panic, acpi, apic, scheduler, process, syscall, timers…)
+├── klibc/                 # Kernel-side standard library (avl, stdio, string, math)
+├── ulibc/                 # Userspace standard library (linked into Ring 3 programs)
+└── tests/                 # Kernel test suite
 ```
 
-Alright, with that in mind, let's take a look at GatOS's Makefile:
-
-```make
-# Toolchain configuration
-CC := x86_64-elf-gcc
-LD := x86_64-elf-ld
-
-# Compilation and preprocessing flags
-CFLAGS := -m64 -ffreestanding -nostdlib -fno-pic -mcmodel=kernel -I src/headers -g
-CPPFLAGS := -I src/headers -D__ASSEMBLER__
-LDFLAGS := -n -nostdlib -T targets/x86_64/linker.ld --no-relax -g
-
-# Directories
-SRC_DIR := src/impl
-HEADER_DIR := src/headers
-BUILD_DIR := build
-DIST_DIR := dist/x86_64
-ISO_DIR := targets/x86_64/iso
-
-# UEFI output path (we will create this file)
-UEFI_DIR := $(ISO_DIR)/EFI/BOOT
-UEFI_GRUB := $(UEFI_DIR)/BOOTX64.EFI
-
-# Discover all C and Assembly sources recursively
-C_SRC_FILES := $(shell find $(SRC_DIR) -type f -name '*.c')
-ASM_SRC_FILES := $(shell find $(SRC_DIR) -type f -name '*.S')
-
-# Generate corresponding object file paths
-C_OBJ_FILES := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(C_SRC_FILES))
-ASM_OBJ_FILES := $(patsubst $(SRC_DIR)/%.S,$(BUILD_DIR)/%.o,$(ASM_SRC_FILES))
-OBJ_FILES := $(C_OBJ_FILES) $(ASM_OBJ_FILES)
-
-# Default target
-.PHONY: all
-all: iso
-
-# Compile C source files
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
-	@mkdir -p $(@D)
-	$(CC) -c $(CFLAGS) $< -o $@
-
-# Compile Assembly (.S) source files with preprocessing
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.S
-	@mkdir -p $(@D)
-	$(CC) -c $(CPPFLAGS) $< -o $@
-
-# Link everything into a flat binary
-.PHONY: build
-build: $(OBJ_FILES)
-	@mkdir -p $(DIST_DIR)
-	$(LD) $(LDFLAGS) -o $(DIST_DIR)/kernel.bin $^
-
-# Build a standalone EFI executable (grub) that embeds your grub.cfg
-# This creates $(ISO_DIR)/EFI/BOOT/BOOTX64.EFI which UEFI firmware will look for on removable media
-$(UEFI_GRUB): $(ISO_DIR)/boot/grub/grub.cfg
-	@mkdir -p $(@D)
-	# embed the grub.cfg from the ISO tree into a standalone EFI binary
-	grub-mkstandalone --format=x86_64-efi --output=$@ \
-		--locales="" --fonts="" \
-		"boot/grub/grub.cfg=$(ISO_DIR)/boot/grub/grub.cfg"
-
-# Generate ISO image (BIOS + UEFI hybrid)
-.PHONY: iso
-iso: build $(UEFI_GRUB)
-	@mkdir -p $(ISO_DIR)/boot
-	cp $(DIST_DIR)/kernel.bin $(ISO_DIR)/boot/kernel.bin
-	grub-mkrescue -o $(DIST_DIR)/kernel.iso $(ISO_DIR) || \
-	grub-mkrescue -d /usr/lib/grub/i386-pc -o $(DIST_DIR)/kernel.iso $(ISO_DIR);
-
-# Clean all build and dist files
-.PHONY: clean
-clean:
-	rm -rf $(BUILD_DIR) $(DIST_DIR) dist $(ISO_DIR)/boot/kernel.bin $(UEFI_GRUB)
-```
-
-***Woah.*** That's a lot, right? Well, don't worry! It's simpler than it looks! 
-
-Let's break everything down.
-
-This Makefile automates the process of building a freestanding (no operating system) x86_64 kernel from C and Assembly source files. It then packages this kernel into a bootable ISO image that can be run in an emulator (like QEMU) or on real hardware. The ISO supports both **legacy BIOS** and modern **UEFI** boot methods.
-
----
-
-### Section 1: Toolchain Configuration
-
-```makefile
-CC := x86_64-elf-gcc
-LD := x86_64-elf-ld
-```
-
-*   **`x86_64-elf-gcc` (The Compiler):** This is the **cross-compiler**. It runs on your host system (e.g., Linux) but produces machine code for a different target system (a bare-metal x86_64 environment). We cannot use the system's default `gcc` (e.g., `x86_64-linux-gnu-gcc`) because it would link against the host's standard libraries (like `libc`), which don't exist in a kernel.
-*   **`x86_64-elf-ld` (The Linker):** This is the corresponding cross-linker. It takes all the compiled object files (`.o`) and combines them into a single executable binary according to the instructions in the linker script. The `-elf` output format is a generic format suitable for bare-metal targets.
-
----
-
-### Section 2: Compilation and Linking Flags
-
-```makefile
-CFLAGS := -m64 -ffreestanding -nostdlib -fno-pic -mcmodel=kernel -I src/headers -g
-CPPFLAGS := -I src/headers -D__ASSEMBLER__
-LDFLAGS := -n -nostdlib -T targets/x86_64/linker.ld --no-relax -g
-```
-
-*   **`CFLAGS` (C Compiler Flags):**
-    *   `-m64`: Generate 64-bit code.
-    *   `-ffreestanding`: The compilation target is a freestanding environment (no OS). It assumes standard library functions like `malloc` or `printf` may not exist.
-    *   `-nostdlib`: Do not link the standard C library (`libc`) or compiler runtime libraries (`libgcc`) by default. The kernel provides its own implementations for everything it needs.
-    *   `-fno-pic`: Do not generate Position-Independent Code. The kernel is loaded at a fixed, known memory address.
-    *   `-mcmodel=kernel`: Use the "kernel" code model, which is designed for code that will reside in the negative 2GB of the address space (the higher half of the virtual address space, a common kernel design).
-    *   `-I src/headers`: Add the `src/headers` directory to the search path for `#include` directives.
-    *   `-g`: Include debugging information (like line numbers), which is crucial for debugging with `gdb`.
-
-*   **`CPPFLAGS` (C Preprocessor Flags):**
-    *   These flags are used when preprocessing Assembly (`.S`) files.
-    *   `-I src/headers`: Also allow assembly files to use headers.
-    *   `-D__ASSEMBLER__`: Define a macro `__ASSEMBLER__`. This is sometimes used in header files to conditionally exclude C-specific code when being included in an assembly file.
-
-*   **`LDFLAGS` (Linker Flags):**
-    *   `-n`: Set the text section to be readable and writable (`nmagic`).
-    *   `-nostdlib`: Same as for the compiler; don't use standard libraries.
-    *   `-T targets/x86_64/linker.ld`: Use the custom **linker script**. This is the most important flag. The linker script dictates the memory layout of the kernel: where the `.text` (code), `.data` (initialized data), `.bss` (uninitialized data) sections are placed in memory. This is critical for the kernel to boot correctly.
-    *   `--no-relax`: Don't perform certain optimizations that can interfere with the precise layout the linker script expects.
-    *   `-g`: Include debugging information in the final binary.
-
----
-
-### Section 3: Directory Structure
-
-```makefile
-SRC_DIR := src/impl
-HEADER_DIR := src/headers
-BUILD_DIR := build
-DIST_DIR := dist/x86_64
-ISO_DIR := targets/x86_64/iso
-UEFI_DIR := $(ISO_DIR)/EFI/BOOT
-UEFI_GRUB := $(UEFI_DIR)/BOOTX64.EFI
-```
-
-This defines the project's structure:
-*   **`SRC_DIR`**: Where the source code lives.
-*   **`BUILD_DIR`**: Where all the intermediate `.o` object files are stored. Keeping them separate from source is good practice.
-*   **`DIST_DIR`**: Where the final outputs (the `kernel.bin` and `kernel.iso`) are placed.
-*   **`ISO_DIR`**: The directory structure that will be turned into the final ISO image. It mimics the layout of a CD-ROM filesystem.
-*   **`UEFI_GRUB`**: The path for the final GRUB EFI executable that will be built.
-
----
-
-### Section 4: Automatic Source File Discovery
-
-```makefile
-C_SRC_FILES := $(shell find $(SRC_DIR) -type f -name '*.c')
-ASM_SRC_FILES := $(shell find $(SRC_DIR) -type f -name '*.S')
-C_OBJ_FILES := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(C_SRC_FILES))
-ASM_OBJ_FILES := $(patsubst $(SRC_DIR)/%.S,$(BUILD_DIR)/%.o,$(ASM_SRC_FILES))
-OBJ_FILES := $(C_OBJ_FILES) $(ASM_OBJ_FILES)
-```
-
-This is a powerful feature of Make.
-1.  **`find` command**: Recursively searches `SRC_DIR` for all files ending in `.c` and `.S`.
-2.  **`patsubst` function**: For each source file found (e.g., `src/impl/memory/paging.c`), it generates a corresponding path for the object file (e.g., `build/memory/paging.o`).
-3.  **`OBJ_FILES`**: The complete list of all object files that need to be built and linked.
-
-**Why?** You don't have to manually list every source file. Adding a new `.c` file anywhere in `src/impl` automatically includes it in the build.
-
----
-
-### Section 5: Compilation Rules
-
-```makefile
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
-	@mkdir -p $(@D)
-	$(CC) -c $(CFLAGS) $< -o $@
-
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.S
-	@mkdir -p $(@D)
-	$(CC) -c $(CPPFLAGS) $< -o $@
-```
-
-These are **pattern rules**.
-*   **`%.o: %.c`**: "How to build a `.o` file from a `.c` file with the same name."
-*   **`@mkdir -p $(@D)`**: Before compiling, create the necessary subdirectories inside the `build/` folder to mirror the source structure. `$(@D)` is the directory part of the target file.
-*   **`$(CC) -c ...`**: The actual compilation command. The `-c` flag tells `gcc` to compile but not link.
-*   **`$<`**: An automatic variable that expands to the first prerequisite (the source file).
-*   **`$@`**: An automatic variable that expands to the target (the object file).
-
----
-
-### Section 6: Linking Rule (`build` target)
-
-```makefile
-build: $(OBJ_FILES)
-	@mkdir -p $(DIST_DIR)
-	$(LD) $(LDFLAGS) -o $(DIST_DIR)/kernel.bin $^
-```
-
-*   **Prerequisite: `$(OBJ_FILES)`**: This target depends on all object files being up-to-date.
-*   **Command:** The linker `LD` is called with all the flags (`LDFLAGS`) and the list of all object files (`$^` is an automatic variable that expands to *all* prerequisites). It outputs the final `kernel.bin` flat binary.
-
----
-
-### Section 7: UEFI Bootloader Creation
-
-```makefile
-$(UEFI_GRUB): $(ISO_DIR)/boot/grub/grub.cfg
-	@mkdir -p $(@D)
-	grub-mkstandalone --format=x86_64-efi --output=$@ \
-		--locales="" --fonts="" \
-		"boot/grub/grub.cfg=$(ISO_DIR)/boot/grub/grub.cfg"
-```
-
-*   **Tool: `grub-mkstandalone`**: This is a GRUB tool that creates a single, self-contained EFI executable. This executable contains GRUB itself and the specified configuration file (`grub.cfg`) embedded inside it.
-*   **Why?** UEFI firmware looks for a file at the exact path `\EFI\BOOT\BOOTX64.EFI` on removable media. This rule builds that file.
-*   **`"boot/grub/grub.cfg=..."`**: This syntax tells `grub-mkstandalone` to take the file from the host system at `$(ISO_DIR)/boot/grub/grub.cfg` and embed it inside the EFI executable under the path `/boot/grub/grub.cfg`, which is where GRUB will look for it at runtime.
-
----
-
-### Section 8: ISO Generation (`iso` target)
-
-```makefile
-iso: build $(UEFI_GRUB)
-	@mkdir -p $(ISO_DIR)/boot
-	cp $(DIST_DIR)/kernel.bin $(ISO_DIR)/boot/kernel.bin
-	grub-mkrescue -o $(DIST_DIR)/kernel.iso $(ISO_DIR) || \
-	grub-mkrescue -d /usr/lib/grub/i386-pc -o $(DIST_DIR)/kernel.iso $(ISO_DIR);
-```
-
-This is the final packaging step.
-1.  **Prerequisites:** It depends on the `kernel.bin` being built and the `BOOTX64.EFI` being created.
-2.  **`cp ...`**: Copies the kernel binary into the ISO directory structure.
-3.  **Tool: `grub-mkrescue`**: This tool creates a **hybrid ISO image** that can be booted from both a CD-ROM *and* a USB drive.
-    *   It looks in the `$(ISO_DIR)` and creates an ISO from its contents.
-    *   It automatically installs a **BIOS bootloader** (from the `i386-pc` GRUB module directory) for legacy boot.
-    *   It includes the `$(UEFI_GRUB)` file we built for UEFI boot.
-    *   The `||` (or) operator provides a fallback command in case the first one fails, specifying the path to the GRUB modules explicitly, which is often necessary on non-GRUB-based host systems.
-
----
-
-### Section 9: The `all` and `clean` Targets
-
-```makefile
-.PHONY: all
-all: iso
-
-.PHONY: clean
-clean:
-	rm -rf $(BUILD_DIR) $(DIST_DIR) dist $(ISO_DIR)/boot/kernel.bin $(UEFI_GRUB)
-```
-
-*   **`all`**: The default target. Running `make` with no arguments will build the `iso` target.
-*   **`.PHONY`**: Tells Make that these targets are not actual files. This prevents conflicts if a file named `all` or `clean` ever exists.
-*   **`clean`**: Deletes all generated files and directories, allowing for a fresh build.
-
-## Summary of the Build Flow
-
-1.  **Compile:** `make` finds all `.c` and `.S` files and compiles them into `.o` files in the `build/` directory using the cross-compiler.
-2.  **Link:** All `.o` files are linked into a single `kernel.bin` using the cross-linker and the linker script.
-3.  **Package for UEFI:** The `grub-mkstandalone` tool creates a UEFI bootloader (`BOOTX64.EFI`) with the GRUB configuration embedded inside it.
-4.  **Create ISO:** The `kernel.bin` and `BOOTX64.EFI` are placed into the ISO directory structure. `grub-mkrescue` then creates a bootable hybrid ISO image from this directory.
-5.  **Run:** The resulting `dist/x86_64/kernel.iso` can be booted in QEMU or written to a USB drive.
-
-
-## Build Automation Scripts
-
-To streamline the development process, GatOS includes two convenience scripts that handle environment setup and execution.
-
-### 1. `setup.sh` - One-Time Toolchain Installation
-This script is designed to be run **once** to install the complete cross-compilation toolchain and all necessary dependencies on your system.
-
-**Purpose:** To automate the often complex process of setting up a correct kernel development environment, ensuring everyone uses the same tools.
-
-**What it installs:**
-*   **Essential Build Tools:** `make`, `as`, `gcc` (host compiler)
-*   **Cross-Compiler Toolchain:** The entire `x86-64-elf` toolchain, including:
-    *   `x86-64-elf-gcc` (Cross-Compiler)
-    *   `x86-64-elf-binutils` (Cross-Assembler and Linker)
-    *   `x86-64-elf-gdb` (Cross-Debugger)
-*   **Emulation & Imaging:**
-    *   `qemu-system-x86` (QEMU emulator to run the kernel)
-    *   `grub-common`, `grub-pc-bin`, `grub-efi-amd64-bin` (Tools for creating bootable ISO images for both BIOS and UEFI)
-    *   `xorriso` and `mtools` (Utilities for constructing the ISO filesystem)
-
-**Supported Environments:**
-*   Debian-based distributions (Debian, Ubuntu, Pop!_OS, etc.)
-*   Windows Subsystem for Linux (WSL) using a Debian/Ubuntu image
-
-**Usage:**
+The **include root** is `src/`. This means `#include <kernel/drivers/console.h>` resolves to `src/kernel/drivers/console.h`, and `#include <arch/x86_64/cpu/io.h>` resolves to `src/arch/x86_64/cpu/io.h`. 
+
+Also, there is no separate `headers/` folder. Header files live alongside their implementation files, organized by subsystem.
+
+## The Build System
+
+GatOS used to use a Makefile. I switched to a Python build script ([`run.py`](/run.py)) because it gave me flexibility that Make just doesn’t have: parallel compilation across all CPU cores, conditional build profiles, integrated QEMU launching with timeout support, and easy cross-platform compatibility without any path gymnastics.
+
+The concept is the same as any build system: find all source files, compile them, link, package. But now it’s Python driving the whole thing instead of Make recipes.
+
+* `setup.py` handles **toolchain provisioning**.
+* `run.py` handles the **day-to-day build, packaging, and QEMU run loop**.
+
+That split is deliberate. Kernel development has two separate problems:
+
+1. We want a predictable cross-platform toolchain onto the machine, and
+2. we want to easily fire up the kernel.
+
+We don't want to rely on the host OS to provide the right binaries for us (GCC, xorriso, GRUB, etc.), but rather, we want to ensure that a good and tested toolchain is accessible.
+
+## One Time Toolchain Provisioning
+
+The first script to know is [`setup.py`](/setup.py). Its job is not to compile GatOS itself. Its job is to make sure the portable prebuilt toolchain exists under `toolchain/` for the host operating system.
+
+### What It Does
+
+At startup, the script detects the host platform using Python’s `sys.platform` and selects an OS-specific archive:
+
+* Linux downloads `x86_64-linux.zip`
+* macOS downloads `x86_64-macOS.zip`
+* Windows downloads `x86_64-win.zip`
+
+Each archive is fetched from the project’s GitHub release assets and has a hardcoded SHA-256 checksum in the script. After downloading, `setup.py`:
+
+1. verifies the archive hash,
+2. extracts it into `toolchain/`,
+3. removes the temporary ZIP file,
+4. fixes executable permissions on Unix-like systems, and
+5. on macOS, removes quarantine attributes and ad-hoc signs binaries so Gatekeeper does not block the bundled tools.
+
+The final validation step checks that the expected binaries are present. That includes the cross-compiler, linker, GRUB tools, and QEMU.
+
+### Why This Exists
+
+Normally, OS dev tutorials tell you to manually build or install a cross-compiler, GRUB utilities, ISO tools, and QEMU. That works, but it creates a lot of machine-specific drift. `setup.py` avoids that by pulling in a known-good, prepackaged toolchain so the build behaves the same way across supported hosts.
+
+For more information, check out the project's [README](/README.md#getting-started) file.
+
+### How to Run It
+
 ```bash
-# Make the script executable (only needed once)
-chmod +x setup.sh
-
-# Run the script. It will ask for your sudo password to install packages.
-./setup.sh
+python3 setup.py
 ```
 
->[!IMPORTANT]
-> After running this script, you **must close and restart your terminal** for the newly installed tools (especially the cross-compiler) to be properly detected in your shell's path.
+If the toolchain directory already exists and looks valid, the script asks whether it should redownload and repair it or just keep the existing installation.
 
-### 2. `run.sh` - The Development Loop
-This script automates the daily development workflow: cleaning, building, and testing the kernel.
-
-**Purpose:** To provide a fast and consistent one-command build-test loop, significantly speeding up development and testing.
-
-**What it does:**
-1.  **Checks for Dependencies:** Verifies that `make` and `qemu` are available. If not, it reminds you to run `setup.sh` first.
-2.  **Cleans Previous Builds:** Runs `make clean` to remove any old object files and ensure a fresh build.
-3.  **Compiles Everything:** Executes `make` to build the latest source code into a bootable ISO.
-4.  **Launches the Kernel:** Automatically starts QEMU and boots the new ISO, allowing you to test your changes instantly.
-
-**Usage:**
-```bash
-# After running setup.sh and restarting your terminal, use this for development
-./run.sh
-```
-
->[!IMPORTANT]
-> GatOS is an ambitious, long-term project. As it grows in scope and complexity, the underlying build system and toolchain will be refined and extended to support new features, improve performance, and enhance portability. 
+>[!NOTE]
+> This script installs the portable toolchain into the repository itself, under `toolchain/x86_64-linux`, `toolchain/x86_64-macos`, or `toolchain/x86_64-win`, depending on the host OS. 
 >
-> This is not a how-to document, but it serves as a basis for the current build system. If you understand how it works, you won't have any trouble following future changes.
+> `run.py` then uses those local binaries directly instead of relying on globally installed host tools. This means that if you wish to delete the toolchain, you can just delete the `toolchain` folder. EVerything is self contained!
+
+## Build, Package, and Run
+
+Once `setup.py` has populated the toolchain, the main development loop goes through `run.py`.
+
+This script replaces the old Makefile-style workflow with a Python driver that can do all of the following in one place:
+
+* discover source files automatically,
+* compile in parallel,
+* apply build profiles,
+* link and strip the kernel,
+* generate the bootable ISO,
+* start QEMU,
+* optionally run headless, and
+* optionally enforce a timeout for automated test runs.
+
+### Basic Usage
+
+The default behavior is:
+
+```bash
+python3 run.py
+```
+
+That means it will:
+
+1. verify the portable toolchain,
+2. clean old build artifacts,
+3. rebuild the kernel and ISO, and
+4. boot the result in QEMU.
+
+### Supported Commands
+
+`run.py` recognizes four top-level commands:
+
+| Command | Description |
+| --- | --- |
+| `python3 run.py` | Default full cycle: clean, build, then run in QEMU. |
+| `python3 run.py build` | Clean and build the ISO, but do not launch QEMU. |
+| `python3 run.py clean` | Remove build artifacts, generated ISO output, temporary boot files, and `debug.log`. |
+| `python3 run.py help` | Print the built-in help menu. |
+
+### Build Profiles
+
+Build profiles are passed as positional arguments next to the command:
+
+| Profile | Effect |
+| --- | --- |
+| `default` | Standard debug-oriented build. |
+| `test` | Adds `-DTEST_BUILD` and uses the `fast` optimization set. |
+| `fast` | Uses `-O2` and related optimization flags. |
+| `vfast` | Uses aggressive `-O3`-style flags and asks for confirmation before continuing. |
+
+Examples:
+
+```bash
+python3 run.py
+python3 run.py build test
+python3 run.py fast
+python3 run.py vfast
+```
+
+### Run Options
+
+When QEMU is launched, two extra runtime switches are supported:
+
+| Option | Effect |
+| --- | --- |
+| `headless` | Adds `-nographic` and runs QEMU without the graphical window. |
+| `timeout=30s` | Stops QEMU after a fixed duration. Supported suffixes are `s`, `m`, and `h`. |
+
+Examples:
+
+```bash
+python3 run.py headless
+python3 run.py test headless timeout=10s
+```
+
+This is especially useful when you want automated test boots or CI style smoke runs without leaving QEMU open indefinitely.
+
+## What `run.py` Actually Does
+
+At a high level, the script performs the following steps.
+
+### 1. Verify the Local Toolchain
+
+Before doing anything else, `run.py` resolves the host-specific toolchain directory and checks that the expected binaries exist. If they do not, it aborts with a clear message telling you to run:
+
+```bash
+python3 setup.py
+```
+
+This is important because the build script does not assume your system `PATH` contains the right compiler, linker, GRUB utilities, or QEMU binary.
+
+### 2. Discover Sources Automatically
+
+The script walks `src/` recursively and picks up:
+
+* every `*.c` file, and
+* every `*.S` file.
+
+That means adding a new C or assembly source file anywhere under `src/` automatically makes it part of the next build. No Makefile edits, no hand-maintained source lists.
+
+### 3. Compile in Parallel
+
+Compilation uses Python’s `multiprocessing.Pool`, with one worker per CPU core.
+
+For each source file, the object output mirrors the source tree inside `build/`. For example, a file in `src/kernel/drivers/` becomes an object file under `build/kernel/drivers/`.
+
+Kernel and userspace code are treated slightly differently:
+
+* kernel code gets Link Time Optimizations (`-flto`) plus explicit floating point restrictions such as `-mno-sse`, `-mno-sse2`, `-mno-mmx`, and `-mno-80387`,
+* userspace code gets `-ffast-math`, and
+* assembly is compiled through GCC with preprocessor support enabled.
+
+That distinction matters because the kernel should not casually rely on FPU or SIMD state before the OS has complete control over saving and restoring it.
+
+>[!IMPORTANT]
+>We will talk about FPU and userspace later on in the documents. For now, you dont need to know any of this.
+
+### 4. Link and Strip the Kernel
+
+After compilation, all object files are linked into `dist/x86_64/kernel.bin` using the cross GCC driver with linker options forwarded through `-Wl,...`.
+
+The binary is then stripped to remove unnecessary symbol data from the final boot image.
+
+### 5. Build the Boot Media
+
+The packaging stage has two parts:
+
+1. `grub-mkstandalone` creates `BOOTX64.EFI` inside `targets/x86_64/iso/EFI/BOOT/`.
+2. `grub-mkrescue` turns the populated ISO tree into a bootable image under `dist/x86_64/`.
+
+The ISO filename is generated from the kernel version (eg. "GatOS-v2.0.0.iso"). Test builds also embed `Test-Build` in the filename (eg. "GatOS-v2.0.0-Test-Build.iso").
+
+### 6. Launch QEMU
+
+`run.py` automatically boots the newest generated ISO with QEMU, unless the `build` flag is passed in (which instructs it to just perform a build).
+
+QEMU is launched with certain flags including:
+
+* `-serial mon:stdio` to route `COM1` serial directly to standard output (your host's terminal),
+* `-serial file:debug.log` to route `COM2` serial output in a log file, and
+* `-cpu kvm64,+smep,+smap` to emulate a more realistic x86_64 environment.
+
+>[!IMPORTANT]
+>We will talk about serial and how the kernel uses it in later chapters.
+
+## Compiler and Linker Flags
+
+The baseline C compilation flags are:
+
+```text
+-m64 -ffreestanding -nostdlib -fno-pic -mcmodel=kernel -mno-red-zone
+-ffunction-sections -fdata-sections -I src/
+```
+
+These are the core freestanding kernel-development settings:
+
+* **`-m64`** generates 64-bit code.
+* **`-ffreestanding`** disables hosted-environment assumptions.
+* **`-nostdlib`** prevents implicit linkage against the host C runtime.
+* **`-fno-pic`** keeps the kernel at a fixed code model rather than position independent userspace conventions.
+* **`-mcmodel=kernel`** matches the higher-half 64-bit kernel layout discussed earlier.
+* **`-mno-red-zone`** avoids the x86_64 red zone, which is unsafe for kernels because interrupts can clobber it.
+* **`-ffunction-sections`** and **`-fdata-sections`** make dead-code elimination more effective.
+* **`-I src/`** sets the include root to the source tree.
+
+The linker stage effectively applies:
+
+```text
+-nostdlib -flto -g
+-Wl,-n,--gc-sections,--no-relax,-Ttargets/x86_64/linker.ld
+```
+
+Important parts here are:
+
+* **`--gc-sections`** to discard unreachable code and data,
+* **`--no-relax`** to avoid linker relaxations that could disturb the kernel’s carefully controlled layout, and
+* **`-T targets/x86_64/linker.ld`** to force the custom linker script we analyzed earlier in this chapter.
+
+## Summary of the Current Build Flow
+
+The modern GatOS workflow is now:
+
+1. **Provision toolchain:** `python3 setup.py` downloads and validates the host-specific portable toolchain into `toolchain/`.
+2. **Verify environment:** `python3 run.py` checks that those local binaries exist and are usable.
+3. **Compile:** all `*.c` and `*.S` files under `src/` are compiled in parallel into `build/`.
+4. **Link:** the objects are linked into `dist/x86_64/kernel.bin` with the linker script.
+5. **Stage boot assets:** GRUB files and the kernel are copied into the ISO directory tree under `targets/x86_64/iso/`.
+6. **Create ISO:** GRUB tooling produces a bootable image in `dist/x86_64/`.
+7. **Run:** if requested, QEMU boots the newest ISO and mirrors serial output to `debug.log`.
+
+>[!IMPORTANT]
+>You don't really have to know any of this. This chapter simply describes how GatOS's build system works internally. To run the kernel, all you need to do is call `setup.py` and `run.py`. That's all!

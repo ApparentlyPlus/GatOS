@@ -1,5 +1,7 @@
 /*
  * string.h - Standard C string and memory operations
+ *
+ * Author: u/ApparentlyPlus
  */
  
 #pragma once

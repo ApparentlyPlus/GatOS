@@ -1,18 +1,10 @@
 /*
  * vmm.h - Virtual Memory Manager
  *
- * The Virtual Memory Manager (VMM) provides comprehensive virtual memory management
- * for the operating system, serving as the highest-level abstraction over hardware
- * memory management units. It manages multiple address spaces, page table structures,
- * and virtual memory objects while providing a unified interface for memory allocation,
- * protection, and mapping operations.
+ * Manages virtual address spaces. Each instance owns a page table and a sorted tree
+ * of vm_objects (virtual memory regions). NULL = kernel VMM in all public APIs.
  *
- * Each VMM instance manages a complete address space with its own page table hierarchy
- * and maintains a linked list of VM objects representing contiguous virtual memory regions.
- * The kernel VMM instance is initialized first and manages the kernel's address space,
- * while additional instances can be created for user processes.
- *
- * The VMM should be initialized LAST, as it relies on both the PMM and the Slab Allocator.
+ * Init order: PMM → slab → VMM (depends on both).
  *
  * Author: u/ApparentlyPlus
  */
@@ -83,6 +75,8 @@ vmm_t* vmm_kernel_get(void);
 
 // Introspection
 
+size_t vmm_mmio_total(void);
+void vmm_add_mmio(size_t bytes);
 uintptr_t vmm_get_alloc_base(vmm_t* vmm);
 uintptr_t vmm_get_alloc_end(vmm_t* vmm);
 size_t vmm_get_alloc_size(vmm_t* vmm);
@@ -93,7 +87,7 @@ bool vmm_table_is_empty(uint64_t *table);
 bool vmm_get_physical(vmm_t* vmm, void* virt, uint64_t* out_phys);
 vm_object* vmm_find_mapped_object(vmm_t* vmm, void* addr);
 bool vmm_check_flags(vmm_t* vmm, void* addr, size_t required_flags);
-bool vmm_check_buffer(vmm_t* vmm, const void* ptr, size_t size, size_t required_flags);
+bool vmm_check_buffer(vmm_t* vmm_pub, const void* ptr, size_t size, size_t required_flags);
 
 // Page Table Manipulation
 

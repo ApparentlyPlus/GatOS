@@ -1,5 +1,7 @@
 /*
  * console.h - Framebuffer text mode printing console interface
+ *
+ * Author: u/ApparentlyPlus
  */
 
 #pragma once
@@ -34,31 +36,37 @@ typedef struct {
 } console_char_t;
 
 typedef struct {
-    size_t cursor_x;
-    size_t cursor_y;
-    uint8_t fg_color;
-    uint8_t bg_color;
+    size_t cx;
+    size_t cy;
+    uint8_t fg;
+    uint8_t bg;
 
     // Cursor State (Static Block)
-    bool cursor_enabled;
+    bool on;
 
-    // UTF-8 State
-    uint32_t utf8_codepoint;
-    int utf8_bytes_needed;
+    // UTF8 State
+    uint32_t u8cp;
+    int u8n;
 
     // ANSI State
-    uint8_t ansi_state;
+    uint8_t ansi_st;
 
     // Backbuffer
     console_char_t* buffer;
     size_t width;
     size_t height;
 
-    // Sticky header: rows [0, header_rows) are reserved and never scrolled
+    // Sticky header, rows [0, header_rows) are reserved and never scrolled
     size_t header_rows;
 
     spinlock_t lock;
-    int reentrancy_count;
+    int reent;
+
+    // Dirty tracking
+    uint8_t* dirty;
+
+    // When true, we skip draw_glyph
+    bool defer_render;
 } console_t;
 
 // Global Hardware Management
@@ -67,6 +75,7 @@ void console_init(multiboot_parser_t* parser);
 // Instance Management
 bool con_init(console_t* con);
 void con_putc(console_t* con, char character);
+void con_write_batch(console_t* con, const char* buf, size_t count);
 void con_set_color(console_t* con, uint8_t foreground, uint8_t background);
 void con_clear(console_t* con, uint8_t background);
 void con_refresh(console_t* con);
@@ -86,7 +95,7 @@ void console_enable_cursor(bool enabled);
 size_t console_get_width();
 size_t console_get_height();
 
-// Crash console api (lock-free, scheduler-free)
+// Crash console api (lock free, scheduler free)
 size_t con_crash_width(void);
 void con_crash_clear(uint8_t bg);
 void con_crash_puts(const char* s);

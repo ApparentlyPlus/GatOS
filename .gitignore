@@ -3,3 +3,5 @@ dist/*
 .vscode/*
 toolchain/*
 *.log
+*.bin
+*.EFI

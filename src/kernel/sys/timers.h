@@ -36,6 +36,8 @@ typedef struct {
     uint64_t reserved4;
 } __attribute__((packed)) hpet_regs_t;
 
+#define SCHED_QUANTUM_MS 10
+
 // Timer API
 
 void timer_init(void);
@@ -43,10 +45,10 @@ void sleep_ms(uint64_t ms);
 void sleep_us(uint64_t us);
 uint64_t get_uptime_ms(void);
 uint64_t get_uptime_ns(void);
+void timer_arm_next(bool going_idle);
 
 // Local APIC Timer API
 
-void lapic_timer_calibrate(void);
 void lapic_timer_oneshot(uint32_t us, uint8_t vector);
 void lapic_timer_periodic(uint32_t us, uint8_t vector);
 void lapic_timer_stop(void);

@@ -3,9 +3,9 @@
  *
  * Gathers detailed CPU information (vendor, brand, features, core count)
  * using the CPUID instruction and related MSRs. Results are cached in
- * a global CPUInfo structure accessible to the rest of GatOS.
+ * a global cpu_info_t structure accessible to the rest of GatOS.
  *
- * Author: ApparentlyPlus
+ * Author: u/ApparentlyPlus
  */
 
 #include <arch/x86_64/cpu/cpu.h>
@@ -13,17 +13,15 @@
 #include <kernel/debug.h>
 #include <klibc/string.h>
 
-static CPUInfo g_cpu;
-cpu_local_t g_cpu_local = {0};
+static cpu_info_t cpuinfo;
+cpu_local_t cpu_local = {0};
 
 /*
  * cpuid - Execute the CPUID instruction with given EAX and ECX inputs
  */
 void cpuid(uint32_t eax, uint32_t ecx, uint32_t* a, uint32_t* b, uint32_t* c, uint32_t* d)
 {
-    __asm__ volatile("cpuid"
-                     : "=a"(*a), "=b"(*b), "=c"(*c), "=d"(*d)
-                     : "a"(eax), "c"(ecx));
+    __asm__ volatile("cpuid" : "=a"(*a), "=b"(*b), "=c"(*c), "=d"(*d) : "a"(eax), "c"(ecx));
 }
 
 /*
@@ -31,9 +29,9 @@ void cpuid(uint32_t eax, uint32_t ecx, uint32_t* a, uint32_t* b, uint32_t* c, ui
  */
 uint64_t read_msr(uint32_t msr)
 {
-    uint32_t low, high;
-    __asm__ volatile("rdmsr" : "=a"(low), "=d"(high) : "c"(msr));
-    return ((uint64_t)high << 32) | low;
+    uint32_t lo, hi;
+    __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(msr));
+    return ((uint64_t)hi << 32) | lo;
 }
 
 /*
@@ -41,9 +39,9 @@ uint64_t read_msr(uint32_t msr)
  */
 void write_msr(uint32_t msr, uint64_t value)
 {
-    uint32_t low = (uint32_t)value;
-    uint32_t high = (uint32_t)(value >> 32);
-    __asm__ volatile("wrmsr" :: "c"(msr), "a"(low), "d"(high));
+    uint32_t lo = (uint32_t)value;
+    uint32_t hi = (uint32_t)(value >> 32);
+    __asm__ volatile("wrmsr" :: "c"(msr), "a"(lo), "d"(hi));
 }
 
 /*
@@ -87,9 +85,9 @@ void write_cr4(uint64_t val)
  */
 uint64_t read_xcr0(void)
 {
-    uint32_t low, high;
-    __asm__ volatile("xgetbv" : "=a"(low), "=d"(high) : "c"(0));
-    return ((uint64_t)high << 32) | low;
+    uint32_t lo, hi;
+    __asm__ volatile("xgetbv" : "=a"(lo), "=d"(hi) : "c"(0));
+    return ((uint64_t)hi << 32) | lo;
 }
 
 /*
@@ -97,9 +95,9 @@ uint64_t read_xcr0(void)
  */
 void write_xcr0(uint64_t value)
 {
-    uint32_t low = (uint32_t)value;
-    uint32_t high = (uint32_t)(value >> 32);
-    __asm__ volatile("xsetbv" :: "a"(low), "d"(high), "c"(0));
+    uint32_t lo = (uint32_t)value;
+    uint32_t hi = (uint32_t)(value >> 32);
+    __asm__ volatile("xsetbv" :: "a"(lo), "d"(hi), "c"(0));
 }
 
 /*
@@ -107,115 +105,106 @@ void write_xcr0(uint64_t value)
  */
 void cpu_init(void)
 {
-    kmemset(&g_cpu, 0, sizeof(g_cpu));
+    // Init the struct
+    kmemset(&cpuinfo, 0, sizeof(cpuinfo));
 
     uint32_t a, b, c, d;
 
-    // Vendor string
+    // 4b segments
     cpuid(0, 0, &a, &b, &c, &d);
-    *((uint32_t*)&g_cpu.vendor[0]) = b;
-    *((uint32_t*)&g_cpu.vendor[4]) = d;
-    *((uint32_t*)&g_cpu.vendor[8]) = c;
-    g_cpu.vendor[12] = '\0';
+    *((uint32_t*)&cpuinfo.vendor[0]) = b;
+    *((uint32_t*)&cpuinfo.vendor[4]) = d;
+    *((uint32_t*)&cpuinfo.vendor[8]) = c;
+    cpuinfo.vendor[12] = '\0';
     uint32_t max_basic = a;
 
-    // Basic feature detection
+    // parse model info
     cpuid(1, 0, &a, &b, &c, &d);
-    g_cpu.family   = ((a >> 8) & 0xF) + ((a >> 20) & 0xFF);
-    g_cpu.model    = ((a >> 4) & 0xF) | ((a >> 12) & 0xF0);
-    g_cpu.stepping = (a & 0xF);
+    cpuinfo.family = ((a >> 8) & 0xF) + ((a >> 20) & 0xFF);
+    cpuinfo.model = ((a >> 4) & 0xF) | ((a >> 12) & 0xF0);
+    cpuinfo.stepping = (a & 0xF);
 
-    if (d & (1 << 6))  g_cpu.features |= CPU_FEAT_PAE;
-    if (d & (1 << 25)) g_cpu.features |= CPU_FEAT_SSE;
-    if (d & (1 << 26)) g_cpu.features |= CPU_FEAT_SSE2;
-    if (c & (1 << 0))  g_cpu.features |= CPU_FEAT_SSE3;
-    if (c & (1 << 9))  g_cpu.features |= CPU_FEAT_SSSE3;
-    if (c & (1 << 19)) g_cpu.features |= CPU_FEAT_SSE4_1;
-    if (c & (1 << 20)) g_cpu.features |= CPU_FEAT_SSE4_2;
-    if (c & (1 << 28)) g_cpu.features |= CPU_FEAT_AVX;
-    if (c & (1 << 5))  g_cpu.features |= CPU_FEAT_VMX;
+    // feats
+    if (d & (1 << 6))  cpuinfo.features |= CF_PAE;
+    if (d & (1 << 25)) cpuinfo.features |= CF_SSE;
+    if (d & (1 << 26)) cpuinfo.features |= CF_SSE2;
+    if (c & (1 << 0))  cpuinfo.features |= CF_SSE3;
+    if (c & (1 << 9))  cpuinfo.features |= CF_SSSE3;
+    if (c & (1 << 19)) cpuinfo.features |= CF_SSE4_1;
+    if (c & (1 << 20)) cpuinfo.features |= CF_SSE4_2;
+    if (c & (1 << 28)) cpuinfo.features |= CF_AVX;
+    if (c & (1 << 5))  cpuinfo.features |= CF_VMX;
 
-    // Structured Extended Feature Flags
     if (max_basic >= 7) {
         cpuid(7, 0, &a, &b, &c, &d);
-        if (b & (1 << 7))  g_cpu.features |= CPU_FEAT_SMEP;
-        if (b & (1 << 20)) g_cpu.features |= CPU_FEAT_SMAP;
+        if (b & (1 << 7))  cpuinfo.features |= CF_SMEP;
+        if (b & (1 << 20)) cpuinfo.features |= CF_SMAP;
     }
 
-    // Extended features (AMD/NX/64-bit/SVM)
+    // NX support hacky check, blame x86 for this atrocity
     cpuid(0x80000000, 0, &a, &b, &c, &d);
     uint32_t max_ext = a;
 
     if (max_ext >= 0x80000001) {
         cpuid(0x80000001, 0, &a, &b, &c, &d);
-        if (d & (1 << 20)) g_cpu.features |= CPU_FEAT_NX;
-        if (d & (1 << 29)) g_cpu.features |= CPU_FEAT_64BIT;
-        if (c & (1 << 2))  g_cpu.features |= CPU_FEAT_SVM;
+        if (d & (1 << 20)) cpuinfo.features |= CF_NX;
+        if (d & (1 << 29)) cpuinfo.features |= CF_64BIT;
+        if (c & (1 << 2))  cpuinfo.features |= CF_SVM;
     }
 
-    // Brand string (0x80000002 - 0x80000004)
     if (max_ext >= 0x80000004) {
-        uint32_t* brand_ptr = (uint32_t*)g_cpu.brand;
+        uint32_t* brand_ptr = (uint32_t*)cpuinfo.brand;
         for (uint32_t i = 0; i < 3; i++) {
-            cpuid(0x80000002 + i, 0, &brand_ptr[i * 4 + 0],
-                                    &brand_ptr[i * 4 + 1],
-                                    &brand_ptr[i * 4 + 2],
-                                    &brand_ptr[i * 4 + 3]);
+            cpuid(0x80000002 + i, 0, &brand_ptr[i * 4 + 0], &brand_ptr[i * 4 + 1], &brand_ptr[i * 4 + 2], &brand_ptr[i * 4 + 3]);
         }
-        g_cpu.brand[48] = '\0';
+        cpuinfo.brand[48] = '\0';
     }
 
-    // Core count detection
-    g_cpu.core_count = 1;
+    cpuinfo.core_count = 1;
 
     if (max_basic >= 0x0B) {
         cpuid(0x0B, 0, &a, &b, &c, &d);
-        if (b) g_cpu.core_count = b;
+        if (b) cpuinfo.core_count = b;
     } else if (max_basic >= 0x04) {
         cpuid(0x04, 0, &a, &b, &c, &d);
-        g_cpu.core_count = ((b >> 26) & 0x3F) + 1;
+        cpuinfo.core_count = ((b >> 26) & 0x3F) + 1;
     }
 
-	// Enable SSE
-	if (cpu_has_feature(CPU_FEAT_SSE)) {
-		cpu_enable_feature(CPU_FEAT_SSE);
-	}
-
-	// Enable AVX if supported
-	if (cpu_has_feature(CPU_FEAT_AVX)) {
-		cpu_enable_feature(CPU_FEAT_AVX);
-	}
-
-    // Enable SMEP if supported
-    if (cpu_has_feature(CPU_FEAT_SMEP)) {
-        cpu_enable_feature(CPU_FEAT_SMEP);
+    // SSE is enabled at boot time (it's a requirement for GatOS to work)
+    // but it's good to do it here too
+    if (cpu_has_feature(CF_SSE)) {
+        cpu_enable_feature(CF_SSE);
     }
 
-    // Enable SMAP if supported
-    if (cpu_has_feature(CPU_FEAT_SMAP)) {
-        cpu_enable_feature(CPU_FEAT_SMAP);
+    if (cpu_has_feature(CF_AVX)) {
+        cpu_enable_feature(CF_AVX);
     }
 
-    // Set active GS_BASE to our cpu_local structure for Ring 0.
-    // Set KERNEL_GS_BASE to 0 (will be used to store User GS during Ring 0 execution).
-    write_msr(MSR_GS_BASE, (uint64_t)&g_cpu_local);
+    if (cpu_has_feature(CF_SMEP)) {
+        cpu_enable_feature(CF_SMEP);
+    }
+
+    if (cpu_has_feature(CF_SMAP)) {
+        cpu_enable_feature(CF_SMAP);
+    }
+
+    // GS_BASE -> cpu_local in ring 0, KERNEL_GS_BASE holds user GS on entry
+    write_msr(MSR_GS_BASE, (uint64_t)&cpu_local);
     write_msr(MSR_KERNEL_GS_BASE, 0);
 
-    // Log gathered CPU information
-    LOGF("[CPU] Vendor: %s\n", g_cpu.vendor);
-    LOGF("[CPU] Brand:  %s\n", g_cpu.brand);
-    LOGF("[CPU] Family: %u  Model: %u  Stepping: %u\n",
-            g_cpu.family, g_cpu.model, g_cpu.stepping);
-    LOGF("[CPU] Cores:  %u\n", g_cpu.core_count);
-    LOGF("[CPU] Features: 0x%lX\n", g_cpu.features);
+    LOGF("[CPU] Vendor: %s\n", cpuinfo.vendor);
+    LOGF("[CPU] Brand:  %s\n", cpuinfo.brand);
+    LOGF("[CPU] Family: %u  Model: %u  Stepping: %u\n", cpuinfo.family, cpuinfo.model, cpuinfo.stepping);
+    LOGF("[CPU] Cores:  %u\n", cpuinfo.core_count);
+    LOGF("[CPU] Features: 0x%lX\n", cpuinfo.features);
 }
 
 /*
- * cpu_get_info - Get a pointer to the cached CPUInfo structure
+ * cpu_get_info - Get a pointer to the cached cpu_info_t structure
  */
-const CPUInfo* cpu_get_info(void)
+const cpu_info_t* cpu_get_info(void)
 {
-    return &g_cpu;
+    return &cpuinfo;
 }
 
 /*
@@ -223,7 +212,7 @@ const CPUInfo* cpu_get_info(void)
  */
 bool cpu_has_feature(cpu_feature_t feature)
 {
-    return (g_cpu.features & feature) != 0;
+    return (cpuinfo.features & feature) != 0;
 }
 
 /*
@@ -237,18 +226,18 @@ bool cpu_enable_feature(cpu_feature_t feature)
     uint64_t cr0, cr4, xcr0, efer;
 
     switch (feature) {
-        case CPU_FEAT_PAE:
+        case CF_PAE:
             cr4 = read_cr4();
             cr4 |= (1 << 5); // CR4.PAE
             write_cr4(cr4);
             return true;
 
-        case CPU_FEAT_SSE:
-        case CPU_FEAT_SSE2:
-        case CPU_FEAT_SSE3:
-        case CPU_FEAT_SSSE3:
-        case CPU_FEAT_SSE4_1:
-        case CPU_FEAT_SSE4_2:
+        case CF_SSE:
+        case CF_SSE2:
+        case CF_SSE3:
+        case CF_SSSE3:
+        case CF_SSE4_1:
+        case CF_SSE4_2:
             cr0 = read_cr0();
             cr4 = read_cr4();
             cr0 &= ~(1 << 2); // Clear EM (Emulation)
@@ -259,42 +248,42 @@ bool cpu_enable_feature(cpu_feature_t feature)
             write_cr4(cr4);
             return true;
 
-        case CPU_FEAT_AVX:
-        case CPU_FEAT_AVX2:
+        case CF_AVX:
+        case CF_AVX2:
             cr4 = read_cr4();
             cr4 |= (1 << 18); // CR4.OSXSAVE
             write_cr4(cr4);
             xcr0 = read_xcr0();
-            xcr0 |= (1 << 0) | (1 << 1); // enable x87 + SSE
+            xcr0 |= (1 << 0) | (1 << 1); // enable x87 and SSE
             xcr0 |= (1 << 2); // enable AVX state
             write_xcr0(xcr0);
             return true;
 
-        case CPU_FEAT_NX:
+        case CF_NX:
             efer = read_msr(MSR_EFER);
             efer |= EFER_NXE;
             write_msr(MSR_EFER, efer);
             return true;
 
-        case CPU_FEAT_VMX:
+        case CF_VMX:
             cr4 = read_cr4();
             cr4 |= (1 << 13); // CR4.VMXE
             write_cr4(cr4);
             return true;
 
-        case CPU_FEAT_SVM:
+        case CF_SVM:
             efer = read_msr(0xC0000080);
             efer |= (1 << 12); // EFER.SVME
             write_msr(0xC0000080, efer);
             return true;
 
-        case CPU_FEAT_SMEP:
+        case CF_SMEP:
             cr4 = read_cr4();
             cr4 |= (1 << 20); // CR4.SMEP
             write_cr4(cr4);
             return true;
 
-        case CPU_FEAT_SMAP:
+        case CF_SMAP:
             cr4 = read_cr4();
             cr4 |= (1 << 21); // CR4.SMAP
             write_cr4(cr4);
@@ -313,44 +302,44 @@ bool cpu_is_feature_enabled(cpu_feature_t feature)
     uint64_t cr0, cr4, xcr0, efer;
 
     switch (feature) {
-        case CPU_FEAT_PAE:
+        case CF_PAE:
             cr4 = read_cr4();
             return (cr4 & (1 << 5)) != 0;
 
-        case CPU_FEAT_SSE:
-        case CPU_FEAT_SSE2:
-        case CPU_FEAT_SSE3:
-        case CPU_FEAT_SSSE3:
-        case CPU_FEAT_SSE4_1:
-        case CPU_FEAT_SSE4_2:
+        case CF_SSE:
+        case CF_SSE2:
+        case CF_SSE3:
+        case CF_SSSE3:
+        case CF_SSE4_1:
+        case CF_SSE4_2:
             cr0 = read_cr0();
             cr4 = read_cr4();
             return ((cr4 & (1 << 9)) && (cr4 & (1 << 10)) && !(cr0 & (1 << 2)));
 
-        case CPU_FEAT_AVX:
-        case CPU_FEAT_AVX2:
-            cr4  = read_cr4();
+        case CF_AVX:
+        case CF_AVX2:
+            cr4 = read_cr4();
             xcr0 = read_xcr0();
             return ((cr4 & (1 << 18)) &&
                     (xcr0 & (1 << 0)) && (xcr0 & (1 << 1)) && (xcr0 & (1 << 2)));
 
-        case CPU_FEAT_NX:
+        case CF_NX:
             efer = read_msr(MSR_EFER);
             return (efer & EFER_NXE) != 0;
 
-        case CPU_FEAT_VMX:
+        case CF_VMX:
             cr4 = read_cr4();
             return (cr4 & (1 << 13)) != 0;
 
-        case CPU_FEAT_SVM:
+        case CF_SVM:
             efer = read_msr(0xC0000080);
             return (efer & (1 << 12)) != 0;
 
-        case CPU_FEAT_SMEP:
+        case CF_SMEP:
             cr4 = read_cr4();
             return (cr4 & (1 << 20)) != 0;
 
-        case CPU_FEAT_SMAP:
+        case CF_SMAP:
             cr4 = read_cr4();
             return (cr4 & (1 << 21)) != 0;
 

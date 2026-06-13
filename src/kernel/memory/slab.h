@@ -59,7 +59,7 @@ typedef struct {
     uint64_t partial_slabs;
     uint64_t full_slabs;
     uint64_t empty_slabs;
-} slab_cache_stats_t;
+} cache_stats_t;
 
 // Global slab allocator statistics
 typedef struct {
@@ -88,7 +88,7 @@ slab_status_t slab_free(slab_cache_t* cache, void* obj);
 
 // Statistics and Debugging
 
-void slab_cache_stats(slab_cache_t* cache, slab_cache_stats_t* out_stats);
+void slab_cache_stats(slab_cache_t* cache, cache_stats_t* out_stats);
 void slab_get_stats(slab_stats_t* out_stats);
 void slab_dump_stats(void);
 void slab_cache_dump(slab_cache_t* cache);

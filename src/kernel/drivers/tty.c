@@ -16,15 +16,15 @@
 #include <klibc/string.h>
 
 // TTY Manager State
-static tty_t* g_tty_list = NULL;
-static spinlock_t g_tty_list_lock = {0};
-static bool g_tty_list_lock_initialized = false;
+static tty_t* tty_list = NULL;
+static spinlock_t tty_lock = {0};
+static bool tty_lock_ok = false;
 
-tty_t* g_active_tty = NULL;
-tty_t* g_kernel_tty = NULL; // Protected primary console
+tty_t* volatile active_tty = NULL;
+tty_t* kernel_tty = NULL;
 
 /*
- * tty_init - Internal helper to initialize a TTY structure.
+ * tty_init - Internal helper to initialize a TTY structure
  */
 static void tty_init(tty_t* tty, console_t* console) {
     kmemset(tty->buffer, 0, TTY_BUFFER_SIZE);
@@ -33,43 +33,41 @@ static void tty_init(tty_t* tty, console_t* console) {
     tty->console = console;
     tty->next = NULL;
     tty->prev = NULL;
-    
+    tty->wait_head = NULL;
+
     spinlock_init(&tty->lock, "tty_lock");
     ldisc_init(&tty->ldisc);
 }
 
 /*
- * ensure_lock_init - Atomically ensures the global list lock is ready.
+ * ensure_lock - Atomically ensures the global list lock is ready
  */
-static void ensure_lock_init(void) {
-    if (!g_tty_list_lock_initialized) {
-        spinlock_init(&g_tty_list_lock, "tty_list_lock");
-        g_tty_list_lock_initialized = true;
+static void ensure_lock(void) {
+    if (!tty_lock_ok) {
+        spinlock_init(&tty_lock, "tty_list_lock");
+        tty_lock_ok = true;
     }
 }
 
 /*
- * tty_create - Allocates and registers a new dynamic TTY.
+ * tty_create - Allocates and registers a new dynamic TTY
  */
 tty_t* tty_create(void) {
     if (heap_kernel_get() == NULL) {
         panic("Attempted to create TTY before heap was ready!");
     }
 
-    ensure_lock_init();
+    ensure_lock();
 
-    // Allocate TTY structure
     tty_t* tty = (tty_t*)kmalloc(sizeof(tty_t));
     if (!tty) return NULL;
 
-    // Allocate associated Console instance
     console_t* console = (console_t*)kmalloc(sizeof(console_t));
     if (!console) {
         kfree(tty);
         return NULL;
     }
 
-    // Try to initialize console
     if (!con_init(console)) {
         kfree(console);
         kfree(tty);
@@ -77,55 +75,64 @@ tty_t* tty_create(void) {
     }
     tty_init(tty, console);
 
-    // Add to global linked list
-    bool flags = spinlock_acquire(&g_tty_list_lock);
-    if (g_tty_list == NULL) {
-        g_tty_list = tty;
-        tty->next = tty; // Circular doubly linked list
+    bool flags = spinlock_acquire(&tty_lock);
+    if (tty_list == NULL) {
+        tty_list = tty;
+        tty->next = tty;
         tty->prev = tty;
     } else {
-        tty_t* tail = g_tty_list->prev;
-        tty->next = g_tty_list;
+        tty_t* tail = tty_list->prev;
+        tty->next = tty_list;
         tty->prev = tail;
         tail->next = tty;
-        g_tty_list->prev = tty;
+        tty_list->prev = tty;
     }
-    spinlock_release(&g_tty_list_lock, flags);
+    spinlock_release(&tty_lock, flags);
 
     return tty;
 }
 
 /*
- * tty_destroy - Frees a TTY and its associated console.
+ * tty_destroy - Frees a TTY and its associated console
  */
 void tty_destroy(tty_t* tty) {
     if (!tty) return;
     
-    // Kill any processes associated with this TTY
-    process_terminate_by_tty(tty);
+    procs_kill_tty(tty);
 
-    ensure_lock_init();
-    bool flags = spinlock_acquire(&g_tty_list_lock);
-    
-    // Remove from linked list
+    // flush any threads still parked in the wait queue into the dead queue
+    // they're already T_DEAD from procs_kill_tty, so sched_add routes them straight to reaping
+    bool iflags = intr_save();
+    thread_t* wt = tty->wait_head;
+    tty->wait_head = NULL;
+    while (wt) {
+        thread_t* next = wt->rnext;
+        wt->rnext = NULL;
+        sched_add(wt);
+        wt = next;
+    }
+    intr_restore(iflags);
+
+    ensure_lock();
+    bool flags = spinlock_acquire(&tty_lock);
+
     if (tty->next == tty) {
-        g_tty_list = NULL;
+        tty_list = NULL;
     } else {
         tty->prev->next = tty->next;
         tty->next->prev = tty->prev;
-        if (g_tty_list == tty) g_tty_list = tty->next;
+        if (tty_list == tty) tty_list = tty->next;
     }
 
-    if (g_active_tty == tty) {
-        g_active_tty = g_tty_list;
-        if (g_active_tty) {
-            con_refresh(g_active_tty->console);
+    if (active_tty == tty) {
+        active_tty = tty_list;
+        if (active_tty) {
+            con_refresh(active_tty->console);
         }
     }
 
-    spinlock_release(&g_tty_list_lock, flags);
+    spinlock_release(&tty_lock, flags);
 
-    // Free resources
     if (tty->console) {
         if (tty->console->buffer) kfree(tty->console->buffer);
         kfree(tty->console);
@@ -134,12 +141,12 @@ void tty_destroy(tty_t* tty) {
 }
 
 /*
- * tty_switch - Switches focus to a specific TTY.
+ * tty_switch - Switches focus to a specific TTY
  */
 void tty_switch(tty_t* tty) {
-    if (!tty || g_active_tty == tty) return;
+    if (!tty || active_tty == tty) return;
 
-    g_active_tty = tty;
+    active_tty = tty;
 
     if (tty->console) {
         con_refresh(tty->console);
@@ -147,34 +154,61 @@ void tty_switch(tty_t* tty) {
 }
 
 /*
- * tty_cycle - Cycles focus to the next available non-hidden TTY.
+ * tty_cycle - Cycles focus to the next available non-hidden TTY
  */
 void tty_cycle(void) {
-    ensure_lock_init();
-    bool flags = spinlock_acquire(&g_tty_list_lock);
-    if (g_active_tty) {
-        tty_t* next = g_active_tty->next;
-        // Skip hidden TTYs and stop if we've wrapped back to current
-        while (next != g_active_tty && next->hidden)
+    ensure_lock();
+    bool flags = spinlock_acquire(&tty_lock);
+    if (active_tty) {
+        tty_t* next = active_tty->next;
+        while (next != active_tty && next->hidden)
             next = next->next;
-        if (next != g_active_tty && !next->hidden)
+        if (next != active_tty && !next->hidden)
             tty_switch(next);
     }
-    spinlock_release(&g_tty_list_lock, flags);
+    spinlock_release(&tty_lock, flags);
 }
 
 /*
- * tty_wait_for_input - Busy-waits or yields for data in the circular buffer.
+ * tty_wake - Wake all threads blocked waiting for input on this TTY.
+ * Must be called with tty->lock held (interrupts already disabled).
  */
-static void tty_wait_for_input(tty_t* tty) {
-    while (tty->head == tty->tail) {
-        // Yield to other threads while waiting for keyboard input
-        sched_yield();
+static void tty_wake(tty_t* tty) {
+    thread_t* t = tty->wait_head;
+    tty->wait_head = NULL;
+    while (t) {
+        thread_t* next = t->rnext;
+        t->rnext = NULL;
+        sched_add(t);
+        t = next;
     }
 }
 
 /*
- * tty_input - Entry point for character input.
+ * tty_block - Block the current thread until data arrives on this TTY.
+ * Re-checks the buffer with interrupts disabled to close the TOCTOU window
+ * between the caller's empty-check and the actual sleep.
+ */
+static void tty_block(tty_t* tty) {
+    if (!sched_active()) return;
+    thread_t* t = sched_current();
+    if (!t) return;
+
+    bool iflag = intr_save();
+    if (tty->head != tty->tail) {
+        // Data arrived between caller's check and here — no need to block.
+        intr_restore(iflag);
+        return;
+    }
+    t->state = T_BLOCKED;
+    t->rnext = tty->wait_head;
+    tty->wait_head = t;
+    intr_restore(iflag);
+    sched_yield();
+}
+
+/*
+ * tty_input - Entry point for character input
  */
 void tty_input(tty_t* tty, char c) {
     if (!tty) return;
@@ -182,7 +216,7 @@ void tty_input(tty_t* tty, char c) {
 }
 
 /*
- * tty_push_char_raw - Internal logic to commit a char to the read buffer.
+ * tty_push_char_raw - Internal logic to commit a char to the read buffer
  */
 void tty_push_char_raw(tty_t* tty, char c) {
     if (!tty) return;
@@ -192,17 +226,19 @@ void tty_push_char_raw(tty_t* tty, char c) {
     if (next_idx != tty->tail) {
         tty->buffer[tty->head] = c;
         tty->head = next_idx;
+        tty_wake(tty);
     }
 
     spinlock_release(&tty->lock, flags);
 }
 
 /*
- * tty_read_char - Pops one character from the TTY buffer.
+ * tty_read_char - Pops one character from the TTY buffer, blocking if empty.
  */
 char tty_read_char(tty_t* tty) {
     if (!tty) return 0;
-    tty_wait_for_input(tty);
+    while (tty->head == tty->tail)
+        tty_block(tty);
     bool flags = spinlock_acquire(&tty->lock);
     char c = tty->buffer[tty->tail];
     tty->tail = (tty->tail + 1) % TTY_BUFFER_SIZE;
@@ -211,26 +247,37 @@ char tty_read_char(tty_t* tty) {
 }
 
 /*
- * tty_read - High-level buffered read.
+ * tty_read - Block until data is available, then drain as many bytes as
+ * possible in a single lock acquisition. Stops early on newline.
  */
 size_t tty_read(tty_t* tty, char* buf, size_t count) {
-    if (!tty) return 0;
+    if (!tty || !buf || count == 0) return 0;
     size_t i = 0;
     while (i < count) {
-        buf[i++] = tty_read_char(tty);
-        if (buf[i-1] == '\n') break;
+        while (tty->head == tty->tail)
+            tty_block(tty);
+
+        bool flags = spinlock_acquire(&tty->lock);
+        while (i < count && tty->head != tty->tail) {
+            char c = tty->buffer[tty->tail];
+            tty->tail = (tty->tail + 1) % TTY_BUFFER_SIZE;
+            buf[i++] = c;
+            if (c == '\n') {
+                spinlock_release(&tty->lock, flags);
+                return i;
+            }
+        }
+        spinlock_release(&tty->lock, flags);
     }
     return i;
 }
 
 /*
- * tty_write - High-level console write.
+ * tty_write - High-level console write
  */
 void tty_write(tty_t* tty, const char* buf, size_t count) {
     if (!tty || !tty->console) return;
-    for (size_t i = 0; i < count; i++) {
-        con_putc(tty->console, buf[i]);
-    }
+    con_write_batch(tty->console, buf, count);
 }
 
 /*
@@ -243,8 +290,7 @@ void tty_header_init(tty_t* tty, size_t rows) {
 }
 
 /*
- * tty_header_write - Writes centred text into sticky header row
- * and redraws it immediately. Safe to call at any time to update the header.
+ * tty_header_write - Writes centred text into sticky header row and redraws it immediately
  */
 void tty_header_write(tty_t* tty, size_t row, const char* text, uint8_t fg, uint8_t bg) {
     if (!tty || !tty->console) return;
@@ -252,7 +298,7 @@ void tty_header_write(tty_t* tty, size_t row, const char* text, uint8_t fg, uint
 }
 
 /*
- * ldisc_init - Resets the line discipline state.
+ * ldisc_init - Resets the line discipline state
  */
 void ldisc_init(ldisc_t* ld) {
     kmemset(ld->line_buffer, 0, LDISC_LINE_MAX);
@@ -261,8 +307,7 @@ void ldisc_init(ldisc_t* ld) {
 }
 
 /*
- * ldisc_input - Processes a character through the line discipline.
- * Handled characters are eventually pushed to the TTY read buffer.
+ * ldisc_input - Processes a character through the line discipline
  */
 void ldisc_input(tty_t* tty, char c) {
     ldisc_t* ld = &tty->ldisc;

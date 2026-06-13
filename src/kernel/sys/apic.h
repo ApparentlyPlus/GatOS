@@ -1,7 +1,7 @@
 /*
  * apic.h - Local and I/O APIC configuration
  *
- * Author: ApparentlyPlus
+ * Author: u/ApparentlyPlus
  */
 
 #pragma once
@@ -62,6 +62,7 @@
 // LVT Masks
 #define LVT_MASK                (1 << 16)
 #define LVT_TIMER_PERIODIC      (1 << 17)
+#define LVT_TIMER_TSC_DEADLINE  (1 << 18)
 
 // I/O APIC Register Selectors
 #define IOAPIC_REGSEL           0x00
@@ -136,14 +137,14 @@ uint32_t lapic_read(uint32_t reg);
 void lapic_send_ipi(uint32_t dest_id, uint8_t vector);
 
 // virtual address of the mapped LAPIC MMIO region
-extern uint64_t g_lapic_base;
+extern uint64_t lapic_base;
 
 /*
  * lapic_get_id - reads the Local APIC ID from MMIO
  */
 static inline uint32_t lapic_get_id(void) {
-    if (g_lapic_base == 0) return 0;
-    return *(volatile uint32_t *)(uintptr_t)(g_lapic_base + LAPIC_ID) >> 24;
+    if (lapic_base == 0) return 0;
+    return *(volatile uint32_t *)(uintptr_t)(lapic_base + LAPIC_ID) >> 24;
 }
 
 // I/O APIC
@@ -154,7 +155,8 @@ void ioapic_mask(uint8_t irq);
 void ioapic_unmask(uint8_t irq);
 
 // Timer
-void lapic_timer_set_calibration(uint64_t ticks_per_ms);
+void lapic_set_tpm(uint64_t ticks_per_ms);
 void lapic_timer_oneshot(uint32_t us, uint8_t vector);
 void lapic_timer_periodic(uint32_t us, uint8_t vector);
 void lapic_timer_stop(void);
+void lapic_tsc_arm(uint64_t tsc_deadline, uint8_t vector);

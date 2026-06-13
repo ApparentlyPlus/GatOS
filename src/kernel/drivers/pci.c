@@ -1,11 +1,18 @@
 /*
  * pci.c - PCI/PCIe Subsystem Implementation
+ *
+ * This file implements legacy I/O config space access, device enumeration, 
+ * BAR decoding, and MSI support for PCI devices.
+ * 
+ * Author: u/ApparentlyPlus
  */
 
 #include <kernel/drivers/pci.h>
 #include <arch/x86_64/cpu/io.h>
 #include <arch/x86_64/memory/paging.h>
 #include <kernel/debug.h>
+
+#pragma region I don't even know bro
 
 static inline void outl(uint16_t port, uint32_t val) {
     __asm__ volatile("outl %0, %1" : : "a"(val), "Nd"(port));
@@ -59,6 +66,11 @@ void pci_write8(pci_dev_t *d, uint8_t o, uint8_t v) { w8(d->bus, d->dev, d->func
 void pci_write16(pci_dev_t *d, uint8_t o, uint16_t v) { w16(d->bus, d->dev, d->func, o, v); }
 void pci_write32(pci_dev_t *d, uint8_t o, uint32_t v) { w32(d->bus, d->dev, d->func, o, v); }
 
+#pragma region Actual code
+
+/*
+ * decode_bar - Decodes a PCI BAR (Base Address Register)
+ */
 static bool decode_bar(uint8_t b, uint8_t d, uint8_t f, uint8_t idx, uint64_t *phys, uint32_t *sz) {
     uint8_t off = PCI_BAR0 + idx * 4;
     uint32_t lo = r32(b, d, f, off);
@@ -83,6 +95,9 @@ static bool decode_bar(uint8_t b, uint8_t d, uint8_t f, uint8_t idx, uint64_t *p
     return true;
 }
 
+/*
+ * find_cap - Searches the PCI capability list for a given capability ID
+ */
 static uint8_t find_cap(uint8_t b, uint8_t d, uint8_t f, uint8_t id) {
     if (!(r16(b, d, f, PCI_STATUS) & PCI_STAT_CAP_LIST)) return 0;
 
@@ -95,10 +110,16 @@ static uint8_t find_cap(uint8_t b, uint8_t d, uint8_t f, uint8_t id) {
     return 0;
 }
 
+/*
+ * pci_init - Just logs lol
+ */
 void pci_init(void) {
     LOGF("[PCI] Subsystem initialized\n");
 }
 
+/*
+ * pci_get_xhci_controllers - Finds all xHCI USB controllers (takes a moment)
+ */
 int pci_get_xhci_controllers(pci_dev_t *out_arr, int max_out) {
     int found = 0;
     for (int b = 0; b < 256; b++) {
@@ -144,6 +165,9 @@ int pci_get_xhci_controllers(pci_dev_t *out_arr, int max_out) {
     return found;
 }
 
+/*
+ * pci_enable - Enables a PCI device
+ */
 void pci_enable(pci_dev_t *d) {
     uint16_t cmd = pci_read16(d, PCI_COMMAND);
     cmd |= (PCI_CMD_MEM | PCI_CMD_BUS_MASTER | PCI_CMD_INT_DISABLE);
@@ -151,6 +175,9 @@ void pci_enable(pci_dev_t *d) {
     pci_write16(d, PCI_COMMAND, cmd);
 }
 
+/*
+ * pci_cfg_msi - Configures MSI for a PCI device
+ */
 bool pci_cfg_msi(pci_dev_t *d, uint8_t vec, uint32_t lapic_id) {
     if (!d->msi_cap) return false;
     uint8_t c = d->msi_cap;

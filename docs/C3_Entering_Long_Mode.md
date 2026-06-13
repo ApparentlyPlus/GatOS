@@ -2,42 +2,29 @@
 
 Alas, the moment you've all been waiting for! I am proud to announce that, in this chapter, we will actually jump into the bootstrapping code of GatOS! We’ll bring to life everything discussed in the previous chapter, along with a few other essential checks. But first, let’s lay the groundwork necessary.
 
-## GatOS's Project Structure
+## GatOS’s Project Structure
 
-GatOS's Makefile, introduced in Chapter 1, is designed around a specific project layout. Below, I’ll outline the key directories relevant to our current work:
+Chapter 1 covered the build system and the full project layout. Here’s a focused look at the portion of `src/` that’s relevant to this chapter — the early boot code:
 
 ```
-.
-├── Makefile
-├── src
-│   ├── headers
-│   └── impl
-│       ├── kernel
-│       └── x86_64
-│           └── boot
-└── targets
-    └── x86_64
-        ├── iso
-        │   └── boot
-        │       └── grub
-        │           └── grub.cfg
-        └── linker.ld
+src/
+├── arch/
+│   └── x86_64/
+│       ├── boot/
+│       │   ├── header.S           # Multiboot2 header (this chapter)
+│       │   ├── boot32.S           # 32-bit bootstrap entry point (this chapter)
+│       │   └── boot64.S           # 64-bit long mode entry point (this chapter)
+│       ├── cpu/                   # GDT, IDT, ISR stubs (later chapters)
+│       └── memory/
+│           ├── paging.h           # KERNEL_V2P / PHYSMAP macros
+│           └── paging.c           # Physmap setup (Chapter 5)
+└── kernel/
+    └── kmain.c                    # The C entry point (Chapter 4 onward)
 ```
 
-Here’s a quick guide to how these folders are organized:
+The include root is `src/`, so `#include <arch/x86_64/memory/paging.h>` resolves correctly from both C and assembly files. The `targets/x86_64/` directory holds `linker.ld` and the GRUB ISO structure, unchanged from Chapter 1.
 
-1. All GatOS source code lives under `./src/`.
-2. Inside `./src`, code is split between `headers/` and `impl/`.
-3. Most C source files that are related to the kernel go into `impl/kernel/`.
-4. Boot-related C code belongs in `impl/x86_64/`.
-5. Boot-time assembly code is placed in `impl/x86_64/boot/`.
-6. Header files, in general, reside in `headers/`.
-7. For better organization, `impl/` can include subdirectories like `impl/memory/`.
-8. Similarly, `headers/` can be subdivided: for example, into `headers/memory/`. These can then be included using syntax like `#include <memory/header.h>`.
-9. The `targets/` directory holds configuration files and metadata required during compilation.
-10. During the build, two new folders will be generated: `build/` (for intermediate artifacts) and `dist/` (for final output files).
-
-With this structure in place, we’re ready to start coding our journey into long mode.
+With that established, let’s get into the code.
 
 ## The GRUB Configuration
 
@@ -117,9 +104,9 @@ Tags are terminated by a special tag with type `0` and size `8`. Since we don't 
 
 ### Implementing the Multiboot2 Header
 
-Now, let's put the specification into practice. Following our project structure, we'll create a file called [`header.S`](/src/impl/x86_64/boot/header.S) inside the [`impl/x86_64/boot`](/src/impl/x86_64/boot/) directory.
+Now, let's put the specification into practice. Following our project structure, we'll create a file called [`header.S`](/src/arch/x86_64/boot/header.S) inside the [`arch/x86_64/boot`](/src/arch/x86_64/boot/) directory.
 
-This assembly file will define a special section for our Multiboot2 header, called `.multiboot_header`. We'll use two symbols, `header_start` and `header_end`, to mark its boundaries. Between these symbols, we'll declare the required constants exactly as the specification dictates:
+This assembly file will define a special section for our Multiboot2 header, called `.multiboot_header`. We'll use two symbols, `header_start` and `header_end`, to mark its boundaries. Between these symbols, we'll declare the required constants exactly as the specification dictates, plus one additional tag that turns out to be crucial:
 
 ```asm
 .intel_syntax noprefix
@@ -138,6 +125,16 @@ header_start:
     # Checksum (magic + architecture + length must sum to 0)
     .long -(0xe85250d6 + 0 + (header_end - header_start))
 
+    # Framebuffer tag (type 5) — request a linear framebuffer from GRUB
+    .align 8
+    .short 5    # type: framebuffer
+    .short 0    # flags (not optional)
+    .long 20    # size of this tag
+    .long 0     # preferred width  (0 = any)
+    .long 0     # preferred height (0 = any)
+    .long 0     # preferred depth  (0 = any)
+    .align 8
+
     # End tag indicating the end of the Multiboot header
     .short 0    # type
     .short 0    # flags
@@ -146,7 +143,24 @@ header_start:
 header_end:
 ```
 
-This implementation is straightforward if you're familiar with assembly. 
+Most of this is familiar from the specification above. The interesting new addition is the **framebuffer tag** with type `5`.
+
+## What is a framebuffer?
+
+A framebuffer is exactly what it sounds like: a buffer (block of memory) that holds a frame (one complete image) to be displayed on a screen. In operating system terms, it's the lowest-level software interface to the display hardware.
+
+Think of it as a canvas. You draw pixels onto this canvas, and the hardware automatically shows that canvas on your monitor. When you're done with one frame, you either tell the hardware to swap to a new buffer (double-buffering) or you just draw the next frame directly into the same memory.
+
+## What about the framebuffer tag then?
+
+This tag is a polite request to GRUB: "please set up a linear framebuffer for us." By setting width, height, and depth all to zero, we're leaving the choice entirely to the bootloader and we'll take whatever the firmware already has configured. GRUB will fulfil the request and populate a framebuffer info tag in the Multiboot2 information structure, giving us the framebuffer's physical address, width, height, pitch, and bits-per-pixel.
+
+Why does this matter? In a few chapters, we'll use this information to build a proper pixel-level display console. No VGA text mode, no 80×25 character grid — a real linear framebuffer that we can draw to freely. Getting GRUB to hand us the address is the first step, and this tag is where that process starts.
+
+>[!NOTE]
+> The `.align 8` directives before and after the tag are not optional. The Multiboot2 specification requires each tag to start at an 8-byte aligned address. Skipping alignment will cause GRUB to misparse the header and either ignore the tag or refuse to load the kernel entirely.
+
+This implementation is straightforward if you're familiar with assembly.
 
 Now, we need to ensure the `.multiboot_header` section we just created is positioned at the beginning of our kernel image, as the specification requires. This placement is handled by GatOS's linker script:
 
@@ -171,7 +185,7 @@ ENTRY(start)
 
 This means we need to create an assembly file that defines this `start` symbol, which will serve as the gateway to our kernel's bootstrapping process. 
 
-We therefore create a new file called [`boot32.S`](/src/impl/x86_64/boot/boot32.S) inside the [`impl/x86_64/boot`](/src/impl/x86_64/boot/) directory:
+We therefore create a new file called [`boot32.S`](/src/arch/x86_64/boot/boot32.S) inside the [`arch/x86_64/boot`](/src/arch/x86_64/boot/) directory:
 
 ```asm
 .intel_syntax noprefix
@@ -218,7 +232,7 @@ The solution to this problem was presented in the last section of the previous c
 >[!NOTE]
 > The `offset` keyword is used here to get the address of the `KERNEL_STACK_TOP` symbol rather than its value. This ensures we're loading the pointer to the stack's top location into the `esp` register.
 
-GatOS defines the following macros in `paging.h`:
+GatOS defines the following macros in [`paging.h`](/src/arch/x86_64/memory/paging.h):
 
 ```c
 #define KERNEL_VIRTUAL_BASE 0xFFFFFFFF80000000
@@ -239,7 +253,7 @@ GatOS defines the following macros in `paging.h`:
 Therefore, we can include `paging.h` in our `boot32.S` and call `KERNEL_V2P` to convert the Higher Half *link* address into the correct lower half *load* address:
 
 ```asm
-#include <memory/paging.h>
+#include <arch/x86_64/memory/paging.h>
 
 .intel_syntax noprefix
 
@@ -257,7 +271,7 @@ start:
 
 With the stack correctly set up, we can now create as many functions as we want and call them from inside `start`.
 
-## Error Handling
+# Error Handling
 
 We're about to perform a series of critical checks in our 32-bit assembly code to set up the transition to long mode. Since any failure during this process would be catastrophic, we need a way to handle errors gracefully. This means implementing an error function that we can call when something goes wrong.
 
@@ -267,37 +281,59 @@ However, we face a significant challenge: at this early stage, we cannot easily 
 
 2. **Video Memory**: A more complex approach that involves programming the graphics card directly to set a video mode and manipulate framebuffer memory. This allows for graphical output but requires significant hardware initialization and understanding of display protocols.
 
-For our immediate error handling needs, we'll implement a super simple VGA-based error function. Here's the actual implementation we'll use:
+Contrary to what you might think, we will skip VGA entirely here. GatOS used to implement VGA, but because the project later transitioned to a proper framebuffer approach, the VGA code was discarded.
+
+When you request a framebuffer, like we did above, you no longer have access to VGA, and vice versa. One could therefore intuit that we can use the framebuffer and draw (write) on it for our error purposes. However, given the complexity, and the fact that drawing on the framebuffer relies on memory subsystems being online, we absolutely cannot do that. We need a much more simple, low level way to output text.
+
+That turns out to be serial I/O. We'll go in depth about this in the next chapter, but for now, all you need to know is that serial outputs text to legacy lines, that can be easily intercepted by QEMU and displayed in your host's terminal using the `-serial` argument.
+
+Our code, therefore, is as follows:
 
 ```asm
 error:
-    mov dword ptr [0xb8000], 0x4f524f45  # "ER" (white-on-red)
-    mov dword ptr [0xb8004], 0x4f3a4f52  # "R:" (white-on-red) 
-    mov dword ptr [0xb8008], 0x4f204f20  # "  " (spaces)
-    mov byte ptr [0xb800a], al           # error code character
-    hlt
+	# Save character for serial
+	mov bl, al
+
+	# Serial Output (COM1 - 0x3F8)
+	mov al, 'E'
+	call .serial_putc
+	mov al, 'R'
+	call .serial_putc
+	mov al, 'R'
+	call .serial_putc
+	mov al, ':'
+	call .serial_putc
+	mov al, ' '
+	call .serial_putc
+	mov al, bl
+	call .serial_putc
+	mov al, 13 # \r
+	call .serial_putc
+	mov al, 10 # \n
+	call .serial_putc
+
+	hlt
+
+.serial_putc:
+	push eax
+.wait:
+	mov dx, 0x3fd
+	in al, dx
+	test al, 0x20 # check if line is ready
+	jz .wait
+	pop eax
+	mov dx, 0x3f8
+	out dx, al
+	ret
 ```
 
-**Understanding the VGA Buffer Addressing**
-
-The key to understanding this code lies in how the VGA text buffer is structured. The buffer starts at physical address `0xB8000`, and each character on screen requires two bytes of memory: one for the ASCII character code and one for the color attributes. 
-
-When we write `mov dword ptr [0xb8000], 0x4f524f45`, we're writing 4 bytes (a double word) to the first four character positions. The increment by 4 bytes for each subsequent write (`0xb8004`, `0xb8008`) is crucial because:
-
-- **0xB8000**: Bytes 0-3 → Characters 1-2 (4 bytes covering 2 characters)
-- **0xB8004**: Bytes 4-7 → Characters 3-4  
-- **0xB8008**: Bytes 8-11 → Characters 5-6
-- **0xB800A**: Byte 10 → Character 6's ASCII value specifically
-
-The beauty of this memory-mapped approach is that **any write to these addresses is immediately reflected on the physical display**. The VGA hardware continuously scans this memory region and renders its contents to the screen without any software intervention required.
-
-So really, to display an error, all we have to do is:
+To display an error, we simply load an error code into `al` and jump to `error`:
 
 ```asm
 mov al, 'G'
 jmp error
 
-# Prints "ERR: G" in the top left of the screen
+# Prints "ERR: G" to the serial console
 ```
 
 ## The Multiboot2 Check
@@ -870,12 +906,12 @@ After executing these instructions:
 
 Are you tired of all the setup so far and ready for the big payoff? I know I am! This is where all our preparation culminates in the actual transition to 64-bit mode.
 
-First, we need to create a new assembly file, [`boot64.S`](/src/impl/x86_64/boot/boot64.S), specifically designed for 64-bit code. This will be our landing point after the architecture switch from our current 32-bit code in [`boot32.S`](/src/impl/x86_64/boot/boot32.S).
+First, we need to create a new assembly file, [`boot64.S`](/src/arch/x86_64/boot/boot64.S), specifically designed for 64-bit code. This will be our landing point after the architecture switch from our current 32-bit code in [`boot32.S`](/src/arch/x86_64/boot/boot32.S).
 
 ### Setting Up the 64-bit Code Environment
 
 ```asm
-#include <memory/paging.h>
+#include <arch/x86_64/memory/paging.h>
 
 .intel_syntax noprefix
 
@@ -907,7 +943,7 @@ This tells the 32-bit assembler that `long_mode_start` is defined elsewhere but 
 Back in our 32-bit `boot32.S`, we perform all the previous steps discussed to jump into 64-bit mode:
 
 ```asm
-#include <memory/paging.h>
+#include <arch/x86_64/memory/paging.h>
 
 .intel_syntax noprefix
 
@@ -974,7 +1010,7 @@ Once we land in `long_mode_start`, we're finally executing genuine 64-bit code w
 We've successfully jumped to 64-bit mode, but we're still executing from low memory because our far jump targeted `KERNEL_V2P(long_mode_start)`. Now it's time to complete the transition to our higher-half kernel addresses. This is a crucial step that moves us from the physical memory layout to our proper virtual memory space.
 
 ```asm
-#include <memory/paging.h>
+#include <arch/x86_64/memory/paging.h>
 
 .intel_syntax noprefix
 

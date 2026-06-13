@@ -5,6 +5,8 @@
  * sets up the demo process. The thread entry points live in uproc.c
  * and are routed to .user_text by the linker; their symbols resolve to
  * userspace VMAs, which is exactly what thread_create expects.
+ * 
+ * Author: u/ApparentlyPlus
  */
 
 #include <kernel/sys/scheduler.h>

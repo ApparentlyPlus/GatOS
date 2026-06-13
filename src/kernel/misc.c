@@ -9,6 +9,7 @@
 
 #include <kernel/drivers/console.h>
 #include <klibc/stdio.h>
+#include <klibc/string.h>
 #include <stdint.h>
 
 /*
@@ -117,9 +118,9 @@ uintptr_t get_rip() {
 }
 
 /*
- * check_kernel_position - Verifies kernel is running in higher-half memory
+ * check_kpos - Verifies kernel is running in higher-half memory
  */
-void check_kernel_position() {
+void check_kpos() {
     uintptr_t rip = get_rip();
    
     if (rip >= 0xFFFFFFFF80000000) {

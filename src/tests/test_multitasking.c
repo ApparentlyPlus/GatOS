@@ -3,10 +3,12 @@
  *
  * Tests every public function: process_create/destroy, thread_create,
  * thread_create_bootstrap, thread_destroy, process_get_all,
- * process_terminate_by_tty, process_header_update, sched_active,
+ * procs_kill_tty, proc_hdr_update, sched_active,
  * sched_current, sched_add, sched_yield.
  * Covers PID/TID uniqueness, context layout, stack alignment, name truncation,
  * global process list, and shared TTY.
+ * 
+ * Author: Claude Code
  */
 
 #include <kernel/sys/process.h>
@@ -23,8 +25,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
-static int g_tests_total  = 0;
-static int g_tests_passed = 0;
+static int ntests  = 0;
+static int npass = 0;
 
 #pragma region Helpers
 
@@ -66,7 +68,7 @@ static bool t_sched_name(void) {
 }
 
 static bool t_sched_stk(void) {
-    TEST_ASSERT(sched_current()->kernel_stack != NULL);
+    TEST_ASSERT(sched_current()->kstack != NULL);
     return true;
 }
 #pragma endregion
@@ -167,7 +169,7 @@ static bool t_kt_nn(void) {
 static bool t_kt_state(void) {
     process_t* p = process_create("t_ktstate", NULL);
     thread_t* t = thread_create(p, "kt_s", kentry, NULL, false, 0);
-    TEST_ASSERT(t->state == THREAD_STATE_READY);
+    TEST_ASSERT(t->state == T_READY);
     process_destroy(p);
     return true;
 }
@@ -191,7 +193,7 @@ static bool t_kt_name(void) {
 static bool t_kt_stk(void) {
     process_t* p = process_create("t_ktstk", NULL);
     thread_t* t = thread_create(p, "kt_stk", kentry, NULL, false, 0);
-    TEST_ASSERT(t->kernel_stack != NULL);
+    TEST_ASSERT(t->kstack != NULL);
     process_destroy(p);
     return true;
 }
@@ -199,11 +201,10 @@ static bool t_kt_stk(void) {
 static bool t_kt_ctx(void) {
     process_t* p = process_create("t_ktctx", NULL);
     thread_t* t = thread_create(p, "kt_ctx", kentry, (void*)0xDEAD, false, 0);
-    TEST_ASSERT(t->context != NULL);
-    uintptr_t base = (uintptr_t)t->kernel_stack;
-    uintptr_t top  = base + KERNEL_STACK_SIZE;
-    uintptr_t ctx  = (uintptr_t)t->context;
-    TEST_ASSERT(ctx >= base && ctx < top);
+    // context is now embedded in the thread struct, not on the kstack
+    TEST_ASSERT(t->context.iret_cs == KERNEL_CS);
+    uintptr_t ctx = (uintptr_t)&t->context;
+    TEST_ASSERT(ctx >= (uintptr_t)t && ctx < (uintptr_t)t + sizeof(thread_t));
     process_destroy(p);
     return true;
 }
@@ -211,7 +212,7 @@ static bool t_kt_ctx(void) {
 static bool t_kt_cs(void) {
     process_t* p = process_create("t_ktcs", NULL);
     thread_t* t = thread_create(p, "kt_cs", kentry, NULL, false, 0);
-    TEST_ASSERT(t->context->iret_cs == KERNEL_CS);
+    TEST_ASSERT(t->context.iret_cs == KERNEL_CS);
     process_destroy(p);
     return true;
 }
@@ -219,7 +220,7 @@ static bool t_kt_cs(void) {
 static bool t_kt_ss(void) {
     process_t* p = process_create("t_ktss", NULL);
     thread_t* t = thread_create(p, "kt_ss", kentry, NULL, false, 0);
-    TEST_ASSERT(t->context->iret_ss == KERNEL_DS);
+    TEST_ASSERT(t->context.iret_ss == KERNEL_DS);
     process_destroy(p);
     return true;
 }
@@ -227,8 +228,8 @@ static bool t_kt_ss(void) {
 static bool t_kt_arg(void) {
     process_t* p = process_create("t_ktarg", NULL);
     thread_t* t = thread_create(p, "kt_arg", kentry, (void*)0xBEEF, false, 0);
-    /* thread_entry_wrapper(entry, arg): entry→rdi, arg→rsi */
-    TEST_ASSERT(t->context->rsi == 0xBEEF);
+    /* thread_wrap(entry, arg): entry→rdi, arg→rsi */
+    TEST_ASSERT(t->context.rsi == 0xBEEF);
     process_destroy(p);
     return true;
 }
@@ -247,7 +248,7 @@ static bool t_ut_nn(void) {
 static bool t_ut_stk(void) {
     process_t* p = process_create("t_utstk", NULL);
     thread_t* t = thread_create(p, "ut_stk", uentry, NULL, true, 0);
-    TEST_ASSERT(t->user_stack != NULL);
+    TEST_ASSERT(t->ustack != NULL);
     process_destroy(p);
     return true;
 }
@@ -255,7 +256,7 @@ static bool t_ut_stk(void) {
 static bool t_ut_ctx(void) {
     process_t* p = process_create("t_utctx", NULL);
     thread_t* t = thread_create(p, "ut_ctx", uentry, NULL, true, 0);
-    TEST_ASSERT(t->context != NULL);
+    TEST_ASSERT(t->context.iret_cs == USER_CS);
     process_destroy(p);
     return true;
 }
@@ -264,8 +265,7 @@ static bool t_ut_align(void) {
     /* x86-64 SysV ABI: RSP % 16 == 8 at function entry point */
     process_t* p = process_create("t_utalign", NULL);
     thread_t* t = thread_create(p, "ut_align", uentry, NULL, true, 0);
-    TEST_ASSERT(t->context != NULL);
-    uintptr_t rsp = (uintptr_t)t->context->iret_rsp;
+    uintptr_t rsp = (uintptr_t)t->context.iret_rsp;
     TEST_ASSERT((rsp % 16) == 8);
     process_destroy(p);
     return true;
@@ -384,7 +384,7 @@ static bool t_shared_tty(void) {
 
 static bool t_hdr_update(void) {
     process_t* p = process_create("t_hdr", NULL);
-    process_header_update(p); /* must not crash */
+    proc_hdr_update(p); /* must not crash */
     process_destroy(p);
     return true;
 }
@@ -392,19 +392,19 @@ static bool t_hdr_update(void) {
 static bool t_hdr_update_thr(void) {
     process_t* p = process_create("t_hdrth", NULL);
     thread_create(p, "th", kentry, NULL, false, 0);
-    process_header_update(p); /* must not crash with 1 thread */
+    proc_hdr_update(p); /* must not crash with 1 thread */
     process_destroy(p);
     return true;
 }
 #pragma endregion
 
-#pragma region process_terminate_by_tty
+#pragma region procs_kill_tty
 
 static bool t_term_tty(void) {
     process_t* p = process_create("t_termtty", NULL);
     tty_t* t = p->tty;
     /* Must not crash; process may or may not be destroyed here */
-    process_terminate_by_tty(t);
+    procs_kill_tty(t);
     return true;
 }
 #pragma endregion
@@ -425,16 +425,16 @@ static bool t_bootstrap(void) {
 #pragma region Runner
 
 static void run_test(const char* name, bool (*fn)(void)) {
-    g_tests_total++;
+    ntests++;
     LOGF("[TEST] %-40s ", name);
     bool pass = fn();
-    if (pass) { g_tests_passed++; LOGF("[PASS]\n"); }
+    if (pass) { npass++; LOGF("[PASS]\n"); }
     else       { LOGF("[FAIL]\n"); }
 }
 
 void test_multitasking(void) {
-    g_tests_total  = 0;
-    g_tests_passed = 0;
+    ntests  = 0;
+    npass = 0;
 
     LOGF("\n--- BEGIN MULTITASKING TEST ---\n");
 
@@ -462,7 +462,7 @@ void test_multitasking(void) {
     run_test("kthread: SS = KERNEL_DS",       t_kt_ss);
     run_test("kthread: RDI = arg",            t_kt_arg);
     run_test("uthread: not null",             t_ut_nn);
-    run_test("uthread: user_stack not null",  t_ut_stk);
+    run_test("uthread: ustack not null",      t_ut_stk);
     run_test("uthread: context not null",     t_ut_ctx);
     run_test("uthread: RSP % 16 == 8 (ABI)", t_ut_align);
     run_test("tid: unique same process",      t_tid_same);
@@ -473,24 +473,24 @@ void test_multitasking(void) {
     run_test("process name truncation",       t_proc_ntrunc);
     run_test("thread name truncation",        t_thr_ntrunc);
     run_test("shared tty between processes",  t_shared_tty);
-    run_test("process_header_update no crash",t_hdr_update);
-    run_test("process_header_update+thread",  t_hdr_update_thr);
+    run_test("proc_hdr_update no crash",t_hdr_update);
+    run_test("proc_hdr_update+thread",  t_hdr_update_thr);
     run_test("terminate_by_tty no crash",     t_term_tty);
     run_test("thread_create_bootstrap",       t_bootstrap);
 
     LOGF("--- END MULTITASKING TEST ---\n");
-    LOGF("Multitasking Test Results: %d/%d\n\n", g_tests_passed, g_tests_total);
+    LOGF("Multitasking Test Results: %d/%d\n\n", npass, ntests);
 
     #ifdef TEST_BUILD
     #include <kernel/drivers/console.h>
     #include <klibc/stdio.h>
-    if (g_tests_passed != g_tests_total) {
+    if (npass != ntests) {
         console_set_color(CONSOLE_COLOR_RED, CONSOLE_COLOR_BLACK);
-        kprintf("[-] Multitasking tests failed (%d/%d passed).\n", g_tests_passed, g_tests_total);
+        kprintf("[-] Multitasking tests failed (%d/%d passed).\n", npass, ntests);
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     } else {
         console_set_color(CONSOLE_COLOR_GREEN, CONSOLE_COLOR_BLACK);
-        kprintf("[+] Multitasking tests passed! (%d/%d)\n", g_tests_passed, g_tests_total);
+        kprintf("[+] Multitasking tests passed! (%d/%d)\n", npass, ntests);
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     }
     #endif

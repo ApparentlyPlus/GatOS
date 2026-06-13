@@ -23,13 +23,17 @@
 
 #pragma region Internal Globals
 
-static hpet_regs_t* g_hpet = NULL;
-static uint32_t g_hpet_period = 0; // Femtoseconds per tick
+static hpet_regs_t* hpet = NULL;
+static uint32_t hpet_period = 0; // Femtoseconds per tick
 
-static uint64_t g_tsc_ticks_per_ms = 0;
-static uint64_t g_boot_tsc = 0;
+static uint64_t tsc_tpm = 0;
+static uint64_t boot_tsc = 0;
 
-static volatile uint64_t g_ticks = 0;
+static volatile uint64_t ticks = 0;
+
+// Set to true when TSC Deadline mode is active (tickless)
+// When false, we fall back to a 10ms periodic LAPIC timer for compatibility
+static bool tsc_deadline_mode = false;
 
 #pragma endregion
 
@@ -51,8 +55,8 @@ void pit_set_oneshot(uint16_t ticks) {
 void pit_prepare_sleep(uint32_t ms) {
     uint32_t total_ticks = (PIT_FREQUENCY / 1000) * ms;
     
-    // The PIT counter is 16-bit, max 54ms per wrap.
-    // For longer sleeps, we'd need a loop.
+    // The PIT counter is 16-bit, max 54ms per wrap
+    // For longer sleeps, we'd need a loop
     if (total_ticks > 0xFFFF) total_ticks = 0xFFFF;
 
     pit_set_oneshot((uint16_t)total_ticks);
@@ -62,8 +66,8 @@ void pit_prepare_sleep(uint32_t ms) {
  * pit_wait - Spins until PIT Channel 0 reaches 0
  */
 static void pit_wait(void) {
-    // In Mode 0, the OUT pin goes high when count reaches 0.
-    
+    // In Mode 0, the OUT pin goes high when count reaches 0
+    // This is magic numbers galore again, blame x86 hardware design
     uint16_t last_val = 0xFFFF;
     while (1) {
         outb(0x43, 0x00); // Latch channel 0
@@ -112,31 +116,32 @@ static void hpet_init(void) {
         return;
     }
 
-    g_hpet = (hpet_regs_t*)virt_addr;
-    g_hpet_period = g_hpet->capabilities_high;
+    hpet = (hpet_regs_t*)virt_addr;
+    hpet_period = hpet->capabilities_high;
 
     // Enable HPET (Set bit 0 of General Config)
     // Also clear bit 1 (Legacy Replacement) to use it cleanly
-    g_hpet->configuration |= 0x01;
-    g_hpet->configuration &= ~0x02;
+    // Jesus christ, HPET, why do you have to be like this
+    hpet->configuration |= 0x01;
+    hpet->configuration &= ~0x02;
 
     LOGF("[TIMER] HPET initialized. Period: %u fs (%u MHz)\n", 
-         g_hpet_period, (uint32_t)(FEMTOSECONDS_PER_SECOND / g_hpet_period / 1000000));
+         hpet_period, (uint32_t)(FEMTOSECONDS_PER_SECOND / hpet_period / 1000000));
 }
 
 /*
  * hpet_is_available - Checks if the HPET has been successfully initialized
  */
 bool hpet_is_available(void) {
-    return g_hpet != NULL;
+    return hpet != NULL;
 }
 
 /*
  * hpet_read_counter - Reads the current value of the HPET main counter
  */
 uint64_t hpet_read_counter(void) {
-    if (!g_hpet) return 0;
-    return g_hpet->main_counter;
+    if (!hpet) return 0;
+    return hpet->main_counter;
 }
 
 #pragma endregion
@@ -147,7 +152,7 @@ uint64_t hpet_read_counter(void) {
  * timer_handler - Periodic timer interrupt handler
  */
 static cpu_context_t* timer_handler(cpu_context_t* ctx) {
-    g_ticks++;
+    ticks++;
     
     // Call the scheduler to perform a context switch
     return sched_schedule(ctx);
@@ -168,12 +173,13 @@ static void timer_calibrate_all(void) {
     lapic_write(LAPIC_TICR, 0xFFFFFFFF); // Max count
 
     if (hpet_is_available()) {
-        uint64_t hpet_target = (CALIBRATE_MS * 1000000000000ULL) / g_hpet_period;
+        uint64_t hpet_target = (CALIBRATE_MS * 1000000000000ULL) / hpet_period;
         uint64_t hpet_start = hpet_read_counter();
         
         lapic_start = lapic_read(LAPIC_TCCR);
         tsc_start = tsc_read();
 
+        // Wait for the HPET target to elapse
         while (hpet_read_counter() - hpet_start < hpet_target) {
             __asm__ volatile("pause");
         }
@@ -193,6 +199,9 @@ static void timer_calibrate_all(void) {
         lapic_start = lapic_read(LAPIC_TCCR);
         tsc_start = tsc_read();
 
+        // Wait for the PIT target to elapse
+        // this must be the worst code I've ever written, 
+        // but the PIT is just so bad that it requires this level of hackery
         while (1) {
             outb(0x43, 0x00);
             low = inb(0x40);
@@ -206,12 +215,12 @@ static void timer_calibrate_all(void) {
     }
 
     uint64_t lapic_ticks_per_ms = (lapic_start - lapic_end) / CALIBRATE_MS;
-    g_tsc_ticks_per_ms = (tsc_end - tsc_start) / CALIBRATE_MS;
+    tsc_tpm = (tsc_end - tsc_start) / CALIBRATE_MS;
 
-    lapic_timer_set_calibration(lapic_ticks_per_ms);
+    lapic_set_tpm(lapic_ticks_per_ms);
 
     LOGF("[TIMER] LAPIC: %lu ticks/ms, TSC: %lu ticks/ms\n", 
-         lapic_ticks_per_ms, g_tsc_ticks_per_ms);
+         lapic_ticks_per_ms, tsc_tpm);
 }
 
 #pragma endregion
@@ -222,7 +231,7 @@ static void timer_calibrate_all(void) {
  * timer_init - Initializes the timer subsystem and determines TSC/LAPIC frequency
  */
 void timer_init(void) {
-    g_boot_tsc = tsc_read();
+    boot_tsc = tsc_read();
     
     hpet_init();
     timer_calibrate_all();
@@ -231,14 +240,15 @@ void timer_init(void) {
     irq_register(INT_FIRST_INTERRUPT, (irq_handler_t)timer_handler);
     ioapic_unmask(0);
 
-    // Start the Local APIC timer in periodic mode (10ms interval) for scheduling
-    lapic_timer_periodic(10000, INT_FIRST_INTERRUPT);
-
-    // Check for TSC Deadline support
+    // Enable TSC Deadline tickless mode if supported
     uint32_t a, b, c, d;
     cpuid(1, 0, &a, &b, &c, &d);
-    if (c & (1 << 24)) {
-        LOGF("[TIMER] TSC-Deadline mode supported.\n");
+    if (c & (1u << 24)) {
+        tsc_deadline_mode = true;
+        LOGF("[TIMER] TSC-Deadline tickless mode enabled.\n");
+    } else {
+        lapic_timer_periodic(10000, INT_FIRST_INTERRUPT);
+        LOGF("[TIMER] TSC-Deadline not available; using 10ms periodic timer.\n");
     }
 }
 
@@ -253,11 +263,11 @@ void sleep_ms(uint64_t ms) {
         return;
     }
 
-    if (g_tsc_ticks_per_ms > 0) {
-        uint64_t target = tsc_read() + (ms * g_tsc_ticks_per_ms);
+    if (tsc_tpm > 0) {
+        uint64_t target = tsc_read() + (ms * tsc_tpm);
         while (tsc_read() < target) __asm__ volatile("pause");
     } else if (hpet_is_available()) {
-        uint64_t target = hpet_read_counter() + (ms * 1000000000000ULL / g_hpet_period);
+        uint64_t target = hpet_read_counter() + (ms * 1000000000000ULL / hpet_period);
         while (hpet_read_counter() < target) __asm__ volatile("pause");
     } else {
         for (uint64_t i = 0; i < ms; i++) {
@@ -271,11 +281,11 @@ void sleep_ms(uint64_t ms) {
  * sleep_us - Blocks execution for at least the specified number of microseconds
  */
 void sleep_us(uint64_t us) {
-    if (g_tsc_ticks_per_ms > 0) {
-        uint64_t target = tsc_read() + (us * g_tsc_ticks_per_ms / 1000);
+    if (tsc_tpm > 0) {
+        uint64_t target = tsc_read() + (us * tsc_tpm / 1000);
         while (tsc_read() < target) __asm__ volatile("pause");
     } else if (hpet_is_available()) {
-        uint64_t target = hpet_read_counter() + (us * 1000000000ULL / g_hpet_period);
+        uint64_t target = hpet_read_counter() + (us * 1000000000ULL / hpet_period);
         while (hpet_read_counter() < target) __asm__ volatile("pause");
     } else {
         uint32_t ticks = (PIT_FREQUENCY * us) / 1000000;
@@ -289,16 +299,60 @@ void sleep_us(uint64_t us) {
  * get_uptime_ms - Returns the number of milliseconds since the kernel booted
  */
 uint64_t get_uptime_ms(void) {
-    if (g_tsc_ticks_per_ms == 0) return 0;
-    return (tsc_read() - g_boot_tsc) / g_tsc_ticks_per_ms;
+    if (tsc_tpm == 0) return 0;
+    return (tsc_read() - boot_tsc) / tsc_tpm;
 }
 
 /*
  * get_uptime_ns - Returns the number of nanoseconds since the kernel booted
  */
 uint64_t get_uptime_ns(void) {
-    if (g_tsc_ticks_per_ms == 0) return 0;
-    return ((tsc_read() - g_boot_tsc) * 1000000) / g_tsc_ticks_per_ms;
+    if (tsc_tpm == 0) return 0;
+    return ((tsc_read() - boot_tsc) * 1000000) / tsc_tpm;
+}
+
+/*
+ * timer_arm_next - Arms the LAPIC timer for the next scheduler event
+ */
+void timer_arm_next(bool going_idle) {
+    if (!tsc_deadline_mode) return;
+
+    // this is a cool function for efficiency
+    uint64_t now_tsc = tsc_read();
+
+    if (going_idle) {
+        uint64_t next_ms = sched_next_wake();
+
+        if (next_ms == UINT64_MAX) {
+            lapic_timer_stop();
+            return;
+        }
+
+        uint64_t now_ms = get_uptime_ms();
+        if (next_ms <= now_ms) {
+            lapic_tsc_arm(now_tsc, INT_FIRST_INTERRUPT);
+            return;
+        }
+        uint64_t deadline_tsc = now_tsc + ((next_ms - now_ms) * tsc_tpm);
+        lapic_tsc_arm(deadline_tsc, INT_FIRST_INTERRUPT);
+
+    } else {
+        uint64_t quantum_tsc = now_tsc + ((uint64_t)SCHED_QUANTUM_MS * tsc_tpm);
+
+        uint64_t next_ms = sched_next_wake();
+        if (next_ms != UINT64_MAX) {
+            uint64_t now_ms = get_uptime_ms();
+            if (next_ms <= now_ms) {
+                lapic_tsc_arm(now_tsc, INT_FIRST_INTERRUPT);
+                return;
+            }
+            uint64_t sleep_tsc = now_tsc + ((next_ms - now_ms) * tsc_tpm);
+            if (sleep_tsc < quantum_tsc)
+                quantum_tsc = sleep_tsc;
+        }
+
+        lapic_tsc_arm(quantum_tsc, INT_FIRST_INTERRUPT);
+    }
 }
 
 #pragma endregion

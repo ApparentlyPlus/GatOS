@@ -1,5 +1,7 @@
 /*
  * stdlib.h - Subset of the C standard library for GatOS
+ *
+ * Author: Claude Code
  */
 
 #pragma once

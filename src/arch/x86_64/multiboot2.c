@@ -92,21 +92,17 @@ static void build_available_memory_list(multiboot_parser_t* parser) {
         
         if (multiboot_get_memory_region(parser, i, &start, &end, &type) == 0) {
             if (type == MULTIBOOT_MEMORY_AVAILABLE) {
-                // Check if this range overlaps with the kernel
                 if (memory_ranges_overlap(start, end, kernel_start, kernel_end)) {
-                    // Add memory before kernel (if any)
                     if (start < kernel_start) {
                         uintptr_t before_end = (kernel_start < end) ? kernel_start : end;
                         add_available_memory_range(parser, start, before_end, &prev);
                     }
-                    
-                    // Add memory after kernel (if any)
+
                     if (kernel_end < end) {
                         uintptr_t after_start = (kernel_end > start) ? kernel_end : start;
                         add_available_memory_range(parser, after_start, end, &prev);
                     }
                 } else {
-                    // No overlap with kernel, add the entire range
                     add_available_memory_range(parser, start, end, &prev);
                 }
             }
@@ -121,7 +117,6 @@ static size_t calculate_required_size(void* mb_info) {
     multiboot_info_t* info = (multiboot_info_t*)mb_info;
     size_t total_size = info->total_size;
 
-    // Parse tags to find strings and calculate their sizes
     multiboot_tag_t* tag = (multiboot_tag_t*)((uintptr_t)info + sizeof(multiboot_info_t));
     
     while (tag->type != MULTIBOOT_TAG_TYPE_END) {
@@ -152,15 +147,12 @@ static size_t calculate_required_size(void* mb_info) {
 static void copy_multiboot_data(multiboot_parser_t* parser, void* mb_info) {
     multiboot_info_t* src_info = (multiboot_info_t*)mb_info;
     
-    // Copy main structure
     size_t struct_size = src_info->total_size;
     kmemcpy(parser->data_buffer, src_info, struct_size);
     parser->buffer_used = align_up(struct_size, 8);
-    
-    // Update parser to point to copied structure
+
     parser->info = (multiboot_info_t*)parser->data_buffer;
-    
-    // Process tags and fix up pointers
+
     multiboot_tag_t* tag = (multiboot_tag_t*)((uintptr_t)parser->info + sizeof(multiboot_info_t));
     
     while (tag->type != MULTIBOOT_TAG_TYPE_END) {
@@ -218,24 +210,19 @@ static void copy_multiboot_data(multiboot_parser_t* parser, void* mb_info) {
  * multiboot_init - Initializes multiboot parser with boot information
  */
 void multiboot_init(multiboot_parser_t* parser, void* mb_info, uint8_t* buffer, size_t buffer_size) {
-    // Initialize parser
     kmemset(parser, 0, sizeof(multiboot_parser_t));
     parser->data_buffer = buffer;
     parser->buffer_size = buffer_size;
 
-    // Check buffer size
     size_t required_size = calculate_required_size(mb_info);
 
     if (required_size > buffer_size) {
-        LOGF("[MB2] Error: Buffer too small (need %d, have %d)\n", 
+        LOGF("[MB2] Error: Buffer too small (need %d, have %d)\n",
                (int)required_size, (int)buffer_size);
         return;
     }
-    
-    // Copy all data to higher half
+
     copy_multiboot_data(parser, mb_info);
-    
-    // Build available memory list
     build_available_memory_list(parser);
     
     parser->initialized = 1;
@@ -391,9 +378,9 @@ multiboot_acpi_t* multiboot_get_acpi_rsdp(multiboot_parser_t* parser) {
 }
 
 /*
- * multiboot_get_kernel_range - Retrieves kernel physical memory range
+ * mb_kernel_range - Retrieves kernel physical memory range
  */
-void multiboot_get_kernel_range(uintptr_t* start, uintptr_t* end) {
+void mb_kernel_range(uintptr_t* start, uintptr_t* end) {
     *start = (uintptr_t)get_kstart(false);
     *end = (uintptr_t)get_kend(false);
 }

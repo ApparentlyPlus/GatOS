@@ -2,6 +2,8 @@
  * pci.h - PCI/PCIe Subsystem
  *
  * Legacy I/O config space access, device enumeration, BAR decoding, and MSI.
+ * 
+ * Author: u/ApparentlyPlus
  */
 
 #pragma once
