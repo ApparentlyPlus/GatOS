@@ -207,7 +207,8 @@ def compile_sources(c_files: List[Path], asm_files: List[Path], profile_name: st
         src_flags = CFLAGS_BASE + profile["flags"]
         if not is_userspace(src):
             # Kernel code gets LTO for better DCE
-            src_flags += ["-flto"]
+            if OS_NAME != "macos":
+                src_flags += ["-flto"]
 
             # Only restrict SSE/FPU in files whose code runs from interrupt context.
             # Everything else (kmain, kernel threads, drivers init, libc, etc.) can
@@ -238,14 +239,19 @@ def compile_sources(c_files: List[Path], asm_files: List[Path], profile_name: st
 
 def link_kernel(obj_files: List[Path]):
     DIST_DIR.mkdir(parents=True, exist_ok=True)
-    linker_script = ROOT_DIR / "targets/x86_64/linker.ld"
-    gcc_link_flags = [
-        "-nostdlib",
-        "-flto",
-        "-g",
-        f"-Wl,-n,--gc-sections,--no-relax,-T{linker_script}"
-    ]
-    run_cmd([CC, *gcc_link_flags, "-o", KERNEL_BIN] + [str(f) for f in obj_files])
+    
+    if OS_NAME == "macos":
+        run_cmd([LD, *LDFLAGS, "-o", KERNEL_BIN] + [str(f) for f in obj_files])
+    else:
+        linker_script = ROOT_DIR / "targets/x86_64/linker.ld"
+        gcc_link_flags = [
+            "-nostdlib",
+            "-flto",
+            "-g",
+            f"-Wl,-n,--gc-sections,--no-relax,-T{linker_script}"
+        ]
+        run_cmd([CC, *gcc_link_flags, "-o", KERNEL_BIN] + [str(f) for f in obj_files])
+        
     run_cmd([STRIP, str(KERNEL_BIN)])
 
 def make_uefi_grub():
