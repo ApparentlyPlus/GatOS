@@ -2,7 +2,9 @@
 
 Welcome to GatOS’s documentation! This is your guide to the internals of GatOS.
 
-The road to a working kernel is messy, full of rabbit holes, and rarely well-documented. What you’ll find here are the notes from that journey — clear explanations of how GatOS works, written both as a reference for its design and as a record of the process.
+The road to a working kernel is messy, full of rabbit holes, and rarely well-documented. What you’ll find here are the notes from that journey — clear explanations of how GatOS works, written both as a reference for its design and as a record of the process. 
+
+At least that is my ambition, and I will strive to do it justice, but do keep in mind that I am just a university student.
 
 Think of this as part technical guide, part personal log. It’s here to make the tough parts a little easier, and maybe a bit more fun. I hope it proves to be a valuable resource for your own explorations into the foundations of computing.
 
@@ -28,7 +30,7 @@ Here’s the bigger picture:
 
 1. **Gata (the language):**
 
-   * Think of Gata as our “Java-like” high-level programming language.
+   * Think of Gata as our object oriented high-level programming language.
    * Programmers write their applications in Gata, using familiar concepts like objects, classes, and methods.
 
 2. **Libgata / Gata.Core (the standard library):**
@@ -46,7 +48,7 @@ Here’s the bigger picture:
 4. **Appa (the compiler):**
 
    * Appa takes user-written Gata code and transpiles it into C.
-   * That C code links against `libgata` (which itself is backed by GatOS).
+   * That C code is backed by GatOS.
    * The result is a unified C program that can be compiled all the way down to bare-metal machine code.
 
 When you put it all together:
@@ -56,11 +58,11 @@ When you put it all together:
 The final output is a bootable ISO containing everything wired up from top to bottom.
 
 > [!NOTE]
-> I haven’t yet defined the grammar or syntax of Gata. For now, I describe it as “Java-like” only as an example, to give a rough idea of how it will work. In reality, Gata will be purpose-built for OS development and designed to integrate seamlessly with GatOS.
+> I haven’t yet defined the grammar or syntax of Gata. For now, I describe it as object oriented only as an example, to give a rough idea of how it will work. In reality, Gata will be purpose-built for OS development and designed to integrate seamlessly with GatOS.
 
-There are also details I’m skipping in this simplified overview. For instance, GatOS is intended to be modular: in the future you’ll be able to swap out schedulers, choose different memory management models, toggle between graphics and console mode, enable or disable paging, and even pick the kernel’s bitsize (32-bit vs 64-bit). All of these will eventually be configurable options within a Gata project.
+There are also details I’m skipping in this simplified overview. For instance, GatOS is intended to be modular: If you only need kernel-level work, then the entirety of userspace will be stripped out of the resulting binary. If you don't need USB support, you can configure your Gata Project to drop it entirely.
 
-That said, I’m just one person. For the purposes of my thesis, the focus will be on building a working demo of Pawstack with minimal functionality to showcase (I/O, memory, and hopefully scheduling). Once that’s done, I plan to expand GatOS’s modularity and eventually port it to other architectures.
+That said, I’m just one person. For the purposes of my thesis, the focus will be on building a working demo of Pawstack with minimal functionality to showcase (I/O, memory, basic syscalls, scheduling and userspace). Once that’s done, I plan to expand GatOS’s modularity and eventually port it to other architectures.
 
 ## Kernel development 101
 
@@ -101,7 +103,7 @@ The documentation assumes foundational knowledge in several key areas. We will n
 
 2. **The C Programming Language:** A deep understanding of C is required, as it is the primary language for GatOS. Some kernels prefer to use C++ for bare metal code, which is quite difficult to set up but gives you OOP versatility later on.
 
-3. **Systems Programming Tools:** Familiarity with linkers, cross-compilers, Makefiles, and compiler flags is essential.
+3. **Systems Programming Tools:** Familiarity with linkers, cross-compilers, build chains, and compiler flags is essential.
 
 4. **Low-Level Concepts:** You should understand what libc functions do, how they were implemented, which implementations of libc exist (eg. Newlib, Musl) and architecture specific C quirks.
 
@@ -162,7 +164,7 @@ Limine is a modern, protocol-oriented bootloader designed with newer systems and
 > [!NOTE]
 > For more information on how each of these work, I refer you once again to the [OSDev Notes](https://github.com/dreamportdev/Osdev-Notes/blob/master/01_Build_Process/02_Boot_Protocols.md) book, which is aimed at providing detailed explanations for beginners. 
 
-As for GatOS, while I initially wanted to use Limine, I decided against it given that GatOS is made with modularity in mind, so we need to be able to control everything. GRUB it is!
+As for GatOS, while I initially wanted to use Limine like all the cool kids nowadays do. I decided against it given that GatOS is also an educational project (for me), so I wanted to be able to control everything. GRUB it is!
 
 ## Project Roadmap
 
@@ -194,7 +196,6 @@ These are the essential services that every Gata program relies on:
   * Start a new thread.
   * Wait for a thread to finish.
   * Pause execution for a defined period.
-  * `mutex` and related functions — safe synchronization between threads.
   * Create concurrent userland processes.
   * Manage running processes (start, kill).
 

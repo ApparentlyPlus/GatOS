@@ -1,5 +1,12 @@
-#ifndef SERIAL_H
-#define SERIAL_H
+/*
+ * serial.h - Serial port driver header
+ *
+ * Defines interfaces for initializing and writing to PC serial ports (COM1-COM4).
+ * 
+ * Author: u/ApparentlyPlus
+ */
+
+#pragma once
 
 #include <arch/x86_64/cpu/io.h>
 #include <stddef.h>
@@ -44,5 +51,3 @@ void serial_write_hex8(uint8_t value);
 void serial_write_hex16(uint16_t value);
 void serial_write_hex32(uint32_t value);
 void serial_write_hex64(uint64_t value);
-
-#endif

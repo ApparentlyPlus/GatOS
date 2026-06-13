@@ -57,14 +57,15 @@ static void panic_log(const char* msg, cpu_context_t* ctx)
 }
 
 /*
- * panic_c - Core panic handler: logs to serial, then renders the crash screen.
+ * panic_c - Core panic handler: logs to serial, then renders the crash screen
  */
 void panic_c(const char* message, cpu_context_t* context)
 {
     int i;
     int pad;
 
-    disable_interrupts();
+    // Disable interrupts to prevent further state corruption and ensure the panic log is not interleaved with other output
+    intr_off();
     panic_log(message, context);
 
     uint16_t screen_width = (uint16_t)con_crash_width();
@@ -88,6 +89,7 @@ void panic_c(const char* message, cpu_context_t* context)
 
     con_crash_printf("[+] Reason: %s\n", message);
 
+    // If we have CPU context, print detailed register and error information
     if (context) {
         con_crash_printf("[+] Exception: %s (#%lu)\n",
                          exc_name(context->vector_number),

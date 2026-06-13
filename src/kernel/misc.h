@@ -13,5 +13,5 @@
 
 void print_banner(char* KERNEL_VERSION);
 void print_test_banner(char* KERNEL_VERSION);
-void check_kernel_position();
+void check_kpos();
 uintptr_t get_rip();

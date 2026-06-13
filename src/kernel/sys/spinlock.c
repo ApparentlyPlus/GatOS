@@ -5,7 +5,7 @@
  * Includes interrupt-saving logic to prevent deadlocks between
  * thread context and interrupt context.
  *
- * Author: ApparentlyPlus
+ * Author: u/ApparentlyPlus
  */
 
 #include <kernel/sys/spinlock.h>
@@ -26,16 +26,13 @@ void spinlock_init(spinlock_t* lock, const char* name) {
  * spinlock_acquire - Take the lock, saving interrupt state
  */
 bool spinlock_acquire(spinlock_t* lock) {
-    // Disable interrupts and save state
-    bool was_enabled = interrupts_save();
+    bool was_enabled = intr_save();
 
-    // Spin until we get the lock
+    // this is built in as of C11 I believe
     while (__atomic_test_and_set(&lock->locked, __ATOMIC_ACQUIRE)) {
-        // CPU hint that we are in a spin loop
         __asm__ volatile("pause");
     }
 
-    // Mark ownership
     lock->cpu_id = lapic_get_id();
     
     return was_enabled;
@@ -45,10 +42,10 @@ bool spinlock_acquire(spinlock_t* lock) {
  * spinlock_try_acquire - Attempt to take the lock without spinning
  */
 bool spinlock_try_acquire(spinlock_t* lock, bool* was_enabled) {
-    *was_enabled = interrupts_save();
+    *was_enabled = intr_save();
 
     if (__atomic_test_and_set(&lock->locked, __ATOMIC_ACQUIRE)) {
-        interrupts_restore(*was_enabled);
+        intr_restore(*was_enabled);
         return false;
     }
 
@@ -60,14 +57,9 @@ bool spinlock_try_acquire(spinlock_t* lock, bool* was_enabled) {
  * spinlock_release - Release the lock and restore interrupt state
  */
 void spinlock_release(spinlock_t* lock, bool interrupts_enabled) {
-    // Clear ownership
     lock->cpu_id = 0xFFFFFFFF;
-
-    // Atomic release
     __atomic_clear(&lock->locked, __ATOMIC_RELEASE);
-
-    // Restore interrupts
-    interrupts_restore(interrupts_enabled);
+    intr_restore(interrupts_enabled);
 }
 
 /*

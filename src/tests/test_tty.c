@@ -5,6 +5,8 @@
  * read_char, read, write, header_init, header_write, switch, cycle.
  * Covers canonical line discipline, backspace, ring buffer wrap/overflow,
  * ldisc overflow, header state, and mass create/destroy.
+ * 
+ * Author: Claude Code
  */
 
 #include <kernel/drivers/tty.h>
@@ -16,8 +18,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-static int g_tests_total  = 0;
-static int g_tests_passed = 0;
+static int ntests  = 0;
+static int npass = 0;
 
 #pragma region Init / Destroy
 
@@ -322,7 +324,7 @@ static bool t_bs_nocross(void) {
     uint32_t h_after_commit = t->head;
     tty_input(t,'B'); tty_input(t,'\b'); /* erase B, but not the committed A */
     TEST_ASSERT(t->ldisc.pos == 0);
-    tty_input(t,'\b'); /* extra — must be safe */
+    tty_input(t,'\b'); /* extra - must be safe */
     TEST_ASSERT(t->ldisc.pos == 0);
     TEST_ASSERT(t->head == h_after_commit); /* committed data intact */
     tty_destroy(t);
@@ -366,10 +368,10 @@ static bool t_ldisc_ovf(void) {
     for (int i = 0; i < LDISC_LINE_MAX - 1; i++) tty_input(t, 'A' + (i % 26));
     /* pos must not exceed the buffer */
     TEST_ASSERT(t->ldisc.pos <= (uint32_t)(LDISC_LINE_MAX - 1));
-    /* Push extra — must not crash */
+    /* Push extra - must not crash */
     tty_input(t, 'Z');
     TEST_ASSERT(t->ldisc.pos <= (uint32_t)(LDISC_LINE_MAX - 1));
-    /* Commit — must produce valid data */
+    /* Commit - must produce valid data */
     tty_input(t, '\n');
     TEST_ASSERT(t->ldisc.pos == 0);
     TEST_ASSERT(t->head != t->tail);
@@ -453,13 +455,13 @@ static bool t_hdr_stable(void) {
 static bool t_hdr_cursor(void) {
     tty_t* t = tty_create();
     tty_header_init(t, 3);
-    TEST_ASSERT(t->console->cursor_y >= t->console->header_rows);
+    TEST_ASSERT(t->console->cy >= t->console->header_rows);
     tty_destroy(t);
     return true;
 }
 
 static bool t_hdr_all(void) {
-    /* Write to every row in the header — must not crash */
+    /* Write to every row in the header - must not crash */
     tty_t* t = tty_create();
     tty_header_init(t, 4);
     for (size_t r = 0; r < 4; r++)
@@ -473,7 +475,7 @@ static bool t_hdr_one(void) {
     tty_t* t = tty_create();
     tty_header_init(t, 1);
     TEST_ASSERT(t->console->header_rows == 1);
-    TEST_ASSERT(t->console->cursor_y >= 1);
+    TEST_ASSERT(t->console->cy >= 1);
     tty_destroy(t);
     return true;
 }
@@ -482,8 +484,8 @@ static bool t_hdr_one(void) {
 #pragma region tty_switch / tty_cycle
 
 static bool t_switch(void) {
-    /* Switch to a new TTY and back — must not crash */
-    tty_t* orig = g_active_tty;
+    /* Switch to a new TTY and back - must not crash */
+    tty_t* orig = active_tty;
     tty_t* t = tty_create();
     tty_switch(t);
     tty_switch(orig);
@@ -501,15 +503,15 @@ static bool t_cycle(void) {
 #pragma region Runner
 
 static void run_test(const char* name, bool (*fn)(void)) {
-    g_tests_total++;
+    ntests++;
     LOGF("[TEST] %-40s ", name);
-    if (fn()) { g_tests_passed++; LOGF("[PASS]\n"); }
+    if (fn()) { npass++; LOGF("[PASS]\n"); }
     else       { LOGF("[FAIL]\n"); }
 }
 
 void test_tty(void) {
-    g_tests_total  = 0;
-    g_tests_passed = 0;
+    ntests  = 0;
+    npass = 0;
     LOGF("\n--- BEGIN TTY SUBSYSTEM TEST ---\n");
 
     run_test("create: not null",              t_create_nn);
@@ -554,18 +556,18 @@ void test_tty(void) {
     run_test("cycle: no crash",               t_cycle);
 
     LOGF("--- END TTY SUBSYSTEM TEST ---\n");
-    LOGF("TTY Test Results: %d/%d\n\n", g_tests_passed, g_tests_total);
+    LOGF("TTY Test Results: %d/%d\n\n", npass, ntests);
 
     #ifdef TEST_BUILD
     #include <kernel/drivers/console.h>
     #include <klibc/stdio.h>
-    if (g_tests_passed != g_tests_total) {
+    if (npass != ntests) {
         console_set_color(CONSOLE_COLOR_RED, CONSOLE_COLOR_BLACK);
-        kprintf("[-] Some TTY tests failed (%d/%d passed).\n", g_tests_passed, g_tests_total);
+        kprintf("[-] Some TTY tests failed (%d/%d passed).\n", npass, ntests);
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     } else {
         console_set_color(CONSOLE_COLOR_GREEN, CONSOLE_COLOR_BLACK);
-        kprintf("[+] All TTY tests passed! (%d/%d)\n", g_tests_passed, g_tests_total);
+        kprintf("[+] All TTY tests passed! (%d/%d)\n", npass, ntests);
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     }
     #endif

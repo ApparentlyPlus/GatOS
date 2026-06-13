@@ -95,6 +95,9 @@ static const char layout_us_qwerty_shift[] = {
     '*', 0, ' ', 0
 };
 
+/*
+ * keyboard_keycode_to_ascii - Converts a key event to its ASCII representation
+ */
 static inline char keyboard_keycode_to_ascii(key_event_t event) {
     if (event.keycode > KEY_CAPSLOCK) return 0;
 

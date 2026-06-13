@@ -1,5 +1,7 @@
 /*
  * math.c - Implementation of math functions based on fdlibm
+ *
+ * Author: u/ApparentlyPlus
  */
 
 #include <stdint.h>

@@ -62,6 +62,7 @@ if not PLATFORM_TOOLCHAIN_DIR.exists():
 
 CC = PLATFORM_TOOLCHAIN_DIR / "gcc" / "bin" / f"x86_64-elf-gcc{EXE_EXT}"
 LD = PLATFORM_TOOLCHAIN_DIR / "gcc" / "bin" / f"x86_64-elf-ld{EXE_EXT}"
+STRIP = PLATFORM_TOOLCHAIN_DIR / "gcc" / "bin" / f"x86_64-elf-strip{EXE_EXT}"
 GRUB_MKSTANDALONE = GRUB_DIR / f"grub-mkstandalone{EXE_EXT}"
 GRUB_MKRESCUE_CMD = GRUB_DIR / f"grub-mkrescue{EXE_EXT}"
 
@@ -85,6 +86,22 @@ elif OS_NAME == "macos":
 
 # Now with DCE!
 CFLAGS_BASE = ["-m64", "-ffreestanding", "-nostdlib", "-fno-pic", "-mcmodel=kernel", "-mno-red-zone", "-ffunction-sections", "-fdata-sections", f"-I{HEADER_DIR}"]
+KERNEL_FPU_RESTRICTIONS = ["-mno-sse", "-mno-sse2", "-mno-mmx", "-mno-80387"]
+
+# Files whose functions run (or are called) from interrupt context and must
+# never emit SSE instructions — corrupting the interrupted thread's XMM state.
+# Everything NOT in this set is free to use floats and SSE normally.
+KERNEL_INTERRUPT_PATH = {
+    "arch/x86_64/cpu/interrupts.c",    # interrupt_dispatcher
+    "kernel/sys/scheduler.c",          # sched_schedule, fpu_nm_handler
+    "kernel/sys/timers.c",             # timer_handler (registered IRQ)
+    "kernel/drivers/keyboard.c",       # keyboard_handler (registered IRQ)
+    "kernel/drivers/xhci.c",           # xhci_irq_handler (registered IRQ)
+    "tests/test_timers.c",             # test IRQ callbacks
+    "kernel/memory/vmm.c",             # vmm_find_mapped_object, vmm_map_page (demand paging)
+    "kernel/memory/pmm.c",             # pmm_alloc, pmm_free (demand paging)
+    "klibc/avl.c",                     # called by vmm.c for VMA tree operations
+}
 CPPFLAGS = [f"-I{HEADER_DIR}", "-D__ASSEMBLER__"]
 LDFLAGS = ["-n", "-nostdlib", "--gc-sections", f"-T{ROOT_DIR / 'targets/x86_64/linker.ld'}", "--no-relax", "-g"]
 
@@ -95,19 +112,19 @@ CFLAGS_VFAST = ["-O3", "-fpredictive-commoning", "-fstrict-aliasing", "-fno-dele
 # Profile Definitions
 BUILD_PROFILES = {
     "default": {
-        "flags": [], 
+        "flags": [],
         "confirm": False
     },
     "test": {
-        "flags": ["-DTEST_BUILD"], 
+        "flags": CFLAGS_FAST + ["-DTEST_BUILD"],
         "confirm": False
     },
     "fast": {
-        "flags": CFLAGS_FAST, 
+        "flags": CFLAGS_FAST,
         "confirm": False
     },
     "vfast": {
-        "flags": CFLAGS_VFAST, 
+        "flags": CFLAGS_VFAST,
         "confirm": True,
         "msg": "WARNING: 'vfast' uses aggressive optimizations (-O3, -fno-stack-protector) which may cause unexpected kernel behavior or instability."
     }
@@ -159,6 +176,15 @@ def compile_worker(job):
     result = subprocess.run(cmd, text=True, capture_output=True)
     return f"{RED}[FAIL] {src.name}:{NC}\n{result.stderr}" if result.returncode != 0 else f"{BLUE}[OK] {src.name}{NC}"
 
+def is_userspace(src: Path) -> bool:
+    rel = src.relative_to(SRC_DIR)
+    rel_str = rel.as_posix()
+    return rel_str.startswith("ulibc/") or rel_str == "kernel/uproc.c"
+
+def is_interrupt_path(src: Path) -> bool:
+    rel = src.relative_to(SRC_DIR).as_posix()
+    return rel in KERNEL_INTERRUPT_PATH
+
 def compile_sources(c_files: List[Path], asm_files: List[Path], profile_name: str) -> bool:
     profile = BUILD_PROFILES.get(profile_name, BUILD_PROFILES["default"])
     
@@ -174,13 +200,24 @@ def compile_sources(c_files: List[Path], asm_files: List[Path], profile_name: st
             print(f"\n{RED}[ABORT] Build cancelled.{NC}")
             sys.exit(0)
 
-    final_cflags = CFLAGS_BASE + profile["flags"]
-    
     print(f"{YELLOW}[INFO] Starting parallel compilation (Profile: {profile_name.upper()})...{NC}")
     
     jobs = []
     for src in c_files:
-        jobs.append((CC, src, BUILD_DIR / src.relative_to(SRC_DIR).with_suffix(".o"), final_cflags))
+        src_flags = CFLAGS_BASE + profile["flags"]
+        if not is_userspace(src):
+            # Kernel code gets LTO for better DCE
+            src_flags += ["-flto"]
+
+            # Only restrict SSE/FPU in files whose code runs from interrupt context.
+            # Everything else (kmain, kernel threads, drivers init, libc, etc.) can
+            # use floats and SSE freely, the lazy FPU mechanism handles state save/restore.
+            if is_interrupt_path(src):
+                src_flags += KERNEL_FPU_RESTRICTIONS
+        else:
+            # Userspace code gets math optimizations
+            src_flags += ["-ffast-math"]
+        jobs.append((CC, src, BUILD_DIR / src.relative_to(SRC_DIR).with_suffix(".o"), src_flags))
     for src in asm_files:
         jobs.append((CC, src, BUILD_DIR / src.relative_to(SRC_DIR).with_suffix(".o"), CPPFLAGS))
 
@@ -201,7 +238,15 @@ def compile_sources(c_files: List[Path], asm_files: List[Path], profile_name: st
 
 def link_kernel(obj_files: List[Path]):
     DIST_DIR.mkdir(parents=True, exist_ok=True)
-    run_cmd([LD, *LDFLAGS, "-o", KERNEL_BIN] + [str(f) for f in obj_files])
+    linker_script = ROOT_DIR / "targets/x86_64/linker.ld"
+    gcc_link_flags = [
+        "-nostdlib",
+        "-flto",
+        "-g",
+        f"-Wl,-n,--gc-sections,--no-relax,-T{linker_script}"
+    ]
+    run_cmd([CC, *gcc_link_flags, "-o", KERNEL_BIN] + [str(f) for f in obj_files])
+    run_cmd([STRIP, str(KERNEL_BIN)])
 
 def make_uefi_grub():
     UEFI_DIR.mkdir(parents=True, exist_ok=True)
@@ -262,7 +307,7 @@ def verify_environment() -> bool:
     print(f"{YELLOW}[INFO] Verifying environment...{NC}")
     fix_unix_permissions()
     missing = []
-    tools = {"QEMU": QEMU_EXEC, "GCC": CC, "LD": LD, "GRUB Standalone": GRUB_MKSTANDALONE, "GRUB Rescue": GRUB_MKRESCUE_CMD}
+    tools = {"QEMU": QEMU_EXEC, "GCC": CC, "LD": LD, "STRIP": STRIP, "GRUB Standalone": GRUB_MKSTANDALONE, "GRUB Rescue": GRUB_MKRESCUE_CMD}
     if OS_NAME in ["linux", "macos"]: tools["Xorriso"] = XORRISO_EXEC
     for name, path in tools.items():
         if path and not path.exists(): missing.append(f"{name} ({path})")

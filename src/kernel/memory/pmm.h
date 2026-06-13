@@ -65,12 +65,16 @@ typedef struct {
 pmm_status_t pmm_init(uint64_t range_start_phys, uint64_t range_end_phys, uint64_t min_block_size);
 void pmm_shutdown(void);
 
+// Exclusion zones
+
+pmm_status_t pmm_exclude_range(uint64_t start, uint64_t end);
+
 // Allocation/Deallocation
 
 pmm_status_t pmm_alloc(size_t size_bytes, uint64_t *out_phys);
 pmm_status_t pmm_free(uint64_t phys, size_t size_bytes);
-pmm_status_t pmm_mark_reserved_range(uint64_t start, uint64_t end);
-pmm_status_t pmm_mark_free_range(uint64_t start, uint64_t end);
+pmm_status_t pmm_populate(uint64_t start, uint64_t end);
+pmm_status_t pmm_mark_reserved(uint64_t start, uint64_t end);
 
 // Introspection helpers
 

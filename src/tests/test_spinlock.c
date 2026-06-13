@@ -4,6 +4,8 @@
  * Tests every public spinlock function: init, acquire, try_acquire, release,
  * is_locked. Covers IRQ state saving/restoring, independence of multiple locks,
  * sequential reuse, try-fail semantics, and high-frequency churn stability.
+ * 
+ * Author: Claude Code
  */
 
 #include <kernel/sys/spinlock.h>
@@ -13,8 +15,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-static int g_tests_total  = 0;
-static int g_tests_passed = 0;
+static int ntests  = 0;
+static int npass = 0;
 
 /* Read RFLAGS.IF */
 static inline bool irq_on(void) {
@@ -85,7 +87,7 @@ static bool t_is_locked(void) {
 static bool t_irq_acq_en(void) {
     spinlock_t lk;
     spinlock_init(&lk, "t_irq_en");
-    enable_interrupts();
+    intr_on();
     bool f = spinlock_acquire(&lk);
     TEST_ASSERT(f == true);
     TEST_ASSERT(!irq_on()); /* IRQs must be off while held */
@@ -96,19 +98,19 @@ static bool t_irq_acq_en(void) {
 static bool t_irq_acq_dis(void) {
     spinlock_t lk;
     spinlock_init(&lk, "t_irq_dis");
-    disable_interrupts();
+    intr_off();
     bool f = spinlock_acquire(&lk);
     TEST_ASSERT(f == false);
     TEST_ASSERT(!irq_on());
     spinlock_release(&lk, f);
-    enable_interrupts();
+    intr_on();
     return true;
 }
 
 static bool t_irq_rel_on(void) {
     spinlock_t lk;
     spinlock_init(&lk, "t_irq_ron");
-    enable_interrupts();
+    intr_on();
     bool f = spinlock_acquire(&lk);
     spinlock_release(&lk, f);
     TEST_ASSERT(irq_on()); /* Must be re-enabled */
@@ -118,11 +120,11 @@ static bool t_irq_rel_on(void) {
 static bool t_irq_rel_off(void) {
     spinlock_t lk;
     spinlock_init(&lk, "t_irq_roff");
-    disable_interrupts();
+    intr_off();
     bool f = spinlock_acquire(&lk);
     spinlock_release(&lk, f);
     TEST_ASSERT(!irq_on()); /* Must stay disabled */
-    enable_interrupts();
+    intr_on();
     return true;
 }
 
@@ -131,19 +133,19 @@ static bool t_irq_alt(void) {
     spinlock_t lk;
     spinlock_init(&lk, "t_alt");
     for (int i = 0; i < 5; i++) {
-        enable_interrupts();
+        intr_on();
         bool f1 = spinlock_acquire(&lk);
         TEST_ASSERT(f1 == true && !irq_on());
         spinlock_release(&lk, f1);
         TEST_ASSERT(irq_on());
 
-        disable_interrupts();
+        intr_off();
         bool f2 = spinlock_acquire(&lk);
         TEST_ASSERT(f2 == false && !irq_on());
         spinlock_release(&lk, f2);
         TEST_ASSERT(!irq_on());
     }
-    enable_interrupts();
+    intr_on();
     return true;
 }
 #pragma endregion
@@ -165,7 +167,7 @@ static bool t_try_free(void) {
 static bool t_try_held(void) {
     spinlock_t lk;
     spinlock_init(&lk, "t_try_held");
-    enable_interrupts();
+    intr_on();
     bool f = spinlock_acquire(&lk);
     bool was = false;
     bool got = spinlock_try_acquire(&lk, &was);
@@ -178,7 +180,7 @@ static bool t_try_held(void) {
 static bool t_try_was_on(void) {
     spinlock_t lk;
     spinlock_init(&lk, "t_try_wet");
-    enable_interrupts();
+    intr_on();
     bool was = false;
     bool got = spinlock_try_acquire(&lk, &was);
     TEST_ASSERT(got == true);
@@ -190,13 +192,13 @@ static bool t_try_was_on(void) {
 static bool t_try_was_off(void) {
     spinlock_t lk;
     spinlock_init(&lk, "t_try_wef");
-    disable_interrupts();
+    intr_off();
     bool was = true;
     bool got = spinlock_try_acquire(&lk, &was);
     TEST_ASSERT(got == true);
     TEST_ASSERT(was == false);
     spinlock_release(&lk, was);
-    enable_interrupts();
+    intr_on();
     return true;
 }
 
@@ -204,7 +206,7 @@ static bool t_try_fail_irq(void) {
     /* Failed try must not corrupt IRQ state */
     spinlock_t lk;
     spinlock_init(&lk, "t_try_nirq");
-    enable_interrupts();
+    intr_on();
     bool f = spinlock_acquire(&lk); /* disables IRQ */
     bool was = false;
     bool got = spinlock_try_acquire(&lk, &was);
@@ -219,7 +221,7 @@ static bool t_try_retry(void) {
     /* try fails → release → try succeeds */
     spinlock_t lk;
     spinlock_init(&lk, "t_try_retry");
-    enable_interrupts();
+    intr_on();
     bool f = spinlock_acquire(&lk);
     bool was = false;
     TEST_ASSERT(!spinlock_try_acquire(&lk, &was));
@@ -269,7 +271,7 @@ static bool t_three_ind(void) {
 static bool t_seq_100(void) {
     spinlock_t lk;
     spinlock_init(&lk, "t_seq100");
-    enable_interrupts();
+    intr_on();
     for (int i = 0; i < 100; i++) {
         bool f = spinlock_acquire(&lk);
         TEST_ASSERT(spinlock_is_locked(&lk));
@@ -282,7 +284,7 @@ static bool t_seq_100(void) {
 static bool t_seq_1k(void) {
     spinlock_t lk;
     spinlock_init(&lk, "t_seq1k");
-    enable_interrupts();
+    intr_on();
     for (int i = 0; i < 1000; i++) {
         bool f = spinlock_acquire(&lk);
         spinlock_release(&lk, f);
@@ -295,7 +297,7 @@ static bool t_seq_irq(void) {
     /* Verify IRQ state is consistent across 100 sequential acquires */
     spinlock_t lk;
     spinlock_init(&lk, "t_seqirq");
-    enable_interrupts();
+    intr_on();
     for (int i = 0; i < 100; i++) {
         bool f = spinlock_acquire(&lk);
         TEST_ASSERT(!irq_on());
@@ -347,7 +349,7 @@ static bool t_try_churn(void) {
     /* Mix try_acquire and acquire on the same lock */
     spinlock_t lk;
     spinlock_init(&lk, "t_trychurn");
-    enable_interrupts();
+    intr_on();
     for (int i = 0; i < 500; i++) {
         bool was = false;
         if (spinlock_try_acquire(&lk, &was)) {
@@ -368,15 +370,15 @@ static bool t_try_churn(void) {
 #pragma region Runner
 
 static void run_test(const char* name, bool (*fn)(void)) {
-    g_tests_total++;
+    ntests++;
     LOGF("[TEST] %-40s ", name);
-    if (fn()) { g_tests_passed++; LOGF("[PASS]\n"); }
+    if (fn()) { npass++; LOGF("[PASS]\n"); }
     else       { LOGF("[FAIL]\n"); }
 }
 
 void test_spinlock(void) {
-    g_tests_total  = 0;
-    g_tests_passed = 0;
+    ntests  = 0;
+    npass = 0;
 
     LOGF("\n--- BEGIN SPINLOCK TEST ---\n");
 
@@ -407,18 +409,18 @@ void test_spinlock(void) {
     run_test("try_acquire churn ×500",       t_try_churn);
 
     LOGF("--- END SPINLOCK TEST ---\n");
-    LOGF("Spinlock Test Results: %d/%d\n\n", g_tests_passed, g_tests_total);
+    LOGF("Spinlock Test Results: %d/%d\n\n", npass, ntests);
 
     #ifdef TEST_BUILD
     #include <kernel/drivers/console.h>
     #include <klibc/stdio.h>
-    if (g_tests_passed != g_tests_total) {
+    if (npass != ntests) {
         console_set_color(CONSOLE_COLOR_RED, CONSOLE_COLOR_BLACK);
-        kprintf("[-] Some spinlock tests failed (%d/%d passed).\n", g_tests_passed, g_tests_total);
+        kprintf("[-] Some spinlock tests failed (%d/%d passed).\n", npass, ntests);
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     } else {
         console_set_color(CONSOLE_COLOR_GREEN, CONSOLE_COLOR_BLACK);
-        kprintf("[+] All spinlock tests passed! (%d/%d)\n", g_tests_passed, g_tests_total);
+        kprintf("[+] All spinlock tests passed! (%d/%d)\n", npass, ntests);
         console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     }
     #endif

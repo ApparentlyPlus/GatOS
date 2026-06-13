@@ -87,7 +87,7 @@
 #include <arch/x86_64/multiboot2.h>
 #include <stdbool.h>
 
-#define CEIL_DIV(x, y) (((x) + (y) - 1) / (y)) // this is hacky and must be removed eventually
+#define CEIL_DIV(x, y) (((x) + (y) - 1) / (y)) // this is hacky and must be removed eventually (it was never removed lol)
 
 /*
  * invlpg - Invalidate a single TLB entry for the given virtual address
@@ -107,8 +107,7 @@ void flush_tlb(void);
 void PML4_switch(uint64_t pml4);
 void QEMU_DUMP_PML4(void);
 
-void unmap_identity();
-void cleanup_kernel_page_tables(uintptr_t start, uintptr_t end);
+void cleanup_kpt(uintptr_t start, uintptr_t end);
 void build_physmap();
 
 typedef struct{
@@ -121,9 +120,9 @@ typedef struct{
     uint64_t total_PDs;
     uint64_t total_PDPTs;
     uint64_t total_PML4s;
-} physmapInfo;
+} physmap_t;
 
-static physmapInfo physmapStruct = {0};
+static physmap_t physmap = {0};
 #endif
 
 /*
@@ -142,9 +141,7 @@ cvoid flush_tlb(void) {
     __asm__ volatile("mfence" ::: "memory");  // Serialize
 }
 
-2. We should consider invlpg() instead of full TLB flush
-
-3. Consider PAT Support
+2. Consider PAT Support
 
 For MMIO regions, Page Attribute Table entries would give us finer control:
 
@@ -153,7 +150,5 @@ For MMIO regions, Page Attribute Table entries would give us finer control:
 #define PAGE_PAT_WC       1  // Write-combining (good for framebuffers)
 #define PAGE_PAT_WT       4  // Write-through
 #define PAGE_PAT_WB       6  // Write-back
-
-4. Enable NX support by checking CPUID
 
 */

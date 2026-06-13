@@ -1,29 +1,36 @@
-# -----------------------------------------------------------------------------
-# Early x86 boot and long mode setup
+# boot32.S - Early x86 boot and long mode setup
+# 
 # This file contains the 32-bit entry point for the kernel, performs
 # essential CPU and multiboot checks, sets up paging structures, enables
-# long mode (64-bit mode), and jumps to the 64-bit kernel start.
-#
-# Includes error handling that outputs an error code on screen and halts.
-# Added page table dumping functionality for debugging.
-# -----------------------------------------------------------------------------
+# long mode and jumps to the 64-bit kernel start.
+# 
+# Author: u/ApparentlyPlus
+
 #include <arch/x86_64/memory/paging.h>
 
 .intel_syntax noprefix
 
+# We need these symbols to be global so they can be accessed from the linker script and other files
 .global start
 .global PML4
 .global gdt64_code_segment
 .global gdt64_virt_pointer
 
+# We also rewuest the linker to point us to these symbols
+# for the kernel stack and the long mode entry point
 .extern long_mode_start
 .extern KERNEL_STACK_TOP
 
+# Start of assembly, 32 bit registers and instructions for now
 .section .text
 .code32
 
 start:
 	# Set stack pointer to top of the stack defined by linker symbol
+	# We use the kernel V2P macro to get the phys address of the stack
+	# top, because it is linked to a virtual address in the higher half,
+	# but we are still running in 32 bit mode with identity mapping,
+	# and our registers would truncate a 64 bit address here.
 	mov esp, offset KERNEL_V2P(KERNEL_STACK_TOP)
 
 	# I am transferring the multiboot information
@@ -70,7 +77,7 @@ check_multiboot:
 	jne .no_multiboot
 	ret
 .no_multiboot:
-	mov al, 'M'    # Error code 'M'
+	mov al, 'M'
 	jmp error
 
 # -----------------------------------------------------------------------------
@@ -86,15 +93,21 @@ check_SSE:
 	
     # Enable SSE
     mov eax, cr0
-    and eax, 0xFFFBFFFF       # clear CR0.EM (bit 2)
-    or  eax, 0x00000002       # set   CR0.MP (bit 1)
+
+	# clear CR0.EM (bit 2)
+    and eax, 0xFFFBFFFF
+
+	# set CR0.MP (bit 1)
+    or  eax, 0x00000002
     mov cr0, eax
     mov eax, cr4
-    or  eax, (1<<9) | (1<<10) # set CR4.OSFXSR (bit 9) and CR4.OSXMMEXCPT (bit 10)
+
+	# set CR4.OSFXSR (bit 9) and CR4.OSXMMEXCPT (bit 10)
+    or  eax, (1<<9) | (1<<10)
     mov cr4, eax
     ret
 .no_SSE:
-	mov al, 'S'    # Error code 'S'
+	mov al, 'S'
     jmp error
 
 
@@ -118,7 +131,7 @@ check_cpuid:
 	je .no_cpuid
 	ret
 .no_cpuid:
-	mov al, 'C'    # Error code 'C'
+	mov al, 'C'
 	jmp error
 
 # -----------------------------------------------------------------------------
@@ -139,7 +152,7 @@ check_long_mode:
 	
 	ret
 .no_long_mode:
-	mov al, 'L'    # Error code 'L'
+	mov al, 'L'
 	jmp error
 
 # -----------------------------------------------------------------------------
@@ -149,8 +162,8 @@ check_long_mode:
 # -----------------------------------------------------------------------------
 setup_page_tables:
 	# The following code does 2 things:
-	# 1.) Identity maps the first 1GB worth of 4kb pages (kvirt = kphys)
-	# 2.) Maps the same 1GB to kvirt higher half with base address 0xFFFFFFFF80000000
+	# 1. Identity maps the first 1GB worth of 4kb pages (kvirt = kphys)
+	# 2. Maps the same 1GB to kvirt higher half with base address 0xFFFFFFFF80000000
 
     # PML4[0] entry points to the base address of our PDPT table.
     # This maps the lower half (identity mapping)
@@ -162,7 +175,7 @@ setup_page_tables:
     mov dword ptr [KERNEL_V2P(PML4) + 511 * 8], eax
 
     # PDPT[0] entry points to the base address of our PD table.
-    # Flags: Present (P=1), Read/Write (R/W=1)
+    # Flags: Present, Read/Write
     mov eax, offset KERNEL_V2P(PD)
     or eax, 0b11
     mov dword ptr [KERNEL_V2P(PDPT)], eax
@@ -227,15 +240,44 @@ enable_paging:
 
 # -----------------------------------------------------------------------------
 # Error:
-# Displays error message "ERR: X" where X is error code in AL,
-# then halts the CPU
+# Outputs error message "ERR: X", where X is error code in AL, in COM1 serial.
+# It then halts the CPU. This is used for debugging boot incompatibilities.
 # -----------------------------------------------------------------------------
 error:
-	mov dword ptr [0xb8000], 0x4f524f45 # "ERRO"
-	mov dword ptr [0xb8004], 0x4f3a4f52 # "R:OR"
-	mov dword ptr [0xb8008], 0x4f204f20 # " O O "
-	mov byte ptr [0xb800a], al         # error code character
+	# Save character for serial
+	mov bl, al
+
+	# Serial Output (COM1 - 0x3F8)
+	mov al, 'E'
+	call .serial_putc
+	mov al, 'R'
+	call .serial_putc
+	mov al, 'R'
+	call .serial_putc
+	mov al, ':'
+	call .serial_putc
+	mov al, ' '
+	call .serial_putc
+	mov al, bl
+	call .serial_putc
+	mov al, 13 # \r
+	call .serial_putc
+	mov al, 10 # \n
+	call .serial_putc
+
 	hlt
+
+.serial_putc:
+	push eax
+.wait:
+	mov dx, 0x3fd
+	in al, dx
+	test al, 0x20
+	jz .wait
+	pop eax
+	mov dx, 0x3f8
+	out dx, al
+	ret
 
 # -----------------------------------------------------------------------------
 # BSS section: reserve 4 KiB aligned paging tables
@@ -260,8 +302,8 @@ gdt64:
 gdt64_code_segment = . - gdt64
 	.quad (1 << 43) | (1 << 44) | (1 << 47) | (1 << 53) # 64-bit code segment descriptor
 gdt64_pointer:
-	.word . - gdt64 - 1  # limit (size of GDT - 1)
-	.long KERNEL_V2P(gdt64)     # base address of GDT (32-bit)
+	.word . - gdt64 - 1  	# limit (size of GDT - 1)
+	.long KERNEL_V2P(gdt64) # base address of GDT (32-bit)
 gdt64_virt_pointer:
-	.word . - gdt64 - 1  # limit (size of GDT - 1)
-	.quad gdt64          # base address of GDT (64-bit)
+	.word . - gdt64 - 1  	# limit (size of GDT - 1)
+	.quad gdt64          	# base address of GDT (64-bit)
