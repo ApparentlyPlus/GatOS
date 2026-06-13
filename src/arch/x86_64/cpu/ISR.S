@@ -112,8 +112,10 @@ generic_interrupt_handler:
     mov rsp, rax
 .no_sched_stack:
 
-    // Ensure 16b stack alignment at call boundary (SysV ABI)
-    sub rsp, 8
+    // Force 16b alignment before call. Works for both the sched stack case
+    // (rsp = page aligned sched_stack_top) and the non switched case (rsp
+    // offset is a multiple of 16 from original RSP since we pushed 22 QWORDs)
+    and rsp, -16
     call interrupt_dispatcher
 
     // Restore the stack pointer
