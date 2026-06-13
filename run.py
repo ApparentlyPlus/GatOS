@@ -87,6 +87,21 @@ elif OS_NAME == "macos":
 # Now with DCE!
 CFLAGS_BASE = ["-m64", "-ffreestanding", "-nostdlib", "-fno-pic", "-mcmodel=kernel", "-mno-red-zone", "-ffunction-sections", "-fdata-sections", f"-I{HEADER_DIR}"]
 KERNEL_FPU_RESTRICTIONS = ["-mno-sse", "-mno-sse2", "-mno-mmx", "-mno-80387"]
+
+# Files whose functions run (or are called) from interrupt context and must
+# never emit SSE instructions — corrupting the interrupted thread's XMM state.
+# Everything NOT in this set is free to use floats and SSE normally.
+KERNEL_INTERRUPT_PATH = {
+    "arch/x86_64/cpu/interrupts.c",    # interrupt_dispatcher
+    "kernel/sys/scheduler.c",          # sched_schedule, fpu_nm_handler
+    "kernel/sys/timers.c",             # timer_handler (registered IRQ)
+    "kernel/drivers/keyboard.c",       # keyboard_handler (registered IRQ)
+    "kernel/drivers/xhci.c",           # xhci_irq_handler (registered IRQ)
+    "tests/test_timers.c",             # test IRQ callbacks
+    "kernel/memory/vmm.c",             # vmm_find_mapped_object, vmm_map_page (demand paging)
+    "kernel/memory/pmm.c",             # pmm_alloc, pmm_free (demand paging)
+    "klibc/avl.c",                     # called by vmm.c for VMA tree operations
+}
 CPPFLAGS = [f"-I{HEADER_DIR}", "-D__ASSEMBLER__"]
 LDFLAGS = ["-n", "-nostdlib", "--gc-sections", f"-T{ROOT_DIR / 'targets/x86_64/linker.ld'}", "--no-relax", "-g"]
 
@@ -166,6 +181,10 @@ def is_userspace(src: Path) -> bool:
     rel_str = rel.as_posix()
     return rel_str.startswith("ulibc/") or rel_str == "kernel/uproc.c"
 
+def is_interrupt_path(src: Path) -> bool:
+    rel = src.relative_to(SRC_DIR).as_posix()
+    return rel in KERNEL_INTERRUPT_PATH
+
 def compile_sources(c_files: List[Path], asm_files: List[Path], profile_name: str) -> bool:
     profile = BUILD_PROFILES.get(profile_name, BUILD_PROFILES["default"])
     
@@ -190,8 +209,11 @@ def compile_sources(c_files: List[Path], asm_files: List[Path], profile_name: st
             # Kernel code gets LTO for better DCE
             src_flags += ["-flto"]
 
-            # Kernel code should NOT use SSE/AVX/etc to avoid FP state corruption in kernel mode
-            src_flags += KERNEL_FPU_RESTRICTIONS
+            # Only restrict SSE/FPU in files whose code runs from interrupt context.
+            # Everything else (kmain, kernel threads, drivers init, libc, etc.) can
+            # use floats and SSE freely, the lazy FPU mechanism handles state save/restore.
+            if is_interrupt_path(src):
+                src_flags += KERNEL_FPU_RESTRICTIONS
         else:
             # Userspace code gets math optimizations
             src_flags += ["-ffast-math"]

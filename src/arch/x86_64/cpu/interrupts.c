@@ -21,6 +21,13 @@
 #include <kernel/memory/pmm.h>
 #include <arch/x86_64/memory/paging.h>
 
+// SSE free page zero: this file is compiled with -mno-sse (interrupt path).
+// rep stosq matches what kmemset does for aligned power of 2 sizes, without SSE.
+static inline void zero_page(void *dst) {
+    uint64_t cnt = PAGE_SIZE / sizeof(uint64_t);
+    __asm__ volatile("rep stosq" : "+D"(dst), "+c"(cnt) : "a"(0ULL) : "memory");
+}
+
 #pragma region Types and Globals
 
 idt_entry_t idt[IDT_SIZE] = {0};
@@ -222,7 +229,7 @@ cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
                 uint64_t phys_base;
                 if (pmm_alloc(PAGE_SIZE, &phys_base) == PMM_OK) {
                     uint64_t page_aligned_cr2 = cr2 & ~(PAGE_SIZE - 1);
-                    kmemset((void*)PHYSMAP_P2V(phys_base), 0, PAGE_SIZE);
+                    zero_page((void*)PHYSMAP_P2V(phys_base));
                     vmm_status_t status = vmm_map_page(demand_vmm, phys_base, (void*)page_aligned_cr2, demand_obj->flags);
                     if (status == VMM_OK) {
                         return context;

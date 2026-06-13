@@ -56,6 +56,13 @@ static slab_cache_t* vmm_cache = NULL;
 static slab_cache_t* vmo_cache = NULL;
 static volatile size_t mmio_bytes = 0;
 
+// SSE free page zero: this file is compiled with -mno-sse (interrupt path).
+// rep stosq matches what kmemset does for aligned power of 2 sizes, without SSE.
+static inline void zero_page(void *dst) {
+    uint64_t cnt = PAGE_SIZE / sizeof(uint64_t);
+    __asm__ volatile("rep stosq" : "+D"(dst), "+c"(cnt) : "a"(0ULL) : "memory");
+}
+
 #pragma region Validation Helpers
 
 /*
@@ -274,8 +281,7 @@ uint64_t vmm_alloc_page_table(void) {
         return 0;
     }
 
-    uint64_t* table = (uint64_t*)PHYSMAP_P2V(phys);
-    kmemset(table, 0, PAGE_SIZE);
+    zero_page((void*)PHYSMAP_P2V(phys));
 
     return phys;
 }
