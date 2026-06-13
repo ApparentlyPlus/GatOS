@@ -230,8 +230,6 @@ void kernel_main(void* mb_info) {
 	xhci_hotplug_init();
 	QEMU_LOG("Initialized Multitasking (Process & Scheduler)", TOTAL_DBG);
 
-	// Enqueue userspace apps
-	uapps();
 	QEMU_LOG("Created userspace processes and threads", TOTAL_DBG);
 
 	// Dashboard and final touches
