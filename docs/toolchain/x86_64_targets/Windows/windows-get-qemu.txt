@@ -1,1 +1,0 @@
-Get the prebuilt x64 binaries from https://www.qemu.org/download/#windows
