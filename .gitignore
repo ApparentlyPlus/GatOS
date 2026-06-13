@@ -5,4 +5,3 @@ toolchain/*
 *.log
 *.bin
 *.EFI
-src/kernel/kmain.c
