@@ -12,7 +12,7 @@
 #include <arch/x86_64/memory/paging.h>
 #include <kernel/debug.h>
 
-#pragma region I don't even know bro
+#pragma region I dont even know bro
 
 static inline void outl(uint16_t port, uint32_t val) {
     __asm__ volatile("outl %0, %1" : : "a"(val), "Nd"(port));
