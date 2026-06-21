@@ -8,6 +8,7 @@
  * Author: u/ApparentlyPlus
  */
 
+#include <kernel/caps.h>
 #include <arch/x86_64/memory/paging.h>
 #include <arch/x86_64/memory/layout.h>
 #include <kernel/sys/spinlock.h>
@@ -18,6 +19,10 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+
+// This entire file is dead weight without a heap - see GATA_CAP_MEM in
+// kernel/caps.h.
+#ifdef GATA_CAP_MEM
 
 // Magic numbers / constants
 #define SLAB_MAGIC 0xC00151AB
@@ -1063,3 +1068,5 @@ const char* slab_cache_name(slab_cache_t* cache) {
 }
 
 #pragma endregion
+
+#endif // GATA_CAP_MEM

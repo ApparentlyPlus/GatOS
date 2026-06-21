@@ -9,10 +9,14 @@
  * Author: u/ApparentlyPlus
  */
 
+#include <kernel/caps.h>
 #include <kernel/drivers/i8042.h>
 #include <arch/x86_64/cpu/io.h>
 #include <kernel/sys/timers.h>
 #include <kernel/debug.h>
+
+// Only keyboard.c uses this - dead weight without GATA_CAP_INPUT (kernel/caps.h).
+#ifdef GATA_CAP_INPUT
 
 #define I8042_TIMEOUT_US 100000 // 100ms timeout for hardware sync
 
@@ -136,3 +140,5 @@ bool i8042_init(void) {
 }
 
 #pragma endregion
+
+#endif // GATA_CAP_INPUT

@@ -9,6 +9,7 @@
  * Author: u/ApparentlyPlus
  */
 
+#include <kernel/caps.h>
 #include <arch/x86_64/memory/paging.h>
 #include <kernel/memory/slab.h>
 #include <kernel/memory/heap.h>
@@ -21,6 +22,10 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+
+// This entire file is dead weight without a heap to manage - see
+// GATA_CAP_MEM in kernel/caps.h.
+#ifdef GATA_CAP_MEM
 
 // Magic numbers for validation
 #define HEAP_MAGIC 0xF005BA11
@@ -1372,3 +1377,4 @@ size_t heap_alloc_sz(heap_t* heap, void* ptr) {
 }
 
 #pragma endregion
+#endif // GATA_CAP_MEM

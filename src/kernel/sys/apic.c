@@ -8,6 +8,7 @@
  * Author: u/ApparentlyPlus
  */
 
+#include <kernel/caps.h>
 #include <arch/x86_64/memory/paging.h>
 #include <kernel/drivers/serial.h>
 #include <arch/x86_64/cpu/io.h>
@@ -21,13 +22,43 @@
 
 #pragma region Internal Helpers & Globals
 
+// lapic_base, lapic_write/read/eoi stay always-available below: spinlock.c
+// (lapic_get_id, inline in apic.h) and interrupts.c's IRQ dispatch
+// (lapic_eoi) are foundational and used regardless of capability level.
+// They're already safe pre-init (lapic_base == 0 makes them all no-ops),
+// which is exactly the state a build with neither GATA_CAP_THREADS nor
+// GATA_CAP_INPUT leaves them in, since nothing ever calls apic_init().
 uint64_t lapic_base = 0;
-static uint64_t ioapic_base = 0;
-static MADT_IOAPIC* ioapic_rec = NULL;
-static uint64_t ticks_per_ms = 0;
 
 /*
- * disable_pic - Disable the legacy 8259 PICs
+ * lapic_write - Write a value to a LAPIC register
+ */
+void lapic_write(uint32_t reg, uint32_t value) {
+    if (lapic_base == 0) return;
+    *(volatile uint32_t*)(lapic_base + reg) = value;
+}
+
+/*
+ * lapic_read - Read a value from a LAPIC register
+ */
+uint32_t lapic_read(uint32_t reg) {
+    if (lapic_base == 0) return 0;
+    return *(volatile uint32_t*)(lapic_base + reg);
+}
+
+/*
+ * lapic_eoi - Send End Of Interrupt signal to LAPIC
+ */
+void lapic_eoi(void) {
+    lapic_write(LAPIC_EOI, 0);
+}
+
+/*
+ * disable_pic - Disable the legacy 8259 PICs. Always available and always
+ * called from idt_init() (before pretty much anything else) regardless of
+ * capability level: an undisabled legacy PIC can still fire a spurious IRQ
+ * with no handler registered for it, crashing builds that never bring up
+ * the real APIC.
  */
 void disable_pic(void) {
 
@@ -55,36 +86,23 @@ void disable_pic(void) {
 
     outb(PIC_DATA_MASTER, 0xFF);
     outb(PIC_DATA_SLAVE, 0xFF);
-    
+
     LOGF("[APIC] Legacy PIC disabled and masked.\n");
 }
+
+// Everything below actually brings up the LAPIC/IOAPIC (MADT parsing via
+// ACPI, vmm_alloc for MMIO mapping) - dead weight without
+// GATA_NEEDS_INTERRUPT_SUBSYS (kernel/caps.h), since exceptions are handled
+// straight off the IDT and never need a real APIC.
+#ifdef GATA_NEEDS_INTERRUPT_SUBSYS
+
+static uint64_t ioapic_base = 0;
+static MADT_IOAPIC* ioapic_rec = NULL;
+static uint64_t ticks_per_ms = 0;
 
 #pragma endregion
 
 #pragma region LAPIC
-
-/*
- * lapic_write - Write a value to a LAPIC register
- */
-void lapic_write(uint32_t reg, uint32_t value) {
-    if (lapic_base == 0) return;
-    *(volatile uint32_t*)(lapic_base + reg) = value;
-}
-
-/*
- * lapic_read - Read a value from a LAPIC register
- */
-uint32_t lapic_read(uint32_t reg) {
-    if (lapic_base == 0) return 0;
-    return *(volatile uint32_t*)(lapic_base + reg);
-}
-
-/*
- * lapic_eoi - Send End Of Interrupt signal to LAPIC
- */
-void lapic_eoi(void) {
-    lapic_write(LAPIC_EOI, 0);
-}
 
 /*
  * lapic_init - Initialize the Local APIC
@@ -361,3 +379,4 @@ void apic_init(void) {
 
     LOGF("[APIC] Interrupt subsystem is online.\n");
 }
+#endif // GATA_NEEDS_INTERRUPT_SUBSYS

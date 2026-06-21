@@ -7,6 +7,7 @@
  * Author: u/ApparentlyPlus
  */
 
+#include <kernel/caps.h>
 #include <kernel/sys/scheduler.h>
 #include <kernel/sys/timers.h>
 #include <kernel/sys/process.h>
@@ -20,6 +21,8 @@
 #include <klibc/avl.h>
 #include <klibc/string.h>
 #include <klibc/stdio.h>
+
+#ifdef GATA_CAP_THREADS
 
 // Scheduler state
 static thread_t* cur = NULL;
@@ -496,3 +499,29 @@ void sched_exit(void) {
     intr_restore(iflag);
     __builtin_unreachable();
 }
+
+#else // !GATA_CAP_THREADS
+
+// No scheduler exists. interrupts.c's fault handler and timers.c's tick
+// both call into a handful of these functions unconditionally (some of it
+// dating back to before process_init()/sched_init() run even in a full
+// build), and xhci.c already has an explicit "no scheduler" fallback gated
+// on sched_active() - all of that keeps working as long as these symbols
+// exist and consistently report "there is no scheduler."
+
+// ISR.S reads this directly (not through a function call) to decide
+// whether to switch onto the per-CPU scheduler stack before dispatching an
+// interrupt; it already treats 0 as "stay on the current stack," which is
+// exactly what we want here since sched_init() (the only thing that ever
+// sets it to something else) never runs.
+uint64_t sched_stack_top = 0;
+
+bool sched_active(void) { return false; }
+thread_t* sched_current(void) { return NULL; }
+cpu_context_t* sched_schedule(cpu_context_t* current_context) { return current_context; }
+void sched_yield(void) { }
+void sched_sleep(uint64_t ms) { (void)ms; }
+uint64_t sched_next_wake(void) { return UINT64_MAX; }
+void sched_add(thread_t* thread) { (void)thread; }
+
+#endif // GATA_CAP_THREADS

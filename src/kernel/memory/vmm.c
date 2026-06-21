@@ -8,6 +8,7 @@
  * Author: u/ApparentlyPlus
  */
 
+#include <kernel/caps.h>
 #include <arch/x86_64/memory/paging.h>
 #include <arch/x86_64/cpu/cpu.h>
 #include <kernel/memory/slab.h>
@@ -20,6 +21,12 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+
+// This entire file is dead weight without a heap - see GATA_CAP_MEM in
+// kernel/caps.h. vmm_add_mmio is the one exception: it's a stats-only
+// counter called from kmain's memory-map walk regardless of GATA_CAP_MEM,
+// so it gets its own always-available no-op stub below.
+#ifdef GATA_CAP_MEM
 
 // Magic numbers for validation and corruption detection
 #define VMM_MAGIC 0xC0FFEEEE
@@ -1645,12 +1652,26 @@ size_t vmm_mmio_total(void) {
     return __atomic_load_n(&mmio_bytes, __ATOMIC_RELAXED);
 }
 
+#endif // GATA_CAP_MEM
+
 /*
- * vmm_add_mmio - Add to the total MMIO byte count
+ * vmm_add_mmio - Add to the total MMIO byte count. Kept outside the
+ * GATA_CAP_MEM gate above: kmain's memory-map walk calls this
+ * unconditionally while populating the PMM, regardless of whether a heap
+ * exists. Without one, the count just goes nowhere (no vmm_mmio_total to
+ * read it back from).
  */
+#ifdef GATA_CAP_MEM
 void vmm_add_mmio(size_t bytes) {
     __atomic_add_fetch(&mmio_bytes, bytes, __ATOMIC_RELAXED);
 }
+#else
+void vmm_add_mmio(size_t bytes) {
+    (void)bytes;
+}
+#endif
+
+#ifdef GATA_CAP_MEM
 
 #pragma region Debugging
 
@@ -1863,3 +1884,4 @@ bool vmm_verify_integrity(vmm_t* vmm_pub) {
 }
 
 #pragma endregion
+#endif // GATA_CAP_MEM

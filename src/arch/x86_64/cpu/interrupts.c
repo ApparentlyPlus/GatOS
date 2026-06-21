@@ -7,6 +7,7 @@
  * Author: u/ApparentlyPlus
  */
 
+#include <kernel/caps.h>
 #include <arch/x86_64/cpu/interrupts.h>
 #include <arch/x86_64/cpu/gdt.h>
 #include <klibc/stdio.h>
@@ -20,6 +21,9 @@
 #include <kernel/misc.h>
 #include <kernel/memory/pmm.h>
 #include <arch/x86_64/memory/paging.h>
+#ifdef GATA_CAP_MEM
+#include <kernel/memory/vmm.h>
+#endif
 
 // SSE free page zero: this file is compiled with -mno-sse (interrupt path).
 // rep stosq matches what kmemset does for aligned power of 2 sizes, without SSE.
@@ -201,6 +205,7 @@ cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
             case INT_SIMD_ERROR:           panic_msg = "SIMD exception"; break;
         }
 
+#ifdef GATA_CAP_MEM
         // demand paging
         // try proc VMM first, fall back to kernel's
         if (vec == INT_PAGE_FAULT) {
@@ -242,9 +247,11 @@ cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
                 }
             }
         }
+#endif // GATA_CAP_MEM
 
         bool is_user = (context->iret_cs & 3) == 3;
 
+#ifdef GATA_CAP_THREADS
         // If it's a user fault, we can kill the offending process instead of panicking the whole system
         if (is_user && sched_active()) {
             thread_t* current = sched_current();
@@ -277,6 +284,9 @@ cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
                 return sched_schedule(context);
             }
         }
+#else
+        (void)is_user;
+#endif // GATA_CAP_THREADS
 
         // For kernel faults or if we can't find the process info, panic the whole system
         if (vec == INT_PAGE_FAULT) {

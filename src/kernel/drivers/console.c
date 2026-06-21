@@ -14,6 +14,7 @@
  * Author: u/ApparentlyPlus
  */
 
+#include <kernel/caps.h>
 #include <kernel/drivers/console.h>
 #include <kernel/drivers/font.h>
 #include <kernel/drivers/tty.h>
@@ -113,6 +114,14 @@ static uint8_t* get_glyph(uint32_t cp) {
     if (idx == 0 && cp != 0) idx = 0x3F;
     return (uint8_t*)font->glyph_buffer + idx * font->header->charsize;
 }
+
+// Everything below, down to the Crash Console region, is the normal
+// backbuffer/TTY-routed console path: it allocates (con_init) and reads
+// active_tty, both of which only exist when the scheduler/TTY stack is
+// built (GATA_CAP_THREADS). Builds without it use the crash-console path
+// below directly (see kernel/caps.h). get_glyph above stays always-on:
+// the crash path (crash_emit) needs it too.
+#ifdef GATA_CAP_THREADS
 
 /*
  * render_cursor - Draws (on=true) or erases (on=false) the block cursor
@@ -546,6 +555,8 @@ void con_header_write(console_t* con, size_t row, const char* text, uint8_t fg, 
     spinlock_release(&con->lock, flags);
 }
 
+#endif // GATA_CAP_THREADS
+
 #pragma region Crash Console
 
 /*
@@ -587,19 +598,19 @@ static void crash_scroll(void) {
 }
 
 /*
- * crash_emit - Renders one ASCII byte directly to the framebuffer
+ * crash_emit - Renders one Unicode codepoint directly to the framebuffer
  */
-static void crash_emit(uint8_t c) {
+static void crash_emit(uint32_t cp) {
     uint32_t row_h = (uint32_t)fh + PADDING_Y;
-    if      (c == '\n') { ccx = 0; ccy++; }
-    else if (c == '\r') { ccx = 0; }
-    else if (c == '\t') { ccx = (ccx + 4) & ~3u; }
+    if      (cp == '\n') { ccx = 0; ccy++; }
+    else if (cp == '\r') { ccx = 0; }
+    else if (cp == '\t') { ccx = (ccx + 4) & ~3u; }
     else {
         if (ccx >= (uint32_t)cols) { ccx = 0; ccy++; }
         if (ccy >= (uint32_t)rows) crash_scroll();
         uint32_t px = ccx * 8;
         uint32_t py = ccy * row_h;
-        uint8_t* glyph = get_glyph(c);
+        uint8_t* glyph = get_glyph(cp);
         if (glyph)
             for (uint32_t y = 0; y < (uint32_t)fh; y++) {
                 uint8_t bits = glyph[y];
@@ -611,12 +622,50 @@ static void crash_emit(uint8_t c) {
     if (ccy >= (uint32_t)rows) crash_scroll();
 }
 
+// UTF-8 decode state for the crash console, mirroring the normal console's
+// per-instance con->u8n/u8cp (_con_process_byte) - this one's global since
+// there's only ever one crash console. Needed because con_crash_putc/puts
+// are now also the normal output path in builds with no scheduler/TTY
+// (GATA_CAP_THREADS, kernel/caps.h), and GatOS's own banner (kernel/misc.c)
+// uses multi-byte UTF-8 box-drawing glyphs - feeding those bytes straight
+// to crash_emit one at a time (as the old single-byte crash_emit did)
+// renders each continuation byte as its own bogus codepoint.
+static int      cu8n = 0;
+static uint32_t cu8cp = 0;
+
+/*
+ * crash_process_byte - Feeds one raw byte through the crash console's UTF-8
+ * decoder, emitting a codepoint via crash_emit once a sequence completes
+ */
+static void crash_process_byte(uint8_t byte) {
+    if (cu8n == 0) {
+        if      ((byte & 0x80) == 0x00) crash_emit(byte);
+        else if ((byte & 0xE0) == 0xC0) { cu8n = 1; cu8cp = byte & 0x1F; }
+        else if ((byte & 0xF0) == 0xE0) { cu8n = 2; cu8cp = byte & 0x0F; }
+        else if ((byte & 0xF8) == 0xF0) { cu8n = 3; cu8cp = byte & 0x07; }
+    } else {
+        if ((byte & 0xC0) == 0x80) {
+            cu8cp = (cu8cp << 6) | (byte & 0x3F);
+            if (--cu8n == 0) crash_emit(cu8cp);
+        } else { cu8n = 0; crash_emit(0xFFFD); }
+    }
+}
+
+/*
+ * con_crash_set_colors - Sets the foreground/background used by con_crash_*
+ * (shared with the panic screen's palette, since it's the same hardware path)
+ */
+void con_crash_set_colors(uint8_t fg, uint8_t bg) {
+    cfg = fg & 0xF; cbg = bg & 0xF;
+}
+
 /*
  * con_crash_clear - Fills the framebuffer with bg color and resets the panic cursor
  */
 void con_crash_clear(uint8_t bg) {
     if (!fb) return;
     cbg = bg & 0xF; ccx = 0; ccy = 0;
+    cu8n = 0; // don't carry a half-finished UTF-8 sequence across a clear
     uint32_t color = VGA_PALETTE[cbg];
     size_t total = (size_t)fb_h * fb_pitch;
     if (fb_bpp == 32) {
@@ -630,11 +679,19 @@ void con_crash_clear(uint8_t bg) {
 }
 
 /*
+ * con_crash_putc - Outputs one byte directly to the framebuffer
+ */
+void con_crash_putc(char c) {
+    if (!fb) return;
+    crash_process_byte((uint8_t)c);
+}
+
+/*
  * con_crash_puts - Outputs a null-terminated string directly to the framebuffer
  */
 void con_crash_puts(const char* s) {
     if (!fb || !s) return;
-    while (*s) crash_emit((uint8_t)*s++);
+    while (*s) crash_process_byte((uint8_t)*s++);
 }
 
 /*
@@ -667,42 +724,70 @@ void console_init(multiboot_parser_t* parser) {
     cols = fb_w / fw;
     rows = fb_h / (fh + PADDING_Y);
     kmemset(fb, 0, fb_sz);
+#ifndef GATA_CAP_THREADS
+    // No scheduler/TTY: the crash-console path is the only console there
+    // is, used for ordinary output rather than just panics, so start it
+    // with a normal palette instead of the panic screen's white-on-red.
+    con_crash_set_colors(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
+    con_crash_clear(CONSOLE_COLOR_BLACK);
+#endif
 }
 
 /*
  * console_print_char - Global accessor: prints a character to the active TTY
+ * (or, with no scheduler/TTY, straight to the static framebuffer console)
  */
 void console_print_char(char character) {
+#ifdef GATA_CAP_THREADS
     extern tty_t* volatile active_tty;
     if (active_tty && active_tty->console)
         con_putc(active_tty->console, character);
+#else
+    con_crash_putc(character);
+#endif
 }
 
 /*
  * console_set_color - Global accessor: sets colors on the active TTY
+ * (or the static framebuffer console's palette, with no scheduler/TTY)
  */
 void console_set_color(uint8_t foreground, uint8_t background) {
+#ifdef GATA_CAP_THREADS
     extern tty_t* volatile active_tty;
     if (active_tty && active_tty->console)
         con_set_color(active_tty->console, foreground, background);
+#else
+    con_crash_set_colors(foreground, background);
+#endif
 }
 
 /*
- * console_enable_cursor - Global accessor: toggles the cursor on the active TTY
+ * console_enable_cursor - Global accessor: toggles the cursor on the active
+ * TTY. The static framebuffer console has no cursor, so this is a no-op
+ * without a scheduler/TTY.
  */
 void console_enable_cursor(bool enabled) {
+#ifdef GATA_CAP_THREADS
     extern tty_t* volatile active_tty;
     if (active_tty && active_tty->console)
         con_enable_cursor(active_tty->console, enabled);
+#else
+    (void)enabled;
+#endif
 }
 
 /*
- * console_clear - Global accessor: clears the active TTY's display
+ * console_clear - Global accessor: clears the active TTY's display (or the
+ * static framebuffer console, with no scheduler/TTY)
  */
 void console_clear(uint8_t background) {
+#ifdef GATA_CAP_THREADS
     extern tty_t* volatile active_tty;
     if (active_tty && active_tty->console)
         con_clear(active_tty->console, background);
+#else
+    con_crash_clear(background);
+#endif
 }
 
 size_t console_get_width()  { return cols; }

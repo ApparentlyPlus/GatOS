@@ -13,9 +13,12 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include <kernel/caps.h>
 #include <kernel/drivers/console.h>
 #include <klibc/stdio.h>
 #include <kernel/drivers/tty.h>
+#include <kernel/drivers/serial.h>
+#include <kernel/drivers/input.h>
 #include <kernel/sys/panic.h>
 #include <kernel/sys/scheduler.h>
 #include <kernel/sys/process.h>
@@ -117,6 +120,12 @@ typedef struct {
 
 
 void _putchar(char character){
+#if defined(GATA_OUTPUT_SERIAL)
+    // Real program stdout shares COM1 with the boot-stage QEMU_LOG markers -
+    // both are meant to be the one observable channel when there's no
+    // framebuffer to look at.
+    serial_write_char_port(SERIAL_COM1, character);
+#elif defined(GATA_CAP_THREADS)
     tty_t* target_tty = active_tty;
 
     // Route to the calling thread's own TTY if the scheduler is running
@@ -133,6 +142,11 @@ void _putchar(char character){
     }
 
     tty_write(target_tty, &character, 1);
+#else
+    // No scheduler/TTY: write straight to the framebuffer, the same
+    // allocation-free path panic uses for the crash screen.
+    con_crash_putc(character);
+#endif
 }
 
 // internal buffer output
@@ -925,11 +939,20 @@ int _getchar(void) {
         next_char = -1;
         return ch;
     }
+#ifdef GATA_CAP_THREADS
     // Always read from the kernel's own fixed TTY, not active_tty.
     // active_tty may be switched to a user process TTY; the kernel loop
     // must not compete with userspace for input.
     if (!kernel_tty) return 0;
     return (int)tty_read_char(kernel_tty);
+#else
+    // No scheduler to block a thread on: busy-wait (halting between polls)
+    // for the keyboard IRQ handler to push a character onto the static
+    // input ring buffer.
+    int ch;
+    while ((ch = input_getchar()) < 0) __asm__ volatile("hlt");
+    return ch;
+#endif
 }
 
 static void _ungetchar(int ch) {

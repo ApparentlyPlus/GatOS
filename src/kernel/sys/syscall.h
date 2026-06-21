@@ -20,6 +20,7 @@
 #define SYS_SLEEP_MS 7
 #define SYS_READ 8
 #define SYS_TTY_CTRL 9
+#define SYS_DEBUG_WRITE 10
 
 // TTY Control Commands
 #define TTY_CTRL_CLEAR    0

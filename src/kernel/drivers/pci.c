@@ -7,10 +7,16 @@
  * Author: u/ApparentlyPlus
  */
 
+#include <kernel/caps.h>
 #include <kernel/drivers/pci.h>
 #include <arch/x86_64/cpu/io.h>
 #include <arch/x86_64/memory/paging.h>
 #include <kernel/debug.h>
+
+// Only xhci.c uses PCI (to find the xHCI controller) - dead weight without
+// USB keyboard support. See GATA_KBD_EXTERNAL/GATA_KBD_HOTPLUG in
+// kernel/caps.h.
+#if defined(GATA_KBD_EXTERNAL) || defined(GATA_KBD_HOTPLUG)
 
 #pragma region I dont even know bro
 
@@ -200,3 +206,5 @@ bool pci_cfg_msi(pci_dev_t *d, uint8_t vec, uint32_t lapic_id) {
     LOGF("[PCI] MSI cfg: vec=0x%02x lapic=%u\n", vec, lapic_id);
     return true;
 }
+
+#endif // GATA_KBD_EXTERNAL || GATA_KBD_HOTPLUG

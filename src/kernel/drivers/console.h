@@ -95,9 +95,13 @@ void console_enable_cursor(bool enabled);
 size_t console_get_width();
 size_t console_get_height();
 
-// Crash console api (lock free, scheduler free)
+// Crash console api (lock free, scheduler free). Also reused, outside of a
+// panic, as the static no-alloc console for builds with no scheduler/TTY -
+// see GATA_CAP_THREADS in kernel/caps.h.
 size_t con_crash_width(void);
 void con_crash_clear(uint8_t bg);
+void con_crash_set_colors(uint8_t fg, uint8_t bg);
+void con_crash_putc(char c);
 void con_crash_puts(const char* s);
 void con_crash_printf(const char* fmt, ...);
 
