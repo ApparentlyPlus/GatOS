@@ -13,21 +13,11 @@
 #include <stddef.h>
 #include <stdarg.h>
 
-static int dbg_counter = 0;
 
 /*
- * QEMU_LOG - Debug function to klog messages to qemu serial with counter
+ * QEMU_LOG - Debug function to klog messages to qemu serial without counter
  */
-void QEMU_LOG(const char* msg, int total) {
-    char buf[256];
-    ksnprintf(buf, sizeof(buf), "[%d/%d] %s\n", ++dbg_counter, total, msg);
-    serial_write(buf);
-}
-
-/*
- * QEMU_GENERIC_LOG - Debug function to klog messages to qemu serial without counter
- */
-void QEMU_GENERIC_LOG(const char* msg) {
+void QEMU_LOG(const char* msg) {
     char buf[128];
     char* ptr = buf;
 
