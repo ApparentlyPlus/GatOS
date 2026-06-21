@@ -11,7 +11,11 @@
  *   GATA_CAP_THREADS     - any process/thread is declared (kernel or user
  *                           context, doesn't matter - both need the full
  *                           scheduler/process/tty/dashboard/syscall stack).
- *   GATA_CAP_INPUT       - the program reads input (keyboard).
+ *                           Implies GATA_CAP_INPUT (the dashboard it pulls in
+ *                           needs a working ALT+TAB/CTRL+SHIFT+ESC keyboard
+ *                           IRQ regardless of whether the program reads input).
+ *   GATA_CAP_INPUT       - the program reads input (keyboard), or THREADS
+ *                           is on (see above).
  *   GATA_CAP_FRAMEBUFFER - output renders to the framebuffer console.
  *   GATA_OUTPUT_SERIAL   - output goes to the COM1 serial port instead.
  *   GATA_KBD_DEFAULT     - PS/2 only.
@@ -31,6 +35,18 @@
 // of what the program's own thread bodies do - so THREADS implies MEM.
 #if defined(GATA_CAP_THREADS) && !defined(GATA_CAP_MEM)
 #define GATA_CAP_MEM
+#endif
+
+// The dashboard's ALT+TAB/CTRL+SHIFT+ESC cycling (kernel/drivers/dashboard.c,
+// built whenever THREADS is on) only ever receives a keypress through the
+// keyboard IRQ handler in kernel/drivers/keyboard.c - which is dead weight,
+// entirely absent from the build, without GATA_CAP_INPUT. That handler has
+// nothing to do with whether the Gata *program* ever reads input itself, so
+// a threaded program that never calls Console.InputLine() would otherwise
+// build a dashboard nothing could ever bring up - THREADS supersedes every
+// other capability, so it implies INPUT too.
+#if defined(GATA_CAP_THREADS) && !defined(GATA_CAP_INPUT)
+#define GATA_CAP_INPUT
 #endif
 
 // The USB hotplug watch runs as its own kernel thread (xhci_hotplug_init),
