@@ -161,14 +161,39 @@ def run_cmd(cmd: List[str | Path], cwd: Optional[Path] = None, env: Optional[Dic
         except ProcessLookupError:
             pass
         proc.wait()
+        _reap_appimage_fuse_mounts(cmd_str)
         sys.stderr.write(f"\n{YELLOW}[WARN] Process timed out after {timeout}s (This is expected for timeout tests).{NC}\n")
         return False
+
+    _reap_appimage_fuse_mounts(cmd_str)
 
     if ret != 0:
         sys.stderr.write(f"{RED}[ERROR] Command failed with exit code {ret}{NC}\n")
         if check: sys.exit(ret)
         return False
     return True
+
+def _reap_appimage_fuse_mounts(cmd_str: List[str]):
+    # The QEMU AppImage's launcher mounts itself via a `dwarfs` FUSE daemon
+    # that double-forks and re-parents to PID 1 (or the user's systemd
+    # instance) immediately on mount - it is never in our process group, so
+    # killpg above can never reach it even though it spawned from our child.
+    # Left alive, it keeps stdout/stderr open forever (it inherits our fds),
+    # which hangs anything piping this script's output (e.g. `| tail`),
+    # indefinitely, even after the launcher and qemu-system-x86_64 are both
+    # long dead. Only relevant on Linux, and only for the AppImage launcher.
+    if OS_NAME != "linux": return
+    if not any("AppImage" in c for c in cmd_str): return
+    try:
+        result = subprocess.run(["pgrep", "-f", "dwarfs .*QEMU-x86_64.AppImage"],
+                                 capture_output=True, text=True, check=False)
+        for pid_str in result.stdout.split():
+            try:
+                os.kill(int(pid_str), signal.SIGKILL)
+            except (ValueError, ProcessLookupError, PermissionError):
+                pass
+    except FileNotFoundError:
+        pass  # pgrep not available; best-effort cleanup only
 
 def get_kernel_version() -> str:
     pattern = re.compile(r'KERNEL_VERSION\s*=\s*"([^"]*)"')
@@ -322,9 +347,9 @@ def make_iso(output_iso: Path):
             sys.exit(1)
         
         cmd = [
-            str(GRUB_MKRESCUE_CMD.resolve()), 
-            "-d", str(GRUB_DIR.resolve()), 
-            "-o", str(output_iso.resolve()), 
+            str(GRUB_MKRESCUE_CMD.resolve()),
+            "-d", str(GRUB_MODULE_DIR.resolve()),
+            "-o", str(output_iso.resolve()),
             str(ISO_DIR.resolve())
         ]
         run_cmd(cmd, cwd=GRUB_DIR, check=True)

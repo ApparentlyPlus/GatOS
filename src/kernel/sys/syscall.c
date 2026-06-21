@@ -108,9 +108,18 @@ void syscall_dispatcher(cpu_context_t* regs) {
             smap_deny();
             intr_restore(ints);
 
+            // A userspace thread's stdout goes through this syscall
+            // regardless of output mode - GATA_OUTPUT_SERIAL only rewires
+            // the kernel realm's own _putchar (klibc/stdio.c), so without
+            // this, "serial output" builds would still send userspace
+            // program output to the (headless, invisible) framebuffer TTY.
+            #ifdef GATA_OUTPUT_SERIAL
+            serial_write_len_port(SERIAL_COM1, kbuf, len);
+            #else
             if (current->process && current->process->tty) {
                 tty_write(current->process->tty, kbuf, len);
             }
+            #endif
             kfree(kbuf);
             regs->rax = (uint64_t)len;
             break;
