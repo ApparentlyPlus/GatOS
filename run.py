@@ -4,6 +4,7 @@ import os
 import re
 import sys
 import shutil
+import signal
 import argparse
 import subprocess
 from pathlib import Path
@@ -135,24 +136,39 @@ BUILD_PROFILES = {
 def run_cmd(cmd: List[str | Path], cwd: Optional[Path] = None, env: Optional[Dict] = None, check: bool = True, timeout: int = None) -> bool:
     cmd_str = [str(c) for c in cmd]
     print(f"{BLUE}>>> {' '.join(cmd_str)}{f' (in {cwd})' if cwd else ''}{NC}")
-    
+
     run_env = os.environ.copy()
     if env: run_env.update(env)
-    
+
+    # Run in its own process group (not just subprocess.run's default child
+    # PID) so a timeout can kill the whole tree. This matters for QEMU on
+    # Linux specifically: the toolchain ships it as an AppImage, which
+    # mounts itself via FUSE and forks the real qemu-system-x86_64 as a
+    # child - killing only the launcher PID leaves that child (and the FUSE
+    # mount) running forever, holding this script's stdout open so anything
+    # piping our output (e.g. `| tail`) hangs indefinitely.
     try:
-        subprocess.run(cmd_str, cwd=cwd, env=run_env, check=check, text=True, timeout=timeout)
-        return True
-    except subprocess.TimeoutExpired:
-        # Caller handles specific logic, but we print a generic warning here
-        sys.stderr.write(f"\n{YELLOW}[WARN] Process timed out after {timeout}s (This is expected for timeout tests).{NC}\n")
-        return False
-    except subprocess.CalledProcessError as e:
-        sys.stderr.write(f"{RED}[ERROR] Command failed with exit code {e.returncode}{NC}\n")
-        if check: sys.exit(e.returncode)
-        return False
-    except FileNotFoundError as e:
+        proc = subprocess.Popen(cmd_str, cwd=cwd, env=run_env, text=True, start_new_session=True)
+    except FileNotFoundError:
         sys.stderr.write(f"{RED}[FATAL] Executable not found: {cmd_str[0]}{NC}\n")
         sys.exit(1)
+
+    try:
+        ret = proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.wait()
+        sys.stderr.write(f"\n{YELLOW}[WARN] Process timed out after {timeout}s (This is expected for timeout tests).{NC}\n")
+        return False
+
+    if ret != 0:
+        sys.stderr.write(f"{RED}[ERROR] Command failed with exit code {ret}{NC}\n")
+        if check: sys.exit(ret)
+        return False
+    return True
 
 def get_kernel_version() -> str:
     pattern = re.compile(r'KERNEL_VERSION\s*=\s*"([^"]*)"')
@@ -185,7 +201,24 @@ def is_interrupt_path(src: Path) -> bool:
     rel = src.relative_to(SRC_DIR).as_posix()
     return rel in KERNEL_INTERRUPT_PATH
 
-def compile_sources(c_files: List[Path], asm_files: List[Path], profile_name: str) -> bool:
+# Capability flags (see src/kernel/caps.h for the implication contract appa
+# and GatOS share). Default mirrors the historical "full build" behavior:
+# everything on, framebuffer output, hotplug-capable USB keyboard. Pass
+# tokens like "nomem", "nothreads", "noinput", "serial", "kbd=default" /
+# "kbd=external" / "kbd=hotplug" on the run.py command line to test a
+# stripped-down configuration instead.
+DEFAULT_CAPS = {"mem": True, "threads": True, "input": True, "output": "framebuffer", "kbd": "hotplug"}
+
+def caps_defines(caps: Dict) -> List[str]:
+    d = []
+    if caps["mem"]:     d.append("-DGATA_CAP_MEM")
+    if caps["threads"]: d.append("-DGATA_CAP_THREADS")
+    if caps["input"]:   d.append("-DGATA_CAP_INPUT")
+    d.append("-DGATA_OUTPUT_SERIAL" if caps["output"] == "serial" else "-DGATA_CAP_FRAMEBUFFER")
+    d.append({"default": "-DGATA_KBD_DEFAULT", "external": "-DGATA_KBD_EXTERNAL", "hotplug": "-DGATA_KBD_HOTPLUG"}[caps["kbd"]])
+    return d
+
+def compile_sources(c_files: List[Path], asm_files: List[Path], profile_name: str, caps: Dict) -> bool:
     profile = BUILD_PROFILES.get(profile_name, BUILD_PROFILES["default"])
     
     if profile.get("confirm", False):
@@ -201,10 +234,13 @@ def compile_sources(c_files: List[Path], asm_files: List[Path], profile_name: st
             sys.exit(0)
 
     print(f"{YELLOW}[INFO] Starting parallel compilation (Profile: {profile_name.upper()})...{NC}")
-    
+
+    caps_d = caps_defines(caps)
+    print(f"{CYAN}[INFO] Capabilities: {' '.join(caps_d)}{NC}")
+
     jobs = []
     for src in c_files:
-        src_flags = CFLAGS_BASE + profile["flags"]
+        src_flags = CFLAGS_BASE + profile["flags"] + caps_d
         if not is_userspace(src):
             # Kernel code gets LTO for better DCE
             if OS_NAME != "macos":
@@ -220,7 +256,7 @@ def compile_sources(c_files: List[Path], asm_files: List[Path], profile_name: st
             src_flags += ["-ffast-math"]
         jobs.append((CC, src, BUILD_DIR / src.relative_to(SRC_DIR).with_suffix(".o"), src_flags))
     for src in asm_files:
-        jobs.append((CC, src, BUILD_DIR / src.relative_to(SRC_DIR).with_suffix(".o"), CPPFLAGS))
+        jobs.append((CC, src, BUILD_DIR / src.relative_to(SRC_DIR).with_suffix(".o"), CPPFLAGS + caps_d))
 
     with Pool(processes=cpu_count()) as pool:
         results = pool.map(compile_worker, jobs)
@@ -293,8 +329,8 @@ def make_iso(output_iso: Path):
         ]
         run_cmd(cmd, cwd=GRUB_DIR, check=True)
 
-def build_iso(c_src: List[Path], asm_src: List[Path], obj_files: List[Path], iso_name: str, profile: str):
-    if compile_sources(c_src, asm_src, profile):
+def build_iso(c_src: List[Path], asm_src: List[Path], obj_files: List[Path], iso_name: str, profile: str, caps: Dict):
+    if compile_sources(c_src, asm_src, profile, caps):
         link_kernel(obj_files)
         make_uefi_grub()
         make_iso(DIST_DIR / iso_name)
@@ -353,11 +389,14 @@ def run_qemu(iso_file: Path, headless: bool = False, timeout: Optional[int] = No
     qemu_cmd = [str(QEMU_EXEC)]
     if OS_NAME == "linux": qemu_cmd.append("qemu-system-x86_64")
     
-    # QEMU Flags
+    # QEMU Flags. 3 serial ports: COM1 (mon:stdio - boot stage markers, and
+    # real program stdout when built with GATA_OUTPUT_SERIAL), COM2 (kernel's
+    # own internal debug.log), COM3 (userspace debug channel, ulibc/debug.h).
     args = [
         "-cdrom", str(iso_file),
         "-serial", "mon:stdio",
         "-serial", f"file:{DEBUG_LOG}",
+        "-serial", f"file:{ROOT_DIR / 'user-debug.log'}",
         "-cpu", "kvm64,+smep,+smap"
     ]
     
@@ -393,6 +432,16 @@ def print_help():
   {GREEN}headless{NC}      Run QEMU without a GUI (uses -nographic)
   {GREEN}timeout=XX{NC}    Kill QEMU after XX duration (e.g., 10s, 2m, 1h)
 
+{YELLOW}Capability Flags (Optional, default is a full build):{NC}
+  {GREEN}nomem{NC}         Strip slab/VMM/heap (no heap at all)
+  {GREEN}nothreads{NC}     Strip scheduler/process/TTY/dashboard/syscalls (kernel or
+              user, doesn't matter - both need the same stack). Falls
+              back to the static, allocation-free framebuffer console.
+  {GREEN}noinput{NC}       Strip keyboard/PS2/USB input entirely
+  {GREEN}serial{NC}        Output to COM1 instead of the framebuffer
+  {GREEN}kbd=XX{NC}        default | external | hotplug (hotplug implies external,
+              default, and threads - the hotplug watch runs as a thread)
+
 {BLUE}Examples:{NC}
   python run.py all vfast headless
   python run.py build test
@@ -412,14 +461,17 @@ def main():
     build_profile = "default"
     run_headless = False
     run_timeout = None
+    caps = dict(DEFAULT_CAPS)
+    kbd_explicit = False
 
     valid_commands = {"all", "build", "clean", "help"}
     valid_build_profiles = set(BUILD_PROFILES.keys())
+    valid_kbd = {"default", "external", "hotplug"}
 
     # Improved Parser
     for arg in user_args:
         arg_lower = arg.lower()
-        
+
         if arg_lower == "help":
             print_help()
             sys.exit(0)
@@ -431,8 +483,52 @@ def main():
             run_headless = True
         elif arg_lower.startswith("timeout="):
             run_timeout = parse_timeout(arg_lower.split("=")[1])
+        elif arg_lower == "nomem":
+            caps["mem"] = False
+        elif arg_lower == "nothreads":
+            caps["threads"] = False
+        elif arg_lower == "noinput":
+            caps["input"] = False
+        elif arg_lower == "serial":
+            caps["output"] = "serial"
+        elif arg_lower.startswith("kbd="):
+            kbd = arg_lower.split("=", 1)[1]
+            if kbd in valid_kbd:
+                caps["kbd"] = kbd
+                kbd_explicit = True
+            else:
+                print(f"{YELLOW}[WARN] Invalid kbd level '{kbd}'. Use default|external|hotplug. Ignoring.{NC}")
         else:
             print(f"{YELLOW}[WARN] Unknown argument '{arg}', ignoring.{NC}")
+
+    # DEFAULT_CAPS' kbd=hotplug exists to match the historical "full build"
+    # default when nothing is passed - but it forces threads/mem back on
+    # (see below), which would silently undo an explicit nomem/nothreads if
+    # left alone. Only keep it if the user actually asked for it; otherwise
+    # fall back to the plain PS/2-only level so a strip request actually
+    # strips.
+    if not kbd_explicit and (not caps["mem"] or not caps["threads"] or not caps["input"]):
+        caps["kbd"] = "default"
+
+    # Implications mirror src/kernel/caps.h, applied here too so an explicit
+    # config like "nothreads kbd=hotplug" doesn't silently produce an
+    # inconsistent build - the user asked for hotplug, which needs threads,
+    # so give it threads back rather than failing later at link time.
+    if caps["kbd"] == "hotplug":
+        if not caps["threads"]:
+            print(f"{YELLOW}[WARN] kbd=hotplug needs a scheduler (it runs as a thread) - re-enabling threads.{NC}")
+        caps["threads"] = True
+    if caps["kbd"] in ("external", "hotplug"):
+        if not caps["mem"] or not caps["input"]:
+            print(f"{YELLOW}[WARN] kbd={caps['kbd']} needs a heap and input - re-enabling both.{NC}")
+        caps["mem"] = True
+        caps["input"] = True
+    if caps["threads"] and not caps["mem"]:
+        print(f"{YELLOW}[WARN] threads need a heap (scheduler/process/TTY all allocate) - re-enabling mem.{NC}")
+        caps["mem"] = True
+    if (caps["threads"] or caps["input"]) and not caps["mem"]:
+        print(f"{YELLOW}[WARN] ACPI/APIC/timers (needed for the scheduler tick or keyboard IRQ routing) map tables through the VMM - re-enabling mem.{NC}")
+        caps["mem"] = True
 
     if command == "clean":
         clean()
@@ -447,14 +543,14 @@ def main():
 
     if command == "build":
         clean()
-        build_iso(c_src, asm_src, obj_files, iso_name, build_profile)
+        build_iso(c_src, asm_src, obj_files, iso_name, build_profile, caps)
     elif command == "all":
         try: clean()
         except Exception: pass
-        build_iso(c_src, asm_src, obj_files, iso_name, build_profile)
-        
+        build_iso(c_src, asm_src, obj_files, iso_name, build_profile, caps)
+
         iso = find_iso_file()
-        if iso: 
+        if iso:
             run_qemu(iso, headless=run_headless, timeout=run_timeout)
         else:
             sys.stderr.write(f"{RED}[ERROR] ISO file not found after build.{NC}\n")

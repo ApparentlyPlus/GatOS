@@ -8,6 +8,7 @@
  * Author: u/ApparentlyPlus
  */
 
+#include <kernel/caps.h>
 #include <kernel/sys/process.h>
 #include <kernel/sys/scheduler.h>
 #include <kernel/sys/userspace.h>
@@ -19,6 +20,10 @@
 #include <kernel/debug.h>
 #include <klibc/string.h>
 #include <klibc/stdio.h>
+
+// This entire file is dead weight without a scheduler to run processes on -
+// see GATA_CAP_THREADS in kernel/caps.h.
+#ifdef GATA_CAP_THREADS
 
 static pid_t next_pid = 1;
 static tid_t next_tid = 1;
@@ -385,3 +390,5 @@ void procs_kill_tty(tty_t* tty) {
         proc = proc->next;
     }
 }
+
+#endif // GATA_CAP_THREADS

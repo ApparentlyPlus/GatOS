@@ -17,6 +17,7 @@
  * Author: u/ApparentlyPlus
  */
 
+#include <kernel/caps.h>
 #include <kernel/drivers/xhci.h>
 #include <kernel/drivers/pci.h>
 #include <kernel/drivers/usb.h>
@@ -34,6 +35,14 @@
 #include <kernel/debug.h>
 #include <klibc/string.h>
 #include <kernel/sys/panic.h>
+
+// Dead weight without USB keyboard support - see GATA_KBD_EXTERNAL/
+// GATA_KBD_HOTPLUG in kernel/caps.h. xhci_hotplug_init specifically is
+// further nested-gated below on GATA_KBD_HOTPLUG alone: it's the only part
+// of this file that calls into process.c (process_create/thread_create),
+// which only exists with GATA_CAP_THREADS - implied by HOTPLUG, not by
+// EXTERNAL alone.
+#if defined(GATA_KBD_EXTERNAL) || defined(GATA_KBD_HOTPLUG)
 
 static xhci_hc_t *hcs[16];
 static int hc_cnt = 0;
@@ -1258,6 +1267,7 @@ bool xhci_init(void) {
  * xhci_hotplug_init - Initializes the hotplug worker thread and shared resources for handling dynamic device events
  * Author's Note: You can ignore calling this if you don't care about hotplugging
  */
+#ifdef GATA_KBD_HOTPLUG
 void xhci_hotplug_init(void) {
     if (hc_cnt == 0) {
         LOGF("[XHCI] hotplug init skipped: no active controllers\n");
@@ -1301,3 +1311,9 @@ void xhci_hotplug_init(void) {
         hc->worker = hotplug_thread;
     }
 }
+#else
+void xhci_hotplug_init(void) {
+    LOGF("[XHCI] hotplug support not built (GATA_KBD_HOTPLUG not set)\n");
+}
+#endif // GATA_KBD_HOTPLUG
+#endif // GATA_KBD_EXTERNAL || GATA_KBD_HOTPLUG

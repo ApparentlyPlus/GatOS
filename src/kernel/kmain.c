@@ -7,6 +7,8 @@
  * Author: u/ApparentlyPlus
  */
 
+#include <kernel/caps.h>
+
 #include <arch/x86_64/cpu/interrupts.h>
 #include <arch/x86_64/cpu/gdt.h>
 #include <arch/x86_64/memory/paging.h>
@@ -51,6 +53,11 @@ void kernel_main(void* mb_info) {
 	// Init serial
 	serial_init_port(COM1_PORT);
 	serial_init_port(COM2_PORT);
+#ifdef GATA_CAP_THREADS
+	// COM3 is the userspace debug channel (ulibc/debug.h, SYS_DEBUG_WRITE) -
+	// only meaningful once there's a userspace to use it.
+	serial_init_port(COM3_PORT);
+#endif
 	QEMU_LOG("Kernel main reached, normal assembly boot succeeded", TOTAL_DBG);
 
 	// IDT must be initialized before pretty much anything else, 
@@ -109,6 +116,7 @@ void kernel_main(void* mb_info) {
 	}
 	QEMU_LOG("Initialized physical memory manager", TOTAL_DBG);
 
+#ifdef GATA_CAP_MEM
 	// Initialize slab allocator before VMM since VMM needs to allocate memory for its structures
 	slab_status_t slab_status = slab_init();
 	if(slab_status != SLAB_OK) {
@@ -124,12 +132,15 @@ void kernel_main(void* mb_info) {
 		return;
 	}
 	QEMU_LOG("Initialized kernel virtual memory manager", TOTAL_DBG);
+#endif // GATA_CAP_MEM
 
-	// With the VMM online, we can use virtual addresses for everything from now on
+	// With the VMM online (if built), we can use virtual addresses for everything from now on.
+	// GDT/CPU init don't actually need the heap - they get their stacks straight from the PMM.
 	gdt_init();
 	cpu_init();
 	QEMU_LOG("Parsed CPU information and configured GS base", TOTAL_DBG);
 
+#ifdef GATA_CAP_MEM
 	// kmalloc after heap init is available
 	heap_status_t heap_status = heap_kernel_init();
 
@@ -138,7 +149,9 @@ void kernel_main(void* mb_info) {
 		return;
 	}
 	QEMU_LOG("Initialized kernel heap", TOTAL_DBG);
+#endif // GATA_CAP_MEM
 
+#ifdef GATA_NEEDS_INTERRUPT_SUBSYS
 	// ACPI and APIC come after memory management since they require dynamic memory for tables and structures
 	// and they need to be initialized before we can safely enable interrupts
 	acpi_init(&multiboot);
@@ -152,16 +165,18 @@ void kernel_main(void* mb_info) {
 	apic_init();
 	QEMU_LOG("Initialized APIC subsystem", TOTAL_DBG);
 	kprintf("[APIC] Local APIC and I/O APIC initialized successfully\n");
-	
+
 	// Timers before scheduler
 	timer_init();
 	power_rapl_init(); // RAPL needs uptime (TSC calibrated by timer_init)
 	QEMU_LOG("Initialized system timers", TOTAL_DBG);
-	
+#endif // GATA_NEEDS_INTERRUPT_SUBSYS
+
+#ifdef GATA_CAP_THREADS
 	// Syscalls before userspace
     syscall_init();
 	QEMU_LOG("Initialized Syscall Interface", TOTAL_DBG);
-	
+
 	// TTYs and output finally online
     tty_t* k_tty = tty_create();
     if (!k_tty) panic("Failed to create kernel TTY!");
@@ -170,29 +185,47 @@ void kernel_main(void* mb_info) {
 	active_tty = k_tty;
     kernel_tty = k_tty; // Protect this from ALT+F4
 	QEMU_LOG("Initialized Kernel TTY", TOTAL_DBG);
+#endif // GATA_CAP_THREADS
 
-	// Input drivers and subsystems
+	// Input drivers and subsystems (the static ring-buffer path when there's
+	// no scheduler/TTY is harmless to init either way - it's a no-op if
+	// GATA_CAP_INPUT is also off)
 	input_init();
 	QEMU_LOG("Initialized input handling subsystem", TOTAL_DBG);
-	
+
 	// Banneeeeeeer!
 	print_banner(KERNEL_VERSION);
 	kprintf("[KERNEL] CPU initialization complete (x86_64, long mode).\n");
-	kprintf("[KERNEL] ACPI revision %u detected (%s supported).\n", 
-           acpi_get_rsdp()->Revision, 
+#ifdef GATA_NEEDS_INTERRUPT_SUBSYS
+	kprintf("[KERNEL] ACPI revision %u detected (%s supported).\n",
+           acpi_get_rsdp()->Revision,
            acpi_is_xsdt_supported() ? "XSDT" : "RSDT");
 	kprintf("[KERNEL] Advanced Programmable Interrupt Controller (APIC) routed.\n");
+#endif
 	kprintf("[KERNEL] Physical Memory Manager (PMM) configured (RAM mapped via Physmap).\n");
+#ifdef GATA_CAP_MEM
 	kprintf("[KERNEL] Virtual Memory Manager (VMM) active (Higher Half).\n");
 	kprintf("[KERNEL] Heap and Slab allocators initialized.\n");
+#endif
+#ifdef GATA_CAP_THREADS
 	kprintf("[KERNEL] Syscall Interface (MSRs) enabled.\n");
-	kprintf("[KERNEL] Framebuffer resolution %dx%dx%d initialized.\n", 
-           multiboot_get_framebuffer(&multiboot)->width, 
+#endif
+#ifdef GATA_OUTPUT_SERIAL
+	kprintf("[KERNEL] Output routed to COM1 (no framebuffer/console built).\n");
+#else
+	kprintf("[KERNEL] Framebuffer resolution %dx%dx%d initialized.\n",
+           multiboot_get_framebuffer(&multiboot)->width,
            multiboot_get_framebuffer(&multiboot)->height,
            multiboot_get_framebuffer(&multiboot)->bpp);
+#ifdef GATA_CAP_THREADS
 	kprintf("[KERNEL] Dynamic TTY subsystem online.\n");
 	kprintf("[KERNEL] Use ALT+Tab to cycle between available consoles.\n");
-	
+#else
+	kprintf("[KERNEL] Static framebuffer console online (no scheduler/TTY built).\n");
+#endif
+#endif // GATA_OUTPUT_SERIAL
+
+#ifdef GATA_CAP_INPUT
 	// Keyboard and routing
 	keyboard_init();
 	irq_register(INT_FIRST_INTERRUPT + 1, (irq_handler_t)keyboard_handler);
@@ -200,7 +233,8 @@ void kernel_main(void* mb_info) {
 	ioapic_unmask(1); // we allow the keyboard IRQ to be handled after this point, since the handler is registered and ready to go
 	QEMU_LOG("Initialized Keyboard and routed IRQ 1", TOTAL_DBG);
 	kprintf("[KBD] Keyboard IRQ 1 routed and unmasked.\n");
-	
+
+#if defined(GATA_KBD_EXTERNAL) || defined(GATA_KBD_HOTPLUG)
 	// PCI and USB for external keyboards
 	pci_init();
 	if (xhci_init()) {
@@ -209,11 +243,16 @@ void kernel_main(void* mb_info) {
 		QEMU_LOG("No USB xHCI keyboard found (falling back to PS/2)", TOTAL_DBG);
 		kprintf("[XHCI] No USB keyboard detected; PS/2 remains active.\n");
 	}
+#endif // GATA_KBD_EXTERNAL || GATA_KBD_HOTPLUG
+#endif // GATA_CAP_INPUT
 
+#ifdef GATA_CAP_THREADS
 	// Enable multitasking and userspace
     process_init();
     sched_init();
+#if defined(GATA_KBD_EXTERNAL) || defined(GATA_KBD_HOTPLUG)
 	xhci_hotplug_init();
+#endif
 	QEMU_LOG("Initialized Multitasking (Process & Scheduler)", TOTAL_DBG);
 
 	QEMU_LOG("Created userspace processes and threads", TOTAL_DBG);
@@ -221,6 +260,7 @@ void kernel_main(void* mb_info) {
 	// Dashboard and final touches
 	dash_init();
 	kprintf("[KERNEL] Dashboard ready (CTRL+SHIFT+ESC)\n");
+#endif // GATA_CAP_THREADS
 
 	// Let the good times roll
 	intr_on();
@@ -228,9 +268,10 @@ void kernel_main(void* mb_info) {
 
 	QEMU_LOG("Reached kernel end", TOTAL_DBG);
 
+#ifdef GATA_CAP_INPUT
 	// Simulate the kernel thread
 	kprintf("[KERNEL] Kernel initialization complete, entering interactive test loop...\n");
-	
+
 	while (1) {
 	    char tt[128] = {0};
 
@@ -248,4 +289,10 @@ void kernel_main(void* mb_info) {
 	        kprintf("You typed: %s\n", tt);
 	    }
 	}
+#else
+	// No input built - there's nothing to read, so just idle instead of
+	// hanging forever waiting for a keypress that can never arrive.
+	kprintf("[KERNEL] Kernel initialization complete, idling (no input built).\n");
+	while (1) { __asm__ volatile("hlt"); }
+#endif // GATA_CAP_INPUT
 }

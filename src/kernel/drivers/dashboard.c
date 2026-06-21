@@ -6,6 +6,7 @@
  * Author: u/ApparentlyPlus, ChatGPT Codex 5.4 (look dude, there was no way I was writing all this by hand)
  */
 
+#include <kernel/caps.h>
 #include <kernel/drivers/dashboard.h>
 #include <kernel/drivers/tty.h>
 #include <kernel/drivers/console.h>
@@ -20,6 +21,10 @@
 #include <arch/x86_64/cpu/cpu.h>
 #include <klibc/stdio.h>
 #include <klibc/string.h>
+
+// The dashboard is pure introspection UI over the scheduler/process/TTY
+// stack - dead weight without it. See GATA_CAP_THREADS in kernel/caps.h.
+#ifdef GATA_CAP_THREADS
 
 static tty_t* dashTTY;
 static tty_t* lastTTY;
@@ -1027,3 +1032,5 @@ void dash_init(void) {
 
     sched_add(t);
 }
+
+#endif // GATA_CAP_THREADS

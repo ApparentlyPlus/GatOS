@@ -70,6 +70,13 @@ void panic_c(const char* message, cpu_context_t* context)
 
     uint16_t screen_width = (uint16_t)con_crash_width();
 
+    // Force both colors explicitly, not just the background: in builds with
+    // no scheduler/TTY the crash console doubles as the normal static
+    // output console (kernel/caps.h, GATA_CAP_THREADS), so a program could
+    // have left the foreground set to something else via Console.SetColor
+    // right before panicking - without this, the panic text could end up
+    // unreadable against the red background.
+    con_crash_set_colors(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_RED);
     con_crash_clear(CONSOLE_COLOR_RED);
 
     #define HEADER_MSG "Oh no! Your GatOS ventured into undefined behavior and never returned :("

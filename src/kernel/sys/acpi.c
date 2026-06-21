@@ -8,6 +8,7 @@
  * Author: u/ApparentlyPlus
  */
 
+#include <kernel/caps.h>
 #include <arch/x86_64/multiboot2.h>
 #include <arch/x86_64/memory/paging.h>
 #include <kernel/sys/panic.h>
@@ -15,6 +16,12 @@
 #include <kernel/memory/vmm.h>
 #include <kernel/debug.h>
 #include <klibc/string.h>
+
+// Only needed to bring up the LAPIC/IOAPIC (GATA_NEEDS_INTERRUPT_SUBSYS in
+// kernel/caps.h) - exceptions are handled straight off the IDT and don't
+// need ACPI. Maps tables through the VMM, so this also needs a heap
+// (already implied by that macro).
+#ifdef GATA_NEEDS_INTERRUPT_SUBSYS
 
 static RSDP2Descriptor* rsdp = NULL;
 static uint64_t rsdt_phys = 0; // Physical address of RSDT/XSDT
@@ -183,3 +190,4 @@ void* acpi_find_table(const char* signature) {
 RSDP2Descriptor* acpi_get_rsdp(void) { return rsdp; }
 void* acpi_get_root_sdt(void) { return rsdt_virt; }
 bool acpi_is_xsdt_supported(void) { return xsdt_ok; }
+#endif // GATA_NEEDS_INTERRUPT_SUBSYS

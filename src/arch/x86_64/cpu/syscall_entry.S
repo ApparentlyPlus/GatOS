@@ -23,6 +23,13 @@
  * Author: u/ApparentlyPlus
  */
 
+#include <kernel/caps.h>
+
+// Nothing ever points MSR_LSTAR at this without a scheduler (syscall_init,
+// the only thing that references syscall_entry, is gated the same way in
+// syscall.c) - see GATA_CAP_THREADS in kernel/caps.h.
+#ifdef GATA_CAP_THREADS
+
 .intel_syntax noprefix
 
 .global syscall_entry
@@ -120,3 +127,5 @@ syscall_entry:
     // Slow path through iretq
     swapgs
     iretq
+
+#endif // GATA_CAP_THREADS

@@ -6,6 +6,7 @@
  * Author: u/ApparentlyPlus
  */
 
+#include <kernel/caps.h>
 #include <arch/x86_64/cpu/interrupts.h>
 #include <arch/x86_64/cpu/io.h>
 #include <arch/x86_64/cpu/cpu.h>
@@ -15,6 +16,12 @@
 #include <kernel/sys/acpi.h>
 #include <kernel/debug.h>
 #include <klibc/string.h>
+
+// power_off/reboot need ACPI (S5); power_rapl_* need timers.c's calibrated
+// uptime - both only ever called from kmain's interactive test loop, which
+// itself only exists with GATA_CAP_INPUT (implies GATA_NEEDS_INTERRUPT_SUBSYS,
+// kernel/caps.h).
+#ifdef GATA_NEEDS_INTERRUPT_SUBSYS
 
 #define SLP_EN (1 << 13)
 
@@ -241,3 +248,5 @@ uint32_t power_avg_watts(void) {
     if (watts_x10 > 9999) watts_x10 = 9999;
     return (uint32_t)watts_x10;
 }
+
+#endif // GATA_NEEDS_INTERRUPT_SUBSYS

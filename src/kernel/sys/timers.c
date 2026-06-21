@@ -8,6 +8,7 @@
  * Author: u/ApparentlyPlus
  */
 
+#include <kernel/caps.h>
 #include <arch/x86_64/cpu/interrupts.h>
 #include <arch/x86_64/memory/paging.h>
 #include <kernel/drivers/serial.h>
@@ -20,6 +21,11 @@
 #include <kernel/sys/apic.h>
 #include <kernel/debug.h>
 #include <klibc/string.h>
+
+// Only needed once there's a scheduler timer tick or keyboard IRQ to route
+// (GATA_NEEDS_INTERRUPT_SUBSYS in kernel/caps.h, which already implies a
+// heap - this maps HPET MMIO through the VMM).
+#ifdef GATA_NEEDS_INTERRUPT_SUBSYS
 
 #pragma region Internal Globals
 
@@ -356,3 +362,5 @@ void timer_arm_next(bool going_idle) {
 }
 
 #pragma endregion
+
+#endif // GATA_NEEDS_INTERRUPT_SUBSYS

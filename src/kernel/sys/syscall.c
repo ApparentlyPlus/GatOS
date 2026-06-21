@@ -7,6 +7,7 @@
  * Author: u/ApparentlyPlus
  */
 
+#include <kernel/caps.h>
 #include <kernel/sys/syscall.h>
 #include <arch/x86_64/cpu/cpu.h>
 #include <arch/x86_64/cpu/gdt.h>
@@ -16,9 +17,14 @@
 #include <klibc/stdio.h>
 #include <kernel/memory/vmm.h>
 #include <kernel/drivers/tty.h>
+#include <kernel/drivers/serial.h>
 #include <kernel/debug.h>
 #include <kernel/memory/heap.h>
 #include <klibc/string.h>
+
+// Meaningless without userspace processes to take syscalls from - see
+// GATA_CAP_THREADS in kernel/caps.h.
+#ifdef GATA_CAP_THREADS
 
 extern void syscall_entry(void);
 
@@ -252,6 +258,37 @@ void syscall_dispatcher(cpu_context_t* regs) {
             break;
         }
 
+        case SYS_DEBUG_WRITE: {
+            // Straight to COM3, bypassing the TTY entirely - this is the
+            // userspace side of the kernel's own debug-only serial channel
+            // (kernel uses COM2 via LOGF; see ulibc/debug.h).
+            const char* buf = (const char*)regs->rdi;
+            size_t len = (size_t)regs->rsi;
+
+            if (!buf || len == 0) {
+                regs->rax = (uint64_t)-1;
+                break;
+            }
+            if (len > 4096) len = 4096;
+
+            if (!vmm_check_buffer(current->process->vmm, buf, len, VM_FLAG_USER)) {
+                LOGF("[SYSCALL] SYS_DEBUG_WRITE: invalid buffer 0x%lx (len: %zu) from '%s'\n", (uintptr_t)buf, len, current->name);
+                regs->rax = (uint64_t)-1;
+                break;
+            }
+
+            char kbuf[4096];
+            bool ints = intr_save();
+            smap_allow();
+            kmemcpy(kbuf, buf, len);
+            smap_deny();
+            intr_restore(ints);
+
+            serial_write_len_port(SERIAL_COM3, kbuf, len);
+            regs->rax = (uint64_t)len;
+            break;
+        }
+
         default:
             LOGF("[SYSCALL] Unknown syscall: %lu from thread '%s' (PID %u)\n", syscall_num, current->name, current->process ? current->process->pid : 0);
 
@@ -259,3 +296,5 @@ void syscall_dispatcher(cpu_context_t* regs) {
             break;
     }
 }
+
+#endif // GATA_CAP_THREADS

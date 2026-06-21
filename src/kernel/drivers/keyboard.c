@@ -11,6 +11,7 @@
  * Author: u/ApparentlyPlus
  */
 
+#include <kernel/caps.h>
 #include <kernel/drivers/keyboard.h>
 #include <kernel/drivers/i8042.h>
 #include <kernel/drivers/input.h>
@@ -20,6 +21,10 @@
 #include <kernel/debug.h>
 #include <klibc/string.h>
 #include <arch/x86_64/cpu/io.h>
+
+// Dead weight without GATA_CAP_INPUT (kernel/caps.h) - nothing ever
+// registers keyboard_handler as an IRQ handler without it.
+#ifdef GATA_CAP_INPUT
 
 #define EVENT_BUFFER_SIZE 256
 
@@ -200,3 +205,5 @@ cpu_context_t* keyboard_handler(cpu_context_t* ctx) {
 }
 
 #pragma endregion
+
+#endif // GATA_CAP_INPUT

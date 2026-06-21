@@ -8,12 +8,17 @@
  * Author: u/ApparentlyPlus
  */
 
+#include <kernel/caps.h>
 #include <kernel/drivers/tty.h>
 #include <kernel/drivers/ldisc.h>
 #include <kernel/memory/heap.h>
 #include <kernel/sys/scheduler.h>
 #include <kernel/sys/panic.h>
 #include <klibc/string.h>
+
+// This entire file is dead weight without a scheduler - see GATA_CAP_THREADS
+// in kernel/caps.h.
+#ifdef GATA_CAP_THREADS
 
 // TTY Manager State
 static tty_t* tty_list = NULL;
@@ -333,3 +338,5 @@ void ldisc_input(tty_t* tty, char c) {
         if (ld->echo && tty->console) con_putc(tty->console, c);
     }
 }
+
+#endif // GATA_CAP_THREADS

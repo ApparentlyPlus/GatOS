@@ -22,6 +22,7 @@
 #define SYS_SLEEP_MS 7
 #define SYS_READ 8
 #define SYS_TTY_CTRL 9
+#define SYS_DEBUG_WRITE 10
 
 #define TTY_CTRL_CLEAR    0
 #define TTY_CTRL_CURSOR   1
@@ -108,5 +109,11 @@ userspace static inline int64_t syscall_read(char* buf, size_t len) {
 
 userspace static inline uint64_t syscall_tty_ctrl(uint64_t cmd, uint64_t arg) {
     return sc2(SYS_TTY_CTRL, cmd, arg);
+}
+
+// Writes straight to the kernel's COM3 debug serial port, bypassing the TTY
+// entirely - see ulibc/debug.h.
+userspace static inline void syscall_debug_write(const char* buf, size_t len) {
+    sc2(SYS_DEBUG_WRITE, (uint64_t)buf, (uint64_t)len);
 }
 
