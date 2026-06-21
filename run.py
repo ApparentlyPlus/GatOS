@@ -348,7 +348,7 @@ def make_iso(output_iso: Path):
         
         cmd = [
             str(GRUB_MKRESCUE_CMD.resolve()),
-            "-d", str(GRUB_MODULE_DIR.resolve()),
+            "-d", str(GRUB_DIR.resolve()),
             "-o", str(output_iso.resolve()),
             str(ISO_DIR.resolve())
         ]
