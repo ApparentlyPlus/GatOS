@@ -40,8 +40,6 @@
 #include <kernel/misc.h>
 #include <klibc/stdio.h>
 
-#define TOTAL_DBG 25
-
 static char* KERNEL_VERSION = "v2.0.0";
 static uint8_t multiboot_buffer[8 * 1024];
 
@@ -58,44 +56,44 @@ void kernel_main(void* mb_info) {
 	// only meaningful once there's a userspace to use it.
 	serial_init_port(COM3_PORT);
 #endif
-	QEMU_LOG("Kernel main reached, normal assembly boot succeeded", TOTAL_DBG);
+	QEMU_LOG("Kernel main reached, normal assembly boot succeeded");
 
 	// IDT must be initialized before pretty much anything else, 
 	// since we rely on interrupts for APIC, timers, input, and basically everything else
 	idt_init();
-	QEMU_LOG("Initialized the IDT", TOTAL_DBG);
+	QEMU_LOG("Initialized the IDT");
 
 	// Multiboot comes next since we need to parse the memory map and other info before we can safely initialize memory management
 	multiboot_parser_t multiboot = {0};
 	multiboot_init(&multiboot, mb_info, multiboot_buffer, sizeof(multiboot_buffer));
 
 	if (!multiboot.initialized) {
-		QEMU_LOG("[KERNEL] Failed to initialize multiboot2 parser!", TOTAL_DBG);
+		QEMU_LOG("[KERNEL] Failed to initialize multiboot2 parser!");
 		return;
 	}
 
-	QEMU_LOG("Multiboot structure parsed and copied to higher half", TOTAL_DBG);
+	QEMU_LOG("Multiboot structure parsed and copied to higher half");
 
 	// Early paging and physmap
 	reserve_required_tablespace(&multiboot);
-	QEMU_LOG("Reserved the required space for page tables in the kernel region", TOTAL_DBG);
+	QEMU_LOG("Reserved the required space for page tables in the kernel region");
 
 	cleanup_kpt(0x0, get_kend(false));
-	QEMU_LOG("Unmapped all memory besides the higher half kernel range", TOTAL_DBG);
+	QEMU_LOG("Unmapped all memory besides the higher half kernel range");
 
 	// With this I cast memory management
 	build_physmap();
-	QEMU_LOG("Built physmap at PHYSMAP_VIRTUAL_BASE", TOTAL_DBG);
+	QEMU_LOG("Built physmap at PHYSMAP_VIRTUAL_BASE");
 
 	// We need panic to work right about now
 	// if we panic before this, something went catastrophically wrong 
 	console_init(&multiboot);
-	QEMU_LOG("Initialized console", TOTAL_DBG);
+	QEMU_LOG("Initialized console");
 
 	// Initialize PMM before VMM since VMM needs to allocate memory for page tables
 	pmm_status_t pmm_status = pmm_init(0x0, PHYSMAP_V2P(get_physmap_end()), PAGE_SIZE);
 	if(pmm_status != PMM_OK) {
-		QEMU_LOG("[PMM] Failed to initialize physical memory manager", TOTAL_DBG);
+		QEMU_LOG("[PMM] Failed to initialize physical memory manager");
 		return;
 	}
 
@@ -114,41 +112,41 @@ void kernel_main(void* mb_info) {
 		}
 		pmm_populate((uint64_t)region_start, (uint64_t)region_end);
 	}
-	QEMU_LOG("Initialized physical memory manager", TOTAL_DBG);
+	QEMU_LOG("Initialized physical memory manager");
 
 #ifdef GATA_CAP_MEM
 	// Initialize slab allocator before VMM since VMM needs to allocate memory for its structures
 	slab_status_t slab_status = slab_init();
 	if(slab_status != SLAB_OK) {
-		QEMU_LOG("[Slab] Failed to initialize slab allocator", TOTAL_DBG);
+		QEMU_LOG("[Slab] Failed to initialize slab allocator");
 		return;
 	}
-	QEMU_LOG("Initialized slab allocator", TOTAL_DBG);
+	QEMU_LOG("Initialized slab allocator");
 
 	// Initialize VMM and switch to it
 	vmm_status_t vmm_status = vmm_kernel_init(get_kend(true) + PAGE_SIZE, 0xFFFFFFFFFFFFF000);
 	if(vmm_status != VMM_OK) {
-		QEMU_LOG("[VMM] Failed to initialize virtual memory manager", TOTAL_DBG);
+		QEMU_LOG("[VMM] Failed to initialize virtual memory manager");
 		return;
 	}
-	QEMU_LOG("Initialized kernel virtual memory manager", TOTAL_DBG);
+	QEMU_LOG("Initialized kernel virtual memory manager");
 #endif // GATA_CAP_MEM
 
 	// With the VMM online (if built), we can use virtual addresses for everything from now on.
 	// GDT/CPU init don't actually need the heap - they get their stacks straight from the PMM.
 	gdt_init();
 	cpu_init();
-	QEMU_LOG("Parsed CPU information and configured GS base", TOTAL_DBG);
+	QEMU_LOG("Parsed CPU information and configured GS base");
 
 #ifdef GATA_CAP_MEM
 	// kmalloc after heap init is available
 	heap_status_t heap_status = heap_kernel_init();
 
 	if(heap_status != HEAP_OK) {
-		QEMU_LOG("[HEAP] Failed to initialize kernel heap", TOTAL_DBG);
+		QEMU_LOG("[HEAP] Failed to initialize kernel heap");
 		return;
 	}
-	QEMU_LOG("Initialized kernel heap", TOTAL_DBG);
+	QEMU_LOG("Initialized kernel heap");
 #endif // GATA_CAP_MEM
 
 #ifdef GATA_NEEDS_INTERRUPT_SUBSYS
@@ -160,22 +158,22 @@ void kernel_main(void* mb_info) {
 	       acpi_is_xsdt_supported() ? "XSDT" : "RSDT",
 	       acpi_get_rsdp()->OEMID);
 
-	QEMU_LOG("Initialized ACPI subsystem", TOTAL_DBG);
+	QEMU_LOG("Initialized ACPI subsystem");
 
 	apic_init();
-	QEMU_LOG("Initialized APIC subsystem", TOTAL_DBG);
+	QEMU_LOG("Initialized APIC subsystem");
 	kprintf("[APIC] Local APIC and I/O APIC initialized successfully\n");
 
 	// Timers before scheduler
 	timer_init();
 	power_rapl_init(); // RAPL needs uptime (TSC calibrated by timer_init)
-	QEMU_LOG("Initialized system timers", TOTAL_DBG);
+	QEMU_LOG("Initialized system timers");
 #endif // GATA_NEEDS_INTERRUPT_SUBSYS
 
 #ifdef GATA_CAP_THREADS
 	// Syscalls before userspace
     syscall_init();
-	QEMU_LOG("Initialized Syscall Interface", TOTAL_DBG);
+	QEMU_LOG("Initialized Syscall Interface");
 
 	// TTYs and output finally online
     tty_t* k_tty = tty_create();
@@ -184,14 +182,14 @@ void kernel_main(void* mb_info) {
 	// Default to Kernel TTY
 	active_tty = k_tty;
     kernel_tty = k_tty; // Protect this from ALT+F4
-	QEMU_LOG("Initialized Kernel TTY", TOTAL_DBG);
+	QEMU_LOG("Initialized Kernel TTY");
 #endif // GATA_CAP_THREADS
 
 	// Input drivers and subsystems (the static ring-buffer path when there's
 	// no scheduler/TTY is harmless to init either way - it's a no-op if
 	// GATA_CAP_INPUT is also off)
 	input_init();
-	QEMU_LOG("Initialized input handling subsystem", TOTAL_DBG);
+	QEMU_LOG("Initialized input handling subsystem");
 
 	// Banneeeeeeer!
 	print_banner(KERNEL_VERSION);
@@ -231,16 +229,16 @@ void kernel_main(void* mb_info) {
 	irq_register(INT_FIRST_INTERRUPT + 1, (irq_handler_t)keyboard_handler);
 	ioapic_redirect(1, INT_FIRST_INTERRUPT + 1, lapic_get_id(), 0);
 	ioapic_unmask(1); // we allow the keyboard IRQ to be handled after this point, since the handler is registered and ready to go
-	QEMU_LOG("Initialized Keyboard and routed IRQ 1", TOTAL_DBG);
+	QEMU_LOG("Initialized Keyboard and routed IRQ 1");
 	kprintf("[KBD] Keyboard IRQ 1 routed and unmasked.\n");
 
 #if defined(GATA_KBD_EXTERNAL) || defined(GATA_KBD_HOTPLUG)
 	// PCI and USB for external keyboards
 	pci_init();
 	if (xhci_init()) {
-		QEMU_LOG("Initialized USB xHCI keyboard", TOTAL_DBG);
+		QEMU_LOG("Initialized USB xHCI keyboard");
 	} else {
-		QEMU_LOG("No USB xHCI keyboard found (falling back to PS/2)", TOTAL_DBG);
+		QEMU_LOG("No USB xHCI keyboard found (falling back to PS/2)");
 		kprintf("[XHCI] No USB keyboard detected; PS/2 remains active.\n");
 	}
 #endif // GATA_KBD_EXTERNAL || GATA_KBD_HOTPLUG
@@ -253,9 +251,9 @@ void kernel_main(void* mb_info) {
 #if defined(GATA_KBD_EXTERNAL) || defined(GATA_KBD_HOTPLUG)
 	xhci_hotplug_init();
 #endif
-	QEMU_LOG("Initialized Multitasking (Process & Scheduler)", TOTAL_DBG);
+	QEMU_LOG("Initialized Multitasking (Process & Scheduler)");
 
-	QEMU_LOG("Created userspace processes and threads", TOTAL_DBG);
+	QEMU_LOG("Created userspace processes and threads");
 
 	// Dashboard and final touches
 	dash_init();
@@ -264,9 +262,9 @@ void kernel_main(void* mb_info) {
 
 	// Let the good times roll
 	intr_on();
-	QEMU_LOG("Enabled interrupts", TOTAL_DBG);
+	QEMU_LOG("Enabled interrupts");
 
-	QEMU_LOG("Reached kernel end", TOTAL_DBG);
+	QEMU_LOG("Reached kernel end");
 
 #ifdef GATA_CAP_INPUT
 	// Simulate the kernel thread
