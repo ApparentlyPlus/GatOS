@@ -15,20 +15,20 @@
 
 
 /*
- * QEMU_LOG - Debug function to klog messages to qemu serial without counter
+ * QEMU_LOG - Debug function to klog messages to qemu serial
  */
-void QEMU_LOG(const char* msg) {
-    char buf[128];
-    char* ptr = buf;
-
-    size_t msg_len = kstrlen(msg);
-    kmemcpy(ptr, msg, msg_len);
-    ptr += msg_len;
-
-    *ptr++ = '\n';
-    *ptr = '\0';
-
-    serial_write(buf);
+void QEMU_LOG(const char* fmt, ...)
+{
+    char buffer[512];
+    va_list args;
+    
+    va_start(args, fmt);
+    kvsnprintf(buffer, sizeof(buffer), fmt, args);
+    va_end(args);
+    
+    // Output to COM1
+    serial_write_port(SERIAL_COM1, buffer);
+    serial_write_port(SERIAL_COM1, "\n");
 }
 
 /*
