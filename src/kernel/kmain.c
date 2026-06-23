@@ -37,7 +37,6 @@
 #include <kernel/sys/acpi.h>
 #include <kernel/debug.h>
 #include <klibc/string.h>
-#include <kernel/misc.h>
 #include <klibc/stdio.h>
 
 static char* KERNEL_VERSION = "v2.0.0";
@@ -190,9 +189,6 @@ void kernel_main(void* mb_info) {
 	// GATA_CAP_INPUT is also off)
 	input_init();
 	QEMU_LOG("Initialized input handling subsystem");
-
-	// Banneeeeeeer!
-	print_banner(KERNEL_VERSION);
 	kprintf("[KERNEL] CPU initialization complete (x86_64, long mode).\n");
 #ifdef GATA_NEEDS_INTERRUPT_SUBSYS
 	kprintf("[KERNEL] ACPI revision %u detected (%s supported).\n",

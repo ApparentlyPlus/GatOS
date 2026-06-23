@@ -18,7 +18,6 @@
 #include <kernel/sys/scheduler.h>
 #include <kernel/sys/process.h>
 #include <kernel/debug.h>
-#include <kernel/misc.h>
 #include <kernel/memory/pmm.h>
 #include <arch/x86_64/memory/paging.h>
 #ifdef GATA_CAP_MEM
