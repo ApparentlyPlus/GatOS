@@ -1,9 +1,9 @@
 /*
  * input.c - Input Hub Implementation
- * 
- * This file implements the system input hub that handles keyboard events 
+ *
+ * This file implements the system input hub that handles keyboard events
  * and routes them to the appropriate TTY.
- * 
+ *
  * Author: u/ApparentlyPlus
  */
 
@@ -13,13 +13,14 @@
 #include <kernel/drivers/tty.h>
 #include <kernel/drivers/dashboard.h>
 #else
+#include <kernel/drivers/console.h>
 #include <kernel/sys/spinlock.h>
 #endif
 #include <kernel/debug.h>
 
 #ifndef GATA_CAP_THREADS
 // Static ring buffer feeding input_getchar() when there's no scheduler/TTY
-// to route key events through. Producer: the keyboard IRQ handler (via
+// to route key events through. Producer: nothread_ldisc_input (via
 // input_handle_key, below). Consumer: input_getchar(), called by _getchar()
 // in klibc/stdio.c.
 #define INPUT_RING_SIZE 256
@@ -29,6 +30,50 @@ static struct {
     uint32_t tail;
     spinlock_t lock;
 } input_ring;
+
+// Minimal canonical-mode line discipline for the no-threads path.
+// Mirrors ldisc_input/ldisc_init in tty.c but talks directly to
+// con_crash_putc (echo) and input_ring (commit) instead of a tty_t.
+#define INPUT_LINE_MAX 1024
+static struct {
+    char line[INPUT_LINE_MAX];
+    uint32_t pos;
+} input_ld;
+
+static void nothread_ldisc_input(char c) {
+    if (c == '\b') {
+        if (input_ld.pos > 0) {
+            input_ld.pos--;
+            con_crash_putc('\b');
+        }
+        return;
+    }
+
+    if (c == '\n' || c == '\r') {
+        con_crash_putc('\n');
+        bool flags = spinlock_acquire(&input_ring.lock);
+        for (uint32_t i = 0; i < input_ld.pos; i++) {
+            uint32_t next = (input_ring.head + 1) % INPUT_RING_SIZE;
+            if (next != input_ring.tail) {
+                input_ring.buffer[input_ring.head] = input_ld.line[i];
+                input_ring.head = next;
+            }
+        }
+        uint32_t next = (input_ring.head + 1) % INPUT_RING_SIZE;
+        if (next != input_ring.tail) {
+            input_ring.buffer[input_ring.head] = '\n';
+            input_ring.head = next;
+        }
+        spinlock_release(&input_ring.lock, flags);
+        input_ld.pos = 0;
+        return;
+    }
+
+    if (input_ld.pos < INPUT_LINE_MAX - 1) {
+        input_ld.line[input_ld.pos++] = c;
+        con_crash_putc(c);
+    }
+}
 #endif
 
 /*
@@ -87,8 +132,9 @@ void input_handle_key(key_event_t event) {
 
 /*
  * input_handle_key - With no scheduler/TTY there's no dashboard, no Alt+Tab
- * TTY cycling, and no per-process routing to do - just turn the key into a
- * character (if it is one) and push it onto the static ring buffer.
+ * TTY cycling, and no per-process routing to do - feed the key through the
+ * no-threads line discipline, which echoes and line-buffers before committing
+ * to the ring on Enter.
  */
 void input_handle_key(key_event_t event) {
     if (!event.pressed) return;
@@ -97,19 +143,12 @@ void input_handle_key(key_event_t event) {
     if (!c && event.keycode == KEY_BACKSPACE) c = '\b';
     if (!c) return;
 
-    bool flags = spinlock_acquire(&input_ring.lock);
-    uint32_t next = (input_ring.head + 1) % INPUT_RING_SIZE;
-    if (next != input_ring.tail) {
-        input_ring.buffer[input_ring.head] = c;
-        input_ring.head = next;
-    }
-    spinlock_release(&input_ring.lock, flags);
+    nothread_ldisc_input(c);
 }
 
 /*
- * input_getchar - Pops one character from the static ring buffer, or -1 if
- * it's empty. Non-blocking - callers (e.g. _getchar's busy-wait) are
- * expected to poll.
+ * input_getchar - Pops one character from the ring buffer, or -1 if empty.
+ * Non-blocking: callers (_getchar's busy-wait) are expected to poll.
  */
 int input_getchar(void) {
     bool flags = spinlock_acquire(&input_ring.lock);
