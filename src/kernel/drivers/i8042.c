@@ -123,6 +123,12 @@ bool i8042_init(void) {
         return false;
     }
 
+    // Re-write config byte: the self-test resets the controller on many
+    // implementations (including QEMU), clearing the interrupt-enable and
+    // translation bits we set above.
+    i8042_write_command(PS2_CMD_WRITE_CONFIG);
+    i8042_write_data(config);
+
     // Enable Port 1
     i8042_write_command(PS2_CMD_ENABLE_PORT1);
 
