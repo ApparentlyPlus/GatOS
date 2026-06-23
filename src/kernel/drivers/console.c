@@ -605,6 +605,17 @@ static void crash_emit(uint32_t cp) {
     if      (cp == '\n') { ccx = 0; ccy++; }
     else if (cp == '\r') { ccx = 0; }
     else if (cp == '\t') { ccx = (ccx + 4) & ~3u; }
+    else if (cp == '\b') {
+        if (ccx > 0) {
+            ccx--;
+            uint32_t px = ccx * 8;
+            uint32_t py = ccy * row_h;
+            uint32_t bg = VGA_PALETTE[cbg];
+            for (uint32_t y = 0; y < row_h; y++)
+                for (uint32_t x = 0; x < 8; x++)
+                    crash_pix(px + x, py + y, bg);
+        }
+    }
     else {
         if (ccx >= (uint32_t)cols) { ccx = 0; ccy++; }
         if (ccy >= (uint32_t)rows) crash_scroll();
