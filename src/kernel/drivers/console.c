@@ -54,6 +54,9 @@ static uint32_t ccx = 0;
 static uint32_t ccy = 0;
 static uint8_t cfg = CONSOLE_COLOR_WHITE;
 static uint8_t cbg = CONSOLE_COLOR_RED;
+#ifndef GATA_CAP_THREADS
+static bool crash_cursor_on = true;
+#endif
 static char     cbuf[2048];
 
 #pragma region Hardware Drawing
@@ -644,11 +647,29 @@ static void crash_emit(uint32_t cp) {
 static int      cu8n = 0;
 static uint32_t cu8cp = 0;
 
+#ifndef GATA_CAP_THREADS
+// Draws or erases the block cursor at the current crash console position.
+// Called around crash_emit so the cursor tracks the write head at all times.
+static void crash_cursor_draw(bool on) {
+    if (!fb) return;
+    uint32_t row_h = (uint32_t)fh + PADDING_Y;
+    uint32_t px = ccx * 8;
+    uint32_t py = ccy * row_h;
+    uint32_t color = on ? VGA_PALETTE[cfg] : VGA_PALETTE[cbg];
+    for (uint32_t y = 0; y < row_h; y++)
+        for (uint32_t x = 0; x < 8; x++)
+            crash_pix(px + x, py + y, color);
+}
+#endif
+
 /*
  * crash_process_byte - Feeds one raw byte through the crash console's UTF-8
  * decoder, emitting a codepoint via crash_emit once a sequence completes
  */
 static void crash_process_byte(uint8_t byte) {
+#ifndef GATA_CAP_THREADS
+    if (crash_cursor_on) crash_cursor_draw(false);
+#endif
     if (cu8n == 0) {
         if      ((byte & 0x80) == 0x00) crash_emit(byte);
         else if ((byte & 0xE0) == 0xC0) { cu8n = 1; cu8cp = byte & 0x1F; }
@@ -660,6 +681,9 @@ static void crash_process_byte(uint8_t byte) {
             if (--cu8n == 0) crash_emit(cu8cp);
         } else { cu8n = 0; crash_emit(0xFFFD); }
     }
+#ifndef GATA_CAP_THREADS
+    if (crash_cursor_on) crash_cursor_draw(true);
+#endif
 }
 
 /*
@@ -774,8 +798,7 @@ void console_set_color(uint8_t foreground, uint8_t background) {
 
 /*
  * console_enable_cursor - Global accessor: toggles the cursor on the active
- * TTY. The static framebuffer console has no cursor, so this is a no-op
- * without a scheduler/TTY.
+ * TTY (threads path) or on the crash console (no-threads path).
  */
 void console_enable_cursor(bool enabled) {
 #ifdef GATA_CAP_THREADS
@@ -783,7 +806,8 @@ void console_enable_cursor(bool enabled) {
     if (active_tty && active_tty->console)
         con_enable_cursor(active_tty->console, enabled);
 #else
-    (void)enabled;
+    crash_cursor_on = enabled;
+    crash_cursor_draw(enabled);
 #endif
 }
 
