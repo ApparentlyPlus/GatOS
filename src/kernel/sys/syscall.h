@@ -23,9 +23,10 @@
 #define SYS_DEBUG_WRITE 10
 
 // TTY Control Commands
-#define TTY_CTRL_CLEAR    0
-#define TTY_CTRL_CURSOR   1
-#define TTY_CTRL_GET_DIMS 2
+#define TTY_CTRL_CLEAR     0
+#define TTY_CTRL_CURSOR    1
+#define TTY_CTRL_GET_DIMS  2
+#define TTY_CTRL_SET_COLOR 3
 
 void syscall_init(void);
 void syscall_dispatcher(cpu_context_t* regs);

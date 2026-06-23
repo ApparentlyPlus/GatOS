@@ -24,9 +24,10 @@
 #define SYS_TTY_CTRL 9
 #define SYS_DEBUG_WRITE 10
 
-#define TTY_CTRL_CLEAR    0
-#define TTY_CTRL_CURSOR   1
-#define TTY_CTRL_GET_DIMS 2
+#define TTY_CTRL_CLEAR     0
+#define TTY_CTRL_CURSOR    1
+#define TTY_CTRL_GET_DIMS  2
+#define TTY_CTRL_SET_COLOR 3
 
 #define userspace __attribute__((section(".user_text")))
 
