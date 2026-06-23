@@ -22,8 +22,6 @@
 #include <kernel/memory/heap.h>
 #include <klibc/string.h>
 
-// Meaningless without userspace processes to take syscalls from - see
-// GATA_CAP_THREADS in kernel/caps.h.
 #ifdef GATA_CAP_THREADS
 
 extern void syscall_entry(void);
@@ -245,6 +243,14 @@ void syscall_dispatcher(cpu_context_t* regs) {
                     uint32_t width = (uint32_t)tty->console->width;
                     uint32_t height = (uint32_t)(tty->console->height - tty->console->header_rows);
                     regs->rax = ((uint64_t)height << 32) | (uint64_t)width;
+                    break;
+                }
+                case TTY_CTRL_SET_COLOR: {
+                    // bg in the next byte, fg in the low byte
+                    uint8_t fg = (uint8_t)(arg2 & 0xFF);
+                    uint8_t bg = (uint8_t)((arg2 >> 8) & 0xFF);
+                    con_set_color(tty->console, fg, bg);
+                    regs->rax = 0;
                     break;
                 }
                 default:
