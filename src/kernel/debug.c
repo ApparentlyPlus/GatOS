@@ -8,7 +8,6 @@
 
 #include <klibc/stdio.h>
 #include <kernel/drivers/serial.h>
-#include <kernel/misc.h>
 #include <klibc/string.h>
 #include <stddef.h>
 #include <stdarg.h>
