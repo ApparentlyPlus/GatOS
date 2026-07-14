@@ -154,6 +154,42 @@ static inline void _out_fct(char character, void* buffer, size_t idx, size_t max
 }
 
 
+// Staging buffer for _out_syscall_write: chunks formatted output into fixed-size
+// syscall_write() calls instead of one write per character (a syscall per byte
+// would be prohibitively slow for large outputs) or one write for the whole
+// buffer (which needs the whole formatted length known up front, capping output
+// at the buffer size). This gives unbounded-length printf output at a bounded
+// number of syscalls: ceil(length / sizeof(chunk)).
+#define OUT_SYSCALL_CHUNK_SIZE 1024U
+typedef struct {
+  char chunk[OUT_SYSCALL_CHUNK_SIZE];
+  size_t len;
+} out_syscall_write_buf_t;
+
+
+static inline void _out_syscall_write_flush(out_syscall_write_buf_t* wb)
+{
+  if (wb->len > 0) {
+    syscall_write(wb->chunk, wb->len);
+    wb->len = 0;
+  }
+}
+
+
+// internal chunked syscall_write output: buffers characters and flushes to
+// syscall_write() whenever the chunk fills. The caller must flush any
+// remainder after _vsnprintf() returns.
+static inline void _out_syscall_write(char character, void* buffer, size_t idx, size_t maxlen)
+{
+  (void)idx; (void)maxlen;
+  if (character) {
+    out_syscall_write_buf_t* wb = (out_syscall_write_buf_t*)buffer;
+    wb->chunk[wb->len++] = character;
+    if (wb->len == OUT_SYSCALL_CHUNK_SIZE) _out_syscall_write_flush(wb);
+  }
+}
+
+
 // internal secure strlen
 // \return The length of the string (excluding the terminating 0) limited by 'maxsize'
 static inline unsigned int _strnlen_s(const char* str, size_t maxsize)
@@ -845,13 +881,11 @@ int uprintf_(const char* format, ...)
 {
   va_list va;
   va_start(va, format);
-  char buffer[1024];
-  const int ret = _vsnprintf(_out_buffer, buffer, sizeof(buffer), format, va);
+  out_syscall_write_buf_t wb;
+  wb.len = 0;
+  const int ret = _vsnprintf(_out_syscall_write, (char*)(uintptr_t)&wb, (size_t)-1, format, va);
   va_end(va);
-  if (ret > 0) {
-      size_t to_write = ((size_t)ret < sizeof(buffer)) ? (size_t)ret : (sizeof(buffer) - 1);
-      syscall_write(buffer, to_write);
-  }
+  _out_syscall_write_flush(&wb);
   return ret;
 }
 
@@ -878,12 +912,10 @@ int usnprintf_(char* buffer, size_t count, const char* format, ...)
 
 int uvprintf_(const char* format, va_list va)
 {
-  char buffer[1024];
-  const int ret = _vsnprintf(_out_buffer, buffer, sizeof(buffer), format, va);
-  if (ret > 0) {
-      size_t to_write = ((size_t)ret < sizeof(buffer)) ? (size_t)ret : (sizeof(buffer) - 1);
-      syscall_write(buffer, to_write);
-  }
+  out_syscall_write_buf_t wb;
+  wb.len = 0;
+  const int ret = _vsnprintf(_out_syscall_write, (char*)(uintptr_t)&wb, (size_t)-1, format, va);
+  _out_syscall_write_flush(&wb);
   return ret;
 }
 
