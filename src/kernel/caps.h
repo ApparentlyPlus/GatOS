@@ -29,6 +29,12 @@
  * removes one a caller passed explicitly. Include it before relying on any
  * of the macros above so the implications below are guaranteed to hold,
  * regardless of which exact set the build invocation passed in.
+ *
+ * The implication rules are mirrored in three places that must stay in sync
+ * (guarded by the template-matrix CI workflow):
+ *   1. this header (the compile-time truth)
+ *   2. appa's ResolveCaps (src/CLI/Program.cs in the Appa repo)
+ *   3. run.py's capability parser (implications section in main())
  */
 
 #pragma once

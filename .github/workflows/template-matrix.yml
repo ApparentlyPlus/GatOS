@@ -1,0 +1,47 @@
+name: GatOS Template Matrix
+
+on:
+  push:
+    branches: [appa-template]
+    paths:
+      - '.github/**'
+      - 'src/**'
+      - 'targets/**'
+      - '*.py'
+  pull_request:
+    branches: [appa-template]
+
+jobs:
+  build-matrix:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Representative capability sets guarding the caps.h implication
+        # lattice and every #ifdef seam (see src/kernel/caps.h)
+        caps:
+          - ""                                # full build: mem threads input fb hotplug
+          - "serial"                          # full build over COM1
+          - "kbd=default"                     # full build, PS/2 only
+          - "kbd=external"                    # full build, USB no hotplug
+          - "nothreads kbd=default"           # input+mem, static console
+          - "nothreads serial kbd=default"    # input+mem over COM1
+          - "nothreads noinput kbd=default"   # mem only, no IRQ subsystem
+          - "nothreads noinput time serial kbd=default"  # clock floor only
+          - "nomem nothreads noinput kbd=default"        # bare minimum, framebuffer
+          - "nomem nothreads noinput serial kbd=default" # bare minimum, COM1
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python 3.13
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+
+    - name: Install Toolchain
+      run: python setup.py
+
+    - name: Build kernel (${{ matrix.caps || 'full' }})
+      run: python run.py build ${{ matrix.caps }}

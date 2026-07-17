@@ -229,16 +229,17 @@ def is_interrupt_path(src: Path) -> bool:
 # Capability flags (see src/kernel/caps.h for the implication contract appa
 # and GatOS share). Default mirrors the historical "full build" behavior:
 # everything on, framebuffer output, hotplug-capable USB keyboard. Pass
-# tokens like "nomem", "nothreads", "noinput", "serial", "kbd=default" /
-# "kbd=external" / "kbd=hotplug" on the run.py command line to test a
-# stripped-down configuration instead.
-DEFAULT_CAPS = {"mem": True, "threads": True, "input": True, "output": "framebuffer", "kbd": "hotplug"}
+# tokens like "nomem", "nothreads", "noinput", "time", "serial",
+# "kbd=default" / "kbd=external" / "kbd=hotplug" on the run.py command line
+# to test a stripped-down configuration instead.
+DEFAULT_CAPS = {"mem": True, "threads": True, "input": True, "time": False, "output": "framebuffer", "kbd": "hotplug"}
 
 def caps_defines(caps: Dict) -> List[str]:
     d = []
     if caps["mem"]:     d.append("-DGATA_CAP_MEM")
     if caps["threads"]: d.append("-DGATA_CAP_THREADS")
     if caps["input"]:   d.append("-DGATA_CAP_INPUT")
+    if caps.get("time"): d.append("-DGATA_CAP_TIME")
     d.append("-DGATA_OUTPUT_SERIAL" if caps["output"] == "serial" else "-DGATA_CAP_FRAMEBUFFER")
     d.append({"default": "-DGATA_KBD_DEFAULT", "external": "-DGATA_KBD_EXTERNAL", "hotplug": "-DGATA_KBD_HOTPLUG"}[caps["kbd"]])
     return d
@@ -463,6 +464,7 @@ def print_help():
               user, doesn't matter - both need the same stack). Falls
               back to the static, allocation-free framebuffer console.
   {GREEN}noinput{NC}       Strip keyboard/PS2/USB input entirely
+  {GREEN}time{NC}          Force -DGATA_CAP_TIME (the clock floor without threads/input)
   {GREEN}serial{NC}        Output to COM1 instead of the framebuffer
   {GREEN}kbd=XX{NC}        default | external | hotplug (hotplug implies external,
               default, and threads - the hotplug watch runs as a thread)
@@ -514,6 +516,8 @@ def main():
             caps["threads"] = False
         elif arg_lower == "noinput":
             caps["input"] = False
+        elif arg_lower == "time":
+            caps["time"] = True
         elif arg_lower == "serial":
             caps["output"] = "serial"
         elif arg_lower.startswith("kbd="):
