@@ -8,10 +8,14 @@
 
 #include <klibc/stdio.h>
 #include <kernel/drivers/serial.h>
+#include <kernel/sys/spinlock.h>
 #include <klibc/string.h>
 #include <stddef.h>
 #include <stdarg.h>
 
+// Serializes serial log writes so IRQ-context and thread-context
+// messages never interleave mid-line (CI parses debug.log)
+static spinlock_t log_lock = {0};
 
 /*
  * QEMU_LOG - Debug function to klog messages to qemu serial
@@ -20,14 +24,16 @@ void QEMU_LOG(const char* fmt, ...)
 {
     char buffer[512];
     va_list args;
-    
+
     va_start(args, fmt);
     kvsnprintf(buffer, sizeof(buffer), fmt, args);
     va_end(args);
-    
+
     // Output to COM1
+    bool flags = spinlock_acquire(&log_lock);
     serial_write_port(SERIAL_COM1, buffer);
     serial_write_port(SERIAL_COM1, "\n");
+    spinlock_release(&log_lock, flags);
 }
 
 /*
@@ -37,11 +43,13 @@ void LOGF(const char* fmt, ...)
 {
     char buffer[512];
     va_list args;
-    
+
     va_start(args, fmt);
     kvsnprintf(buffer, sizeof(buffer), fmt, args);
     va_end(args);
-    
+
     // Output to COM2 instead of COM1 for internal logging
+    bool flags = spinlock_acquire(&log_lock);
     serial_write_port(SERIAL_COM2, buffer);
+    spinlock_release(&log_lock, flags);
 }
