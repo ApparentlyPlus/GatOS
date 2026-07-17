@@ -18,6 +18,9 @@
 
 #define MSR_APIC_BASE    0x0000001B
 
+// Page Attribute Table
+#define MSR_PAT          0x00000277
+
 // TSC Deadline
 #define MSR_IA32_TSC_DEADLINE   0x6E0
 
