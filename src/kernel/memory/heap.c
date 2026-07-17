@@ -86,13 +86,17 @@ struct arena {
     size_t total_allocated;
 };
 
+// Segregated free-list bins: bin i holds blocks sized [16<<i, 32<<i),
+// the last bin is unbounded
+#define HEAP_BIN_COUNT 16
+
 // Heap structure
 struct heap {
     uint32_t magic;
     vmm_t* vmm;
 
     arena_t* arenas;
-    blk_hdr_t* free_list;
+    blk_hdr_t* bins[HEAP_BIN_COUNT];
 
     size_t min_arena_size;
     size_t max_size;
@@ -310,7 +314,16 @@ static inline void stat_arena_rm(heap_t* heap, arena_t* arena) {
 #pragma region Free List Management
 
 /*
- * freelist_remove - Unlink a block from the heap's free list
+ * bin_index - Map a block size to its segregated bin
+ */
+static inline uint32_t bin_index(size_t size) {
+    if (size < HEAP_MIN_ALIGN) size = HEAP_MIN_ALIGN;
+    uint32_t i = (uint32_t)(63 - __builtin_clzll((uint64_t)(size >> 4)));
+    return i < HEAP_BIN_COUNT ? i : HEAP_BIN_COUNT - 1;
+}
+
+/*
+ * freelist_remove - Unlink a block from its size bin
  */
 static void freelist_remove(heap_t* heap, blk_hdr_t* block) {
     if (!heap || !block) return;
@@ -325,7 +338,7 @@ static void freelist_remove(heap_t* heap, blk_hdr_t* block) {
     if (block->prev_free) {
         block->prev_free->next_free = block->next_free;
     } else {
-        heap->free_list = block->next_free;
+        heap->bins[bin_index(block->size)] = block->next_free;
     }
 
     if (block->next_free) {
@@ -338,39 +351,20 @@ static void freelist_remove(heap_t* heap, blk_hdr_t* block) {
 }
 
 /*
- * freelist_insert - Insert block into sorted-by-size free list
+ * freelist_insert - Push block onto its size bin (LIFO, O(1))
  */
 static void freelist_insert(heap_t* heap, blk_hdr_t* block) {
     if (!heap || !block) return;
 
-    block->next_free = NULL;
+    uint32_t bin = bin_index(block->size);
     block->prev_free = NULL;
+    block->next_free = heap->bins[bin];
 
-    if (!heap->free_list) {
-        heap->free_list = block;
-        return;
+    if (heap->bins[bin]) {
+        heap->bins[bin]->prev_free = block;
     }
 
-    if (block->size <= heap->free_list->size) {
-        block->next_free = heap->free_list;
-        heap->free_list->prev_free = block;
-        heap->free_list = block;
-        return;
-    }
-
-    blk_hdr_t* cursor = heap->free_list;
-    while (cursor->next_free && cursor->next_free->size < block->size) {
-        cursor = cursor->next_free;
-    }
-
-    block->next_free = cursor->next_free;
-    block->prev_free = cursor;
-
-    if (cursor->next_free) {
-        cursor->next_free->prev_free = block;
-    }
-
-    cursor->next_free = block;
+    heap->bins[bin] = block;
 }
 
 #pragma endregion
@@ -549,16 +543,18 @@ static void destroy_arena(heap_t* heap, arena_t* arena) {
     if (!heap || !arena) return;
     if (!arena_validate(arena)) return;
 
-    // find and remove any blocks from the free list that belong to this arena
-    blk_hdr_t* cur = heap->free_list;
-    while (cur) {
-        blk_hdr_t* next = cur->next_free;
+    // find and remove any blocks from the free bins that belong to this arena
+    for (uint32_t bin = 0; bin < HEAP_BIN_COUNT; bin++) {
+        blk_hdr_t* cur = heap->bins[bin];
+        while (cur) {
+            blk_hdr_t* next = cur->next_free;
 
-        if (cur->arena == arena) {
-            freelist_remove(heap, cur);
+            if (cur->arena == arena) {
+                freelist_remove(heap, cur);
+            }
+
+            cur = next;
         }
-
-        cur = next;
     }
 
     vmm_status_t status = vmm_free(heap->vmm, (void*)arena->start);
@@ -674,24 +670,28 @@ static blk_hdr_t* coalesce_blocks(heap_t* heap,
 #pragma region Allocation/Deallocation
 
 /*
- * find_free_block - Search the free list for a block that fits requested size
+ * find_free_block - Search the size bins for a block that fits.
+ * The block's own bin may hold smaller blocks and needs a scan; any
+ * block in a higher bin is guaranteed large enough.
  */
 static blk_hdr_t* find_free_block(heap_t* heap, size_t size) {
     if (!heap) return NULL;
 
-    blk_hdr_t* cur = heap->free_list;
+    for (uint32_t bin = bin_index(size); bin < HEAP_BIN_COUNT; bin++) {
+        blk_hdr_t* cur = heap->bins[bin];
 
-    while (cur) {
-        if (!heap_validate_blk(cur)) {
-            LOGF("[HEAP ERROR] Corrupted block in free list\n");
-            return NULL;
+        while (cur) {
+            if (!heap_validate_blk(cur)) {
+                LOGF("[HEAP ERROR] Corrupted block in free list\n");
+                return NULL;
+            }
+
+            if (cur->size >= size) {
+                return cur;
+            }
+
+            cur = cur->next_free;
         }
-
-        if (cur->size >= size) {
-            return cur;
-        }
-
-        cur = cur->next_free;
     }
 
     return NULL;
@@ -994,7 +994,7 @@ heap_status_t heap_kernel_init(void) {
     heap->max_size = SIZE_MAX;
     heap->current_size = 0;
     heap->arenas = NULL;
-    heap->free_list = NULL;
+    kmemset(heap->bins, 0, sizeof(heap->bins));
     heap->total_allocated = 0;
     heap->total_free = 0;
     heap->allocation_count = 0;
