@@ -16,6 +16,9 @@
  *                           IRQ regardless of whether the program reads input).
  *   GATA_CAP_INPUT       - the program reads input (keyboard), or THREADS
  *                           is on (see above).
+ *   GATA_CAP_TIME        - the program reads the clock (Time.Nanos/Millis via
+ *                           _env_time_ns). Implies the interrupt subsystem,
+ *                           whose timer tick is what the uptime counter is.
  *   GATA_CAP_FRAMEBUFFER - output renders to the framebuffer console.
  *   GATA_OUTPUT_SERIAL   - output goes to the COM1 serial port instead.
  *   GATA_KBD_DEFAULT     - PS/2 only.
@@ -78,12 +81,14 @@
 #endif
 
 // ACPI/APIC/the timer tick are needed whenever the scheduler needs a timer
-// IRQ (THREADS) or the keyboard needs IOAPIC IRQ routing (INPUT). All three
-// map ACPI tables / MMIO / per-CPU structures through vmm_alloc, so this
-// implies a heap too - a build with neither threads nor input never brings
-// up APIC at all (exceptions are handled straight off the IDT, no APIC
-// needed), so it's the one case that can still go fully memory-free.
-#if defined(GATA_CAP_THREADS) || defined(GATA_CAP_INPUT)
+// IRQ (THREADS), the keyboard needs IOAPIC IRQ routing (INPUT), or the program
+// reads the clock (TIME - get_uptime_ns is the timer subsystem's counter, which
+// only advances once the tick is armed). All of these map ACPI tables / MMIO /
+// per-CPU structures through vmm_alloc, so this implies a heap too - a build
+// with none of the three never brings up APIC at all (exceptions are handled
+// straight off the IDT, no APIC needed), so it's the one case that can still
+// go fully memory-free.
+#if defined(GATA_CAP_THREADS) || defined(GATA_CAP_INPUT) || defined(GATA_CAP_TIME)
 #define GATA_NEEDS_INTERRUPT_SUBSYS
 #  if !defined(GATA_CAP_MEM)
 #  define GATA_CAP_MEM

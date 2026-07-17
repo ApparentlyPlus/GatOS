@@ -20,6 +20,7 @@
 #include <kernel/drivers/serial.h>
 #include <kernel/debug.h>
 #include <kernel/memory/heap.h>
+#include <kernel/sys/timers.h>
 #include <klibc/string.h>
 
 #ifdef GATA_CAP_THREADS
@@ -303,6 +304,13 @@ void syscall_dispatcher(cpu_context_t* regs) {
             regs->rax = (uint64_t)len;
             break;
         }
+
+        case SYS_TIME_NS:
+            // Monotonic nanoseconds since boot. The dispatcher only exists under
+            // GATA_CAP_THREADS, which implies GATA_NEEDS_INTERRUPT_SUBSYS (caps.h),
+            // so the timer subsystem backing get_uptime_ns is always present here.
+            regs->rax = get_uptime_ns();
+            break;
 
         default:
             LOGF("[SYSCALL] Unknown syscall: %lu from thread '%s' (PID %u)\n", syscall_num, current->name, current->process ? current->process->pid : 0);

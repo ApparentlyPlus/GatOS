@@ -23,6 +23,7 @@
 #define SYS_READ 8
 #define SYS_TTY_CTRL 9
 #define SYS_DEBUG_WRITE 10
+#define SYS_TIME_NS 11
 
 #define TTY_CTRL_CLEAR     0
 #define TTY_CTRL_CURSOR    1
@@ -116,5 +117,10 @@ userspace static inline uint64_t syscall_tty_ctrl(uint64_t cmd, uint64_t arg) {
 // entirely - see ulibc/debug.h.
 userspace static inline void syscall_debug_write(const char* buf, size_t len) {
     sc2(SYS_DEBUG_WRITE, (uint64_t)buf, (uint64_t)len);
+}
+
+// Monotonic nanoseconds since boot, from the kernel timer subsystem.
+userspace static inline uint64_t syscall_time_ns(void) {
+    return sc0(SYS_TIME_NS);
 }
 

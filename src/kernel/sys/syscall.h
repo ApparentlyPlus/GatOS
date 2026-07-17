@@ -21,6 +21,7 @@
 #define SYS_READ 8
 #define SYS_TTY_CTRL 9
 #define SYS_DEBUG_WRITE 10
+#define SYS_TIME_NS 11
 
 // TTY Control Commands
 #define TTY_CTRL_CLEAR     0
