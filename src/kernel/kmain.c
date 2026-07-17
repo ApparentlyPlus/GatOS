@@ -287,6 +287,6 @@ void kernel_main(void* mb_info) {
 	// No input built - there's nothing to read, so just idle instead of
 	// hanging forever waiting for a keypress that can never arrive.
 	kprintf("[KERNEL] Kernel initialization complete, idling (no input built).\n");
-	while (1) { __asm__ volatile("hlt"); }
+	while (1) cpu_idle();
 #endif // GATA_CAP_INPUT
 }

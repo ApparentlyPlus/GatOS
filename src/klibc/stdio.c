@@ -1002,11 +1002,10 @@ int _getchar(void) {
     if (!kernel_tty) return 0;
     return (int)tty_read_char(kernel_tty);
 #else
-    // No scheduler to block a thread on: busy-wait (halting between polls)
-    // for the keyboard IRQ handler to push a character onto the static
-    // input ring buffer.
+    // No scheduler to block a thread on: sleep between polls until the
+    // keyboard IRQ pushes a character onto the static input ring buffer.
     int ch;
-    while ((ch = input_getchar()) < 0) __asm__ volatile("hlt");
+    while ((ch = input_getchar()) < 0) cpu_idle();
     return ch;
 #endif
 }

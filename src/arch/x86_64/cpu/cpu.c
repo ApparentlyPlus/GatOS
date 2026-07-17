@@ -192,11 +192,81 @@ void cpu_init(void)
     write_msr(MSR_GS_BASE, (uint64_t)&cpu_local);
     write_msr(MSR_KERNEL_GS_BASE, 0);
 
+    cpu_idle_init();
+
     LOGF("[CPU] Vendor: %s\n", cpuinfo.vendor);
     LOGF("[CPU] Brand:  %s\n", cpuinfo.brand);
     LOGF("[CPU] Family: %u  Model: %u  Stepping: %u\n", cpuinfo.family, cpuinfo.model, cpuinfo.stepping);
     LOGF("[CPU] Cores:  %u\n", cpuinfo.core_count);
     LOGF("[CPU] Features: 0x%lX\n", cpuinfo.features);
+}
+
+// MONITOR/MWAIT idle state, probed once by cpu_idle_init
+static bool mwait_ok = false;
+static uint32_t mwait_cstate_hint = 0;
+static uint32_t mwait_ecx_ext = 0;
+static volatile uint64_t idle_dummy = 0;
+
+/*
+ * cpu_idle_init - Detect MONITOR/MWAIT and pick the deepest C-state hint
+ */
+void cpu_idle_init(void) {
+    uint32_t a, b, c, d;
+    cpuid(1, 0, &a, &b, &c, &d);
+    if (!(c & (1u << 3))) {
+        LOGF("[CPU] MONITOR/MWAIT not available; idle will use HLT.\n");
+        return;
+    }
+
+    mwait_ok = true;
+    cpuid(5, 0, &a, &b, &c, &d);
+    mwait_ecx_ext = (c & 1u);
+
+    if      ((d >> 28) & 0xF) mwait_cstate_hint = 0x60;
+    else if ((d >> 24) & 0xF) mwait_cstate_hint = 0x50;
+    else if ((d >> 20) & 0xF) mwait_cstate_hint = 0x40;
+    else if ((d >> 16) & 0xF) mwait_cstate_hint = 0x30;
+    else if ((d >> 12) & 0xF) mwait_cstate_hint = 0x20;
+    else if ((d >>  8) & 0xF) mwait_cstate_hint = 0x10;
+    else                      mwait_cstate_hint = 0x00;
+
+    LOGF("[CPU] MONITOR/MWAIT: deepest C-state hint=0x%02x IBE=%u\n",
+         mwait_cstate_hint, mwait_ecx_ext);
+}
+
+/*
+ * cpu_mwait_available - Whether MONITOR/MWAIT idle is usable
+ */
+bool cpu_mwait_available(void) {
+    return mwait_ok;
+}
+
+/*
+ * cpu_mwait_hint - Deepest C-state hint for MWAIT EAX
+ */
+uint32_t cpu_mwait_hint(void) {
+    return mwait_cstate_hint;
+}
+
+/*
+ * cpu_mwait_ext - MWAIT ECX extensions (bit 0 = interrupt break event)
+ */
+uint32_t cpu_mwait_ext(void) {
+    return mwait_ecx_ext;
+}
+
+/*
+ * cpu_idle - Sleep until the next interrupt in the deepest C-state
+ * available, falling back to HLT. Monitors a dummy address nothing
+ * writes, so only an interrupt wakes the core.
+ */
+void cpu_idle(void) {
+    if (mwait_ok) {
+        __asm__ volatile("monitor" :: "a"(&idle_dummy), "c"(0), "d"(0) : "memory");
+        __asm__ volatile("mwait" :: "a"(mwait_cstate_hint), "c"(mwait_ecx_ext) : "memory");
+    } else {
+        __asm__ volatile("hlt");
+    }
 }
 
 /*

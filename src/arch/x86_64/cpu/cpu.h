@@ -54,6 +54,13 @@ extern cpu_local_t cpu_local;
 // Public API
 void cpu_init(void);
 const cpu_info_t* cpu_get_info(void);
+
+// Idle helpers (MONITOR/MWAIT with HLT fallback)
+void cpu_idle_init(void);
+bool cpu_mwait_available(void);
+uint32_t cpu_mwait_hint(void);
+uint32_t cpu_mwait_ext(void);
+void cpu_idle(void);
 bool cpu_has_feature(cpu_feature_t feature);
 bool cpu_enable_feature(cpu_feature_t feature);
 bool cpu_is_feature_enabled(cpu_feature_t feature);

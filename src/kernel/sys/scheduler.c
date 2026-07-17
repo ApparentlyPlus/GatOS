@@ -29,11 +29,6 @@ static thread_t* cur = NULL;
 static thread_t* rq_head = NULL;
 static thread_t* rq_tail = NULL;
 
-// MONITOR/MWAIT power state support
-static bool cpu_has_mwait = false;
-static uint32_t mwait_hint = 0;    // C-state hint for MWAIT EAX (target C-state)
-static uint32_t mwait_ext  = 0;    // MWAIT ECX extensions (bit 0 = IBE: interrupt break event)
-
 // CPU utilisation counters (incremented in IRQ context, no locking needed)
 static volatile uint64_t ticks_total = 0;
 static volatile uint64_t ticks_idle  = 0;
@@ -103,10 +98,10 @@ static void sched_add_sleep(thread_t* thread);
 static void idle_thread_entry(void* arg) {
     (void)arg;
     while (1) {
-        if (cpu_has_mwait) {
+        if (cpu_mwait_available()) {
             __asm__ volatile("monitor" :: "a"(&rq_head), "c"(0), "d"(0) : "memory");
             if (rq_head) { sched_yield(); continue; }
-            __asm__ volatile("mwait" :: "a"(mwait_hint), "c"(mwait_ext) : "memory");
+            __asm__ volatile("mwait" :: "a"(cpu_mwait_hint()), "c"(cpu_mwait_ext()) : "memory");
         } else {
             __asm__ volatile("hlt");
         }
@@ -143,30 +138,6 @@ void sched_init(void) {
     if (!sched_stack) panic("Failed to allocate scheduler stack!");
     sched_stack_top = (uint64_t)sched_stack + KERNEL_STACK_SIZE;
     LOGF("[SCHED] Scheduler stack allocated at 0x%lx\n", sched_stack_top);
-
-    // Detect MONITOR/MWAIT (CPUID.01H:ECX[3]), pick deepest C-state from CPUID.05H
-    {
-        uint32_t a, b, c, d;
-        cpuid(1, 0, &a, &b, &c, &d);
-        if (c & (1u << 3)) {
-            cpu_has_mwait = true;
-            cpuid(5, 0, &a, &b, &c, &d);
-            mwait_ext = (c & 1u);
-
-            if      ((d >> 28) & 0xF) mwait_hint = 0x60;
-            else if ((d >> 24) & 0xF) mwait_hint = 0x50;
-            else if ((d >> 20) & 0xF) mwait_hint = 0x40;
-            else if ((d >> 16) & 0xF) mwait_hint = 0x30;
-            else if ((d >> 12) & 0xF) mwait_hint = 0x20;
-            else if ((d >>  8) & 0xF) mwait_hint = 0x10;
-            else                      mwait_hint = 0x00;
-
-            LOGF("[SCHED] MONITOR/MWAIT: deepest C-state hint=0x%02x IBE=%u\n",
-                 mwait_hint, mwait_ext);
-        } else {
-            LOGF("[SCHED] MONITOR/MWAIT not available; idle using HLT.\n");
-        }
-    }
 
     sched_on = true;
     LOGF("[SCHED] Scheduler initialized and enabled.\n");
