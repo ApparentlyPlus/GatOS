@@ -17,6 +17,9 @@
 #include <klibc/string.h>
 #include <klibc/stdio.h>
 
+// run.py scrapes this for the ISO name
+static char* KERNEL_VERSION = "v2.0.0";
+
 /*
  * kernel_main - Main entry point for the GatOS kernel
  */
@@ -29,7 +32,7 @@ void kernel_main(void* mb_info) {
 
 #ifdef GATA_CAP_INPUT
 	// Simulate the kernel thread
-	kprintf("[KERNEL] Kernel initialization complete, entering interactive test loop...\n");
+	kprintf("[KERNEL] GatOS %s initialization complete, entering interactive test loop...\n", KERNEL_VERSION);
 
 	while (1) {
 	    char tt[128] = {0};
