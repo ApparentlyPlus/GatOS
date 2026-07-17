@@ -156,10 +156,16 @@ def run_cmd(cmd: List[str | Path], cwd: Optional[Path] = None, env: Optional[Dic
     try:
         ret = proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        # os.killpg is Unix-only; on Windows kill the whole tree via taskkill,
+        # otherwise the QEMU child survives and poisons every later run
+        if OS_NAME == "win":
+            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                           capture_output=True, check=False)
+        else:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
         proc.wait()
         _reap_appimage_fuse_mounts(cmd_str)
         sys.stderr.write(f"\n{YELLOW}[WARN] Process timed out after {timeout}s (This is expected for timeout tests).{NC}\n")
