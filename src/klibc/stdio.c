@@ -928,7 +928,10 @@ int printf_(const char* format, ...)
 {
   va_list va;
   va_start(va, format);
-  kout_buf_t b = { .n = 0 };
+  // Only n needs initializing; zeroing the whole struct would let GCC
+  // emit SSE stores, which kernel code reached from IRQs must never do
+  kout_buf_t b;
+  b.n = 0;
   const out_fct_wrap_type wrap = { _kout_append, &b };
   const int ret = _vsnprintf(_out_fct, (char*)(uintptr_t)&wrap, (size_t)-1, format, va);
   _kout_flush(&b);
@@ -959,7 +962,8 @@ int snprintf_(char* buffer, size_t count, const char* format, ...)
 
 int vprintf_(const char* format, va_list va)
 {
-  kout_buf_t b = { .n = 0 };
+  kout_buf_t b;
+  b.n = 0;
   const out_fct_wrap_type wrap = { _kout_append, &b };
   const int ret = _vsnprintf(_out_fct, (char*)(uintptr_t)&wrap, (size_t)-1, format, va);
   _kout_flush(&b);

@@ -28,6 +28,7 @@
 
 static tty_t* dashTTY;
 static tty_t* lastTTY;
+static thread_t* dash_worker;
 
 #pragma region Layout
 
@@ -966,7 +967,9 @@ static void dash_draw(void) {
 #pragma region Thread
 
 /*
- * dash_thread - Dashboard thread, redraws every second when visible and idles otherwise
+ * dash_thread - Dashboard thread, redraws every second while visible and
+ * blocks entirely otherwise (dash_toggle wakes it), so a hidden dashboard
+ * costs zero wakeups
  */
 static void dash_thread(void* arg) {
     (void)arg;
@@ -974,10 +977,16 @@ static void dash_thread(void* arg) {
     while (1) {
         if (active_tty == dashTTY) {
             dash_draw();
-            // refresh every second while active, otherwise idle to save resources
             sleep_ms(1000);
         } else {
-            sleep_ms(100); // idle-ish
+            bool iflag = intr_save();
+            if (active_tty != dashTTY && dash_worker) {
+                dash_worker->state = T_BLOCKED;
+                intr_restore(iflag);
+                sched_yield();
+            } else {
+                intr_restore(iflag);
+            }
         }
     }
 }
@@ -1004,6 +1013,9 @@ void dash_toggle(void) {
     } else {
         lastTTY = active_tty;
         tty_switch(dashTTY);
+        // Wake the blocked dashboard thread so it starts redrawing
+        if (dash_worker && dash_worker->state == T_BLOCKED)
+            sched_add(dash_worker);
     }
 }
 
@@ -1030,6 +1042,7 @@ void dash_init(void) {
     thread_t* t = thread_create(p, "dash", dash_thread, NULL, false, 0);
     if (!t) { LOGF("Failed to create dashboard thread\n"); return; }
 
+    dash_worker = t;
     sched_add(t);
 }
 
