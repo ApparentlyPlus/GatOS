@@ -105,20 +105,18 @@ static void draw_glyph(uint8_t* glyph, size_t px, size_t py, uint32_t fg, uint32
         return;
     }
 
-    // Fast path for 32bpp framebuffers is to write an entire glyph row as 8 pixels in a tight loop
+    // Fast path for 32bpp framebuffers: write each glyph row as 4 paired
+    // 64-bit stores (halves the store count on the WC write path)
     uint32_t* row_ptr = (uint32_t*)(fb + py * fb_pitch + px * 4);
     size_t pitch_u32 = fb_pitch / 4;
     uint32_t colors[2] = { bg, fg };
     for (size_t y = 0; y < fh; y++) {
         uint8_t bits = glyph[y];
-        row_ptr[0] = colors[(bits >> 7) & 1];
-        row_ptr[1] = colors[(bits >> 6) & 1];
-        row_ptr[2] = colors[(bits >> 5) & 1];
-        row_ptr[3] = colors[(bits >> 4) & 1];
-        row_ptr[4] = colors[(bits >> 3) & 1];
-        row_ptr[5] = colors[(bits >> 2) & 1];
-        row_ptr[6] = colors[(bits >> 1) & 1];
-        row_ptr[7] = colors[(bits >> 0) & 1];
+        uint64_t* p = (uint64_t*)row_ptr;
+        p[0] = (uint64_t)colors[(bits >> 7) & 1] | ((uint64_t)colors[(bits >> 6) & 1] << 32);
+        p[1] = (uint64_t)colors[(bits >> 5) & 1] | ((uint64_t)colors[(bits >> 4) & 1] << 32);
+        p[2] = (uint64_t)colors[(bits >> 3) & 1] | ((uint64_t)colors[(bits >> 2) & 1] << 32);
+        p[3] = (uint64_t)colors[(bits >> 1) & 1] | ((uint64_t)colors[(bits >> 0) & 1] << 32);
         row_ptr += pitch_u32;
     }
 }
@@ -163,13 +161,12 @@ static void render_cursor(console_t* con, bool on) {
         bool clipped = (px + fw > fb_w) || (py + fh > fb_h);
         if (fb_bpp == 32 && !clipped) {
             uint32_t color = VGA_PALETTE[con->fg];
+            uint64_t c2 = (uint64_t)color | ((uint64_t)color << 32);
             uint32_t* row_ptr = (uint32_t*)(fb + py * fb_pitch + px * 4);
             size_t pitch_u32 = fb_pitch / 4;
             for (size_t y = 0; y < fh; y++) {
-                row_ptr[0] = color; row_ptr[1] = color;
-                row_ptr[2] = color; row_ptr[3] = color;
-                row_ptr[4] = color; row_ptr[5] = color;
-                row_ptr[6] = color; row_ptr[7] = color;
+                uint64_t* p = (uint64_t*)row_ptr;
+                p[0] = c2; p[1] = c2; p[2] = c2; p[3] = c2;
                 row_ptr += pitch_u32;
             }
         } else {
@@ -255,11 +252,32 @@ static void scroll(console_t* con) {
     size_t rows = con->height - first;
     if (!rows) return;
 
+    extern tty_t* volatile active_tty;
+    bool active = fb && active_tty && active_tty->console == con;
+
+    // Direct mode: the framebuffer matches the backbuffer, so before
+    // shifting compare each row against the one below it and redraw only
+    // the cells that visually change. Runs that scroll over themselves
+    // (blank areas, repeated text) cost nothing.
+    if (active && !con->defer_render) {
+        console_char_t blank = (console_char_t){ ' ', con->fg, con->bg };
+        for (size_t y = first; y < con->height; y++) {
+            for (size_t x = 0; x < con->width; x++) {
+                size_t idx = y * con->width + x;
+                console_char_t nc = (y + 1 < con->height) ? con->buffer[idx + con->width] : blank;
+                console_char_t oc = con->buffer[idx];
+                DIRTY_CLR(con, idx);
+                if (nc.codepoint == oc.codepoint && nc.fg == oc.fg && nc.bg == oc.bg) continue;
+                draw_glyph(get_glyph(nc.codepoint), x * fw, y * (fh + PADDING_Y), VGA_PALETTE[nc.fg], VGA_PALETTE[nc.bg]);
+            }
+        }
+    }
+
     // Move all rows up by one in the backbuffer, then clear the last row
     if (rows > 1){
         kmemmove(con->buffer + first * con->width, con->buffer + (first + 1) * con->width, (rows - 1) * con->width * sizeof(console_char_t));
     }
-    
+
     // Clear the last row in the backbuffer and update cursor position
     for (size_t x = 0; x < con->width; x++) {
         size_t idx = (con->height - 1) * con->width + x;
@@ -271,19 +289,9 @@ static void scroll(console_t* con) {
     if (con->cy < first) con->cy = first;
 
     if (fb) {
-        extern tty_t* volatile active_tty;
-        // Redraw the content area from the backbuffer, never reading the
-        // framebuffer itself (WC/UC reads are extremely slow)
-        if (active_tty && active_tty->console == con) {
+        if (active) {
             if (!con->defer_render) {
-                for (size_t y = first; y < con->height; y++) {
-                    for (size_t x = 0; x < con->width; x++) {
-                        size_t idx = y * con->width + x;
-                        console_char_t c = con->buffer[idx];
-                        draw_glyph(get_glyph(c.codepoint), x * fw, y * (fh + PADDING_Y), VGA_PALETTE[c.fg], VGA_PALETTE[c.bg]);
-                        DIRTY_CLR(con, idx);
-                    }
-                }
+                // Framebuffer already updated by the diff pass above
             } else {
                 // Deferred mode here
                 // Mark all content cells dirty so flush_display redraws from the scrolled backbuffer
@@ -371,8 +379,13 @@ void con_clear(console_t* con, uint8_t background) {
         size_t start_py = con->header_rows * (fh + PADDING_Y);
         if (fb_bpp == 32) {
             size_t off = start_py * fb_pitch / 4;
+            size_t count = (fb_sz / 4) - off;
             uint32_t* p = (uint32_t*)fb + off;
-            for (size_t i = 0; i < (fb_sz / 4) - off; i++) p[i] = bg_color;
+            uint64_t c2 = (uint64_t)bg_color | ((uint64_t)bg_color << 32);
+            size_t pairs = count / 2;
+            uint64_t* q = (uint64_t*)p;
+            for (size_t i = 0; i < pairs; i++) q[i] = c2;
+            if (count & 1) p[count - 1] = bg_color;
         } else {
             for (uint32_t y = (uint32_t)start_py; y < fb_h; y++)
                 for (uint32_t x = 0; x < fb_w; x++)
@@ -611,6 +624,24 @@ static void crash_draw_glyph(uint32_t cp, uint8_t fg, uint8_t bg, uint32_t x, ui
     uint32_t fgc = VGA_PALETTE[fg & 0xF];
     uint32_t bgc = VGA_PALETTE[bg & 0xF];
     uint8_t* glyph = get_glyph(cp);
+
+    // Fast path for 32bpp: paired 64-bit stores per glyph row
+    if (fb_bpp == 32 && px + 8 <= fb_w && py + row_h <= fb_h) {
+        uint32_t* row_ptr = (uint32_t*)(fb + (size_t)py * fb_pitch + px * 4);
+        size_t pitch_u32 = fb_pitch / 4;
+        uint32_t colors[2] = { bgc, fgc };
+        for (uint32_t gy = 0; gy < row_h; gy++) {
+            uint8_t bits = (glyph && gy < (uint32_t)fh) ? glyph[gy] : 0;
+            uint64_t* p = (uint64_t*)row_ptr;
+            p[0] = (uint64_t)colors[(bits >> 7) & 1] | ((uint64_t)colors[(bits >> 6) & 1] << 32);
+            p[1] = (uint64_t)colors[(bits >> 5) & 1] | ((uint64_t)colors[(bits >> 4) & 1] << 32);
+            p[2] = (uint64_t)colors[(bits >> 3) & 1] | ((uint64_t)colors[(bits >> 2) & 1] << 32);
+            p[3] = (uint64_t)colors[(bits >> 1) & 1] | ((uint64_t)colors[(bits >> 0) & 1] << 32);
+            row_ptr += pitch_u32;
+        }
+        return;
+    }
+
     for (uint32_t gy = 0; gy < row_h; gy++) {
         uint8_t bits = (glyph && gy < (uint32_t)fh) ? glyph[gy] : 0;
         for (uint32_t gx = 0; gx < 8; gx++)
@@ -619,17 +650,9 @@ static void crash_draw_glyph(uint32_t cp, uint8_t fg, uint8_t bg, uint32_t x, ui
 }
 
 /*
- * crash_draw_cell - Draw one shadow cell to the framebuffer
- */
-static void crash_draw_cell(uint32_t x, uint32_t y) {
-    uint32_t cell = (x < CRASH_MAX_COLS && y < CRASH_MAX_ROWS)
-        ? crash_shadow[y][x] : crash_pack(' ', cfg, cbg);
-    crash_draw_glyph(cell & 0xFFFFFF, (cell >> 24) & 0xF, (cell >> 28) & 0xF, x, y);
-}
-
-/*
- * crash_scroll - Scroll the crash view by one text row, redrawing from the
- * shadow so the framebuffer is never read back
+ * crash_scroll - Scroll the crash view by one text row. The framebuffer
+ * matches the shadow, so redraw only cells that visually change, then
+ * shift the shadow (never reading the framebuffer back)
  */
 static void crash_scroll(void) {
     uint32_t r = (uint32_t)rows;
@@ -639,12 +662,19 @@ static void crash_scroll(void) {
         con_crash_clear(cbg);
         return;
     }
+    uint32_t blank = crash_pack(' ', cfg, cbg);
+    for (uint32_t y = 0; y + 1 < r; y++)
+        for (uint32_t x = 0; x < c; x++) {
+            uint32_t nc = crash_shadow[y + 1][x];
+            if (nc != crash_shadow[y][x])
+                crash_draw_glyph(nc & 0xFFFFFF, (nc >> 24) & 0xF, (nc >> 28) & 0xF, x, y);
+        }
+    for (uint32_t x = 0; x < c; x++)
+        if (crash_shadow[r - 1][x] != blank)
+            crash_draw_glyph(' ', cfg, cbg, x, r - 1);
     kmemmove(&crash_shadow[0][0], &crash_shadow[1][0], (size_t)(r - 1) * sizeof(crash_shadow[0]));
     for (uint32_t x = 0; x < c; x++)
-        crash_shadow[r - 1][x] = crash_pack(' ', cfg, cbg);
-    for (uint32_t y = 0; y < r; y++)
-        for (uint32_t x = 0; x < c; x++)
-            crash_draw_cell(x, y);
+        crash_shadow[r - 1][x] = blank;
     if (ccy > 0) ccy = r - 1;
 }
 
@@ -745,8 +775,13 @@ void con_crash_clear(uint8_t bg) {
     uint32_t color = VGA_PALETTE[cbg];
     size_t total = (size_t)fb_h * fb_pitch;
     if (fb_bpp == 32) {
+        size_t count = total / 4;
         uint32_t* p = (uint32_t*)fb;
-        for (size_t i = 0; i < total / 4; i++) p[i] = color;
+        uint64_t c2 = (uint64_t)color | ((uint64_t)color << 32);
+        size_t pairs = count / 2;
+        uint64_t* q = (uint64_t*)p;
+        for (size_t i = 0; i < pairs; i++) q[i] = c2;
+        if (count & 1) p[count - 1] = color;
     } else {
         for (uint32_t y = 0; y < fb_h; y++)
             for (uint32_t x = 0; x < fb_w; x++)
