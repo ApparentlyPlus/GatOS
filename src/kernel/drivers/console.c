@@ -273,6 +273,27 @@ static void scroll(console_t* con) {
         }
     }
 
+    // Deferred mode: the framebuffer still matches the backbuffer for every
+    // cell that is not already dirty, so we can work out here exactly which
+    // cells will look different once the rows shift and mark only those.
+    // Costs no memory and makes no assumption about the resolution, and the
+    // common case (text scrolling over blanks or over itself) marks almost
+    // nothing instead of the whole screen.
+    if (active && con->defer_render && con->dirty) {
+        console_char_t blank = (console_char_t){ ' ', con->fg, con->bg };
+        for (size_t y = first; y < con->height; y++) {
+            for (size_t x = 0; x < con->width; x++) {
+                size_t idx = y * con->width + x;
+                // Already stale on screen, so it is redrawn regardless
+                if (DIRTY_TST(con, idx)) continue;
+                console_char_t nc = (y + 1 < con->height) ? con->buffer[idx + con->width] : blank;
+                console_char_t oc = con->buffer[idx];
+                if (nc.codepoint != oc.codepoint || nc.fg != oc.fg || nc.bg != oc.bg)
+                    DIRTY_SET(con, idx);
+            }
+        }
+    }
+
     // Move all rows up by one in the backbuffer, then clear the last row
     if (rows > 1){
         kmemmove(con->buffer + first * con->width, con->buffer + (first + 1) * con->width, (rows - 1) * con->width * sizeof(console_char_t));
@@ -288,17 +309,7 @@ static void scroll(console_t* con) {
     con->cy--;
     if (con->cy < first) con->cy = first;
 
-    if (fb) {
-        if (active) {
-            if (!con->defer_render) {
-                // Framebuffer already updated by the diff pass above
-            } else {
-                // Deferred mode here
-                // Mark all content cells dirty so flush_display redraws from the scrolled backbuffer
-                DIRTY_SET_ALL(con);
-            }
-        }
-    }
+    // Both modes already decided above what needs redrawing
 }
 
 /*
