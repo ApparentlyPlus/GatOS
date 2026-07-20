@@ -118,7 +118,7 @@ process_t* process_create(const char* name, tty_t* existing_tty) {
     size_t tsz = align_up((uintptr_t)&USER_TEXT_END - (uintptr_t)&USER_TEXT_START, PAGE_SIZE);
     if (tsz > 0) {
         void* out = NULL;
-        vmm_status_t st = vmm_alloc_at(proc->vmm, (void*)USER_CODE_VIRT_ADDR, tsz, VM_FLAG_USER | VM_FLAG_EXEC | VM_FLAG_MMIO, (void*)t_phys, &out);
+        vmm_status_t st = vmm_alloc_at(proc->vmm, (void*)USER_CODE_VIRT_ADDR, tsz, VM_FLAG_USER | VM_FLAG_EXEC | VM_FLAG_FOREIGN_PHYS, (void*)t_phys, &out);
         if (st != VMM_OK) goto map_fail;
     }
 
@@ -127,7 +127,7 @@ process_t* process_create(const char* name, tty_t* existing_tty) {
     if (rosz > 0) {
         void* out = NULL;
         uintptr_t ro_virt = (uintptr_t)&USER_RODATA_START;
-        vmm_status_t st = vmm_alloc_at(proc->vmm, (void*)ro_virt, rosz, VM_FLAG_USER | VM_FLAG_MMIO, (void*)ro_phys, &out);
+        vmm_status_t st = vmm_alloc_at(proc->vmm, (void*)ro_virt, rosz, VM_FLAG_USER | VM_FLAG_FOREIGN_PHYS, (void*)ro_phys, &out);
         if (st != VMM_OK) goto map_fail;
     }
 
@@ -136,7 +136,7 @@ process_t* process_create(const char* name, tty_t* existing_tty) {
     if (dsz > 0) {
         void* out = NULL;
         uintptr_t d_virt = (uintptr_t)&USER_DATA_START;
-        vmm_status_t st = vmm_alloc_at(proc->vmm, (void*)d_virt, dsz, VM_FLAG_USER | VM_FLAG_WRITE | VM_FLAG_MMIO, (void*)d_phys, &out);
+        vmm_status_t st = vmm_alloc_at(proc->vmm, (void*)d_virt, dsz, VM_FLAG_USER | VM_FLAG_WRITE | VM_FLAG_FOREIGN_PHYS, (void*)d_phys, &out);
         if (st != VMM_OK) goto map_fail;
     }
 

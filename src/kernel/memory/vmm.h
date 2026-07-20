@@ -16,16 +16,18 @@
 #include <stddef.h>
 
 // VM Object Flags
-#define VM_FLAG_NONE  0
-#define VM_FLAG_WRITE (1 << 0)
-#define VM_FLAG_EXEC  (1 << 1)
-#define VM_FLAG_USER  (1 << 2)
-#define VM_FLAG_MMIO  (1 << 3)
-#define VM_FLAG_LAZY  (1 << 4)
-// Real device registers. MMIO only means "the VMM does not own this physical
-// range" and is also used for RAM-backed process images, so cacheability is a
-// separate flag - marking those UC would run userspace code uncached.
-#define VM_FLAG_DEVICE (1 << 5)
+#define VM_FLAG_NONE         0
+#define VM_FLAG_WRITE        (1 << 0)
+#define VM_FLAG_EXEC         (1 << 1)
+#define VM_FLAG_USER         (1 << 2)
+// Physical range the VMM does not own, so it is never freed on unmap. Covers
+// device BARs but also RAM-backed process images, so it implies nothing about
+// cacheability - use VM_FLAG_DEVICE for that.
+#define VM_FLAG_FOREIGN_PHYS (1 << 3)
+#define VM_FLAG_LAZY         (1 << 4)
+// Real device registers, mapped uncacheable. Deliberately separate from
+// FOREIGN_PHYS: marking process images UC runs userspace straight off DRAM.
+#define VM_FLAG_DEVICE       (1 << 5)
 
 // Return codes
 typedef enum {
@@ -125,7 +127,7 @@ larger page sizes (2MB/1GB pages).
 
 For fork() later, we'll want CoW:
 
-#define VM_FLAG_COW (1 << 5)
+#define VM_FLAG_COW (1 << 6)
 
 In page fault handler:
 
