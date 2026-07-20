@@ -276,8 +276,8 @@ static inline uint64_t vmm_convert_vm_flags(size_t vm_flags, bool is_kernel_vmm)
          pt_flags |= PAGE_NO_EXECUTE;
     }
 
-    // Device MMIO must be uncacheable (PAT entry 3 stays UC)
-    if (vm_flags & VM_FLAG_MMIO) {
+    // Device registers must be uncacheable (PAT entry 3 stays UC)
+    if (vm_flags & VM_FLAG_DEVICE) {
         pt_flags |= PAGE_PCD | PAGE_PWT;
     }
 

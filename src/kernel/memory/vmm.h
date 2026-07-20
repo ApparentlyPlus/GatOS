@@ -22,6 +22,10 @@
 #define VM_FLAG_USER  (1 << 2)
 #define VM_FLAG_MMIO  (1 << 3)
 #define VM_FLAG_LAZY  (1 << 4)
+// Real device registers. MMIO only means "the VMM does not own this physical
+// range" and is also used for RAM-backed process images, so cacheability is a
+// separate flag - marking those UC would run userspace code uncached.
+#define VM_FLAG_DEVICE (1 << 5)
 
 // Return codes
 typedef enum {

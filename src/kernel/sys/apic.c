@@ -126,7 +126,7 @@ void lapic_init(void) {
     uint64_t phys_base = apic_msr & 0xFFFFF000;
     if (lapic_base == 0) {
         void* virt_addr = NULL;
-        if (vmm_alloc(NULL, PAGE_SIZE, VM_FLAG_WRITE | VM_FLAG_MMIO, (void*)phys_base, &virt_addr) != VMM_OK)
+        if (vmm_alloc(NULL, PAGE_SIZE, VM_FLAG_WRITE | VM_FLAG_MMIO | VM_FLAG_DEVICE, (void*)phys_base, &virt_addr) != VMM_OK)
             panic("Failed to map LAPIC memory.");
         lapic_base = (uint64_t)virt_addr;
     }
@@ -326,7 +326,7 @@ void ioapic_init(void) {
 
     uint64_t phys = ioapic_rec->io_apic_address;
     void* virt_addr = NULL;
-    if (vmm_alloc(NULL, PAGE_SIZE, VM_FLAG_WRITE | VM_FLAG_MMIO, (void*)phys, &virt_addr) != VMM_OK)
+    if (vmm_alloc(NULL, PAGE_SIZE, VM_FLAG_WRITE | VM_FLAG_MMIO | VM_FLAG_DEVICE, (void*)phys, &virt_addr) != VMM_OK)
         panic("Failed to map I/O APIC memory.");
     ioapic_base = (uint64_t)virt_addr;
 
