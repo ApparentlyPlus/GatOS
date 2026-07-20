@@ -100,6 +100,7 @@ size_t console_get_height();
 // see GATA_CAP_THREADS in kernel/caps.h.
 size_t con_crash_width(void);
 void con_crash_clear(uint8_t bg);
+void con_crash_shadow_init(void);
 void con_crash_set_colors(uint8_t fg, uint8_t bg);
 void con_crash_putc(char c);
 void con_crash_puts(const char* s);

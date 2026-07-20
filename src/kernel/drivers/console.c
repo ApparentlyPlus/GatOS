@@ -20,6 +20,7 @@
 #include <kernel/drivers/tty.h>
 #include <arch/x86_64/memory/paging.h>
 #include <kernel/memory/heap.h>
+#include <kernel/memory/pmm.h>
 #include <klibc/string.h>
 #include <klibc/stdio.h>
 #include <stdarg.h>
@@ -62,10 +63,12 @@ static char     cbuf[2048];
 // Text-cell shadow for the crash console, so scrolling redraws from RAM
 // instead of reading the framebuffer (WC/UC reads are extremely slow).
 // Packed cell: codepoint in bits 0..23, fg in 24..27, bg in 28..31.
-// Sized to cover 4K (3840 px / 8 px glyphs, 2160 px / 8+2 px rows).
-#define CRASH_MAX_COLS 480
-#define CRASH_MAX_ROWS 216
-static uint32_t crash_shadow[CRASH_MAX_ROWS][CRASH_MAX_COLS];
+// Taken from the PMM once that is up and sized to the live resolution, so it
+// occupies no BSS and imposes no maximum resolution. Until then, and if the
+// allocation fails, it stays NULL and a scroll falls back to clearing.
+static uint32_t* crash_shadow = NULL;
+static size_t crash_sh_cols = 0;
+static size_t crash_sh_rows = 0;
 
 /*
  * crash_pack - Encode a codepoint with colors into one shadow cell
@@ -73,6 +76,27 @@ static uint32_t crash_shadow[CRASH_MAX_ROWS][CRASH_MAX_COLS];
 static inline uint32_t crash_pack(uint32_t cp, uint8_t fg, uint8_t bg) {
     if (cp > 0xFFFFFF) cp = 0xFFFD;
     return cp | ((uint32_t)(fg & 0xF) << 24) | ((uint32_t)(bg & 0xF) << 28);
+}
+
+/*
+ * con_crash_shadow_init - Give the crash console its scroll shadow.
+ * console_init runs before the PMM exists, so this is called separately once
+ * memory is available. Sized to the live resolution: any display works and
+ * nothing is reserved statically for one that is never used.
+ */
+void con_crash_shadow_init(void) {
+    if (crash_shadow || !cols || !rows) return;
+
+    uint64_t phys;
+    size_t cells = cols * rows;
+    if (pmm_alloc(cells * sizeof(uint32_t), &phys) != PMM_OK) return;
+
+    crash_shadow = (uint32_t*)PHYSMAP_P2V(phys);
+    crash_sh_cols = cols;
+    crash_sh_rows = rows;
+
+    uint32_t blank = crash_pack(' ', cfg, cbg);
+    for (size_t i = 0; i < cells; i++) crash_shadow[i] = blank;
 }
 
 #pragma region Hardware Drawing
@@ -679,8 +703,8 @@ void con_crash_clear(uint8_t bg);
  * crash_set_cell - Record a codepoint with the current colors in the shadow
  */
 static inline void crash_set_cell(uint32_t x, uint32_t y, uint32_t cp) {
-    if (x < CRASH_MAX_COLS && y < CRASH_MAX_ROWS)
-        crash_shadow[y][x] = crash_pack(cp, cfg, cbg);
+    if (crash_shadow && x < crash_sh_cols && y < crash_sh_rows)
+        crash_shadow[(size_t)y * crash_sh_cols + x] = crash_pack(cp, cfg, cbg);
 }
 
 /*
@@ -728,24 +752,26 @@ static void crash_draw_glyph(uint32_t cp, uint8_t fg, uint8_t bg, uint32_t x, ui
 static void crash_scroll(void) {
     uint32_t r = (uint32_t)rows;
     uint32_t c = (uint32_t)cols;
-    if (r > CRASH_MAX_ROWS || c > CRASH_MAX_COLS) {
-        // Display exceeds even the 4K shadow: clear instead of scroll
+
+    // No shadow means no record of what is on screen (a panic before the PMM
+    // came up, or the allocation failed), so clear rather than scroll
+    if (!crash_shadow || c != crash_sh_cols || r != crash_sh_rows) {
         con_crash_clear(cbg);
         return;
     }
     uint32_t blank = crash_pack(' ', cfg, cbg);
     for (uint32_t y = 0; y + 1 < r; y++)
         for (uint32_t x = 0; x < c; x++) {
-            uint32_t nc = crash_shadow[y + 1][x];
-            if (nc != crash_shadow[y][x])
+            uint32_t nc = crash_shadow[(size_t)(y + 1) * c + x];
+            if (nc != crash_shadow[(size_t)y * c + x])
                 crash_draw_glyph(nc & 0xFFFFFF, (nc >> 24) & 0xF, (nc >> 28) & 0xF, x, y);
         }
     for (uint32_t x = 0; x < c; x++)
-        if (crash_shadow[r - 1][x] != blank)
+        if (crash_shadow[(size_t)(r - 1) * c + x] != blank)
             crash_draw_glyph(' ', cfg, cbg, x, r - 1);
-    kmemmove(&crash_shadow[0][0], &crash_shadow[1][0], (size_t)(r - 1) * sizeof(crash_shadow[0]));
+    kmemmove(crash_shadow, crash_shadow + c, (size_t)(r - 1) * c * sizeof(uint32_t));
     for (uint32_t x = 0; x < c; x++)
-        crash_shadow[r - 1][x] = blank;
+        crash_shadow[(size_t)(r - 1) * c + x] = blank;
     if (ccy > 0) ccy = r - 1;
 }
 
@@ -840,9 +866,11 @@ void con_crash_clear(uint8_t bg) {
     if (!fb) return;
     cbg = bg & 0xF; ccx = 0; ccy = 0;
     cu8n = 0; // don't carry a half-finished UTF-8 sequence across a clear
-    for (uint32_t y = 0; y < CRASH_MAX_ROWS; y++)
-        for (uint32_t x = 0; x < CRASH_MAX_COLS; x++)
-            crash_shadow[y][x] = crash_pack(' ', cfg, cbg);
+    if (crash_shadow) {
+        uint32_t blank = crash_pack(' ', cfg, cbg);
+        size_t cells = crash_sh_cols * crash_sh_rows;
+        for (size_t i = 0; i < cells; i++) crash_shadow[i] = blank;
+    }
     uint32_t color = VGA_PALETTE[cbg];
     size_t total = (size_t)fb_h * fb_pitch;
     if (fb_bpp == 32) {
