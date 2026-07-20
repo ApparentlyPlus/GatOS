@@ -192,6 +192,56 @@ static void render_cursor(console_t* con, bool on) {
 #define DIRTY_SET_ALL(con)  if ((con)->dirty) kmemset((con)->dirty, 0xFF, ((con)->width * (con)->height + 7) / 8)
 #define DIRTY_CLR_ALL(con)  if ((con)->dirty) kmemset((con)->dirty, 0x00, ((con)->width * (con)->height + 7) / 8)
 
+// Cells rendered per pass. Bounds the small stack arrays below while still
+// giving the framebuffer runs far wider than a single 8px glyph
+#define GLYPH_RUN_MAX 16
+
+/*
+ * draw_glyph_run - Renders `count` consecutive cells of row y in one pass.
+ * Each glyph row of the run is written as one contiguous span, so the writes
+ * fill whole cache lines instead of touching 32 bytes per glyph and moving on.
+ */
+static void draw_glyph_run(console_t* con, size_t y, size_t x0, size_t count) {
+    size_t py = y * (fh + PADDING_Y);
+    size_t px = x0 * fw;
+
+    // Anything but a fully onscreen 32bpp run goes through the per-cell path
+    if (fb_bpp != 32 || px + count * fw > fb_w || py + fh > fb_h) {
+        for (size_t i = 0; i < count; i++) {
+            console_char_t c = con->buffer[y * con->width + x0 + i];
+            draw_glyph(get_glyph(c.codepoint), (x0 + i) * fw, py, VGA_PALETTE[c.fg], VGA_PALETTE[c.bg]);
+        }
+        return;
+    }
+
+    // Resolve each cell once, not once per glyph row
+    uint8_t* glyphs[GLYPH_RUN_MAX];
+    uint32_t fgc[GLYPH_RUN_MAX];
+    uint32_t bgc[GLYPH_RUN_MAX];
+    for (size_t i = 0; i < count; i++) {
+        console_char_t c = con->buffer[y * con->width + x0 + i];
+        glyphs[i] = get_glyph(c.codepoint);
+        fgc[i] = VGA_PALETTE[c.fg];
+        bgc[i] = VGA_PALETTE[c.bg];
+    }
+
+    uint32_t* row_ptr = (uint32_t*)(fb + py * fb_pitch + px * 4);
+    size_t pitch_u32 = fb_pitch / 4;
+    for (size_t gy = 0; gy < fh; gy++) {
+        uint64_t* p = (uint64_t*)row_ptr;
+        for (size_t i = 0; i < count; i++) {
+            uint8_t bits = glyphs[i] ? glyphs[i][gy] : 0;
+            uint32_t colors[2] = { bgc[i], fgc[i] };
+            p[0] = (uint64_t)colors[(bits >> 7) & 1] | ((uint64_t)colors[(bits >> 6) & 1] << 32);
+            p[1] = (uint64_t)colors[(bits >> 5) & 1] | ((uint64_t)colors[(bits >> 4) & 1] << 32);
+            p[2] = (uint64_t)colors[(bits >> 3) & 1] | ((uint64_t)colors[(bits >> 2) & 1] << 32);
+            p[3] = (uint64_t)colors[(bits >> 1) & 1] | ((uint64_t)colors[(bits >> 0) & 1] << 32);
+            p += 4;
+        }
+        row_ptr += pitch_u32;
+    }
+}
+
 /*
  * flush_display - Flushes dirty character cells to the framebuffer
  * Assumption: No SMP
@@ -221,6 +271,9 @@ static void flush_display(console_t* con) {
     size_t cells = con->width * con->height;
     uint64_t* dw = (uint64_t*)con->dirty;
     size_t words = (cells + 63) / 64;
+    // Indices come out ascending, so neighbouring dirty cells on the same row
+    // are gathered into one run and drawn with contiguous writes
+    size_t run_y = 0, run_x = 0, run_n = 0;
     for (size_t w = 0; w < words; w++) {
         uint64_t bits = dw[w];
         if (!bits) continue;
@@ -229,12 +282,19 @@ static void flush_display(console_t* con) {
             size_t idx = w * 64 + (size_t)__builtin_ctzll(bits);
             bits &= bits - 1;
             if (idx >= cells) break;
-            console_char_t c = con->buffer[idx];
             size_t x = idx % con->width;
             size_t y = idx / con->width;
-            draw_glyph(get_glyph(c.codepoint), x * fw, y * (fh + PADDING_Y), VGA_PALETTE[c.fg], VGA_PALETTE[c.bg]);
+
+            // Extend the current run when this cell simply follows it
+            if (run_n && y == run_y && x == run_x + run_n && run_n < GLYPH_RUN_MAX) {
+                run_n++;
+                continue;
+            }
+            if (run_n) draw_glyph_run(con, run_y, run_x, run_n);
+            run_y = y; run_x = x; run_n = 1;
         }
     }
+    if (run_n) draw_glyph_run(con, run_y, run_x, run_n);
 
     // After flushing, ensure the cursor is drawn on top of any recently changed cells
     if (con->on) render_cursor(con, true);
