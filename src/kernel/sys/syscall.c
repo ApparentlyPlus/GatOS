@@ -83,28 +83,37 @@ void syscall_dispatcher(cpu_context_t* regs) {
 
             if (len > 65536) len = 65536;
 
-            // Copy through a fixed stack chunk instead of a per-call kmalloc.
-            // Each chunk is validated and copied with interrupts disabled to
-            // prevent the user remapping the buffer mid-copy, but the IRQ-off
-            // window is bounded by the chunk size instead of the full length.
-            char kbuf[1024];
+            // Copy through a fixed stack buffer instead of a per-call kmalloc.
+            // The user buffer is validated and copied in small sub-chunks with
+            // interrupts disabled (so it cannot be remapped mid-copy and the
+            // IRQ-off window stays bounded), but each filled buffer is handed
+            // to the TTY in a single call so the console flushes once per
+            // buffer rather than once per copy chunk.
+            char kbuf[4096];
             size_t done = 0;
             while (done < len) {
-                size_t n = len - done;
-                if (n > sizeof(kbuf)) n = sizeof(kbuf);
+                size_t block = len - done;
+                if (block > sizeof(kbuf)) block = sizeof(kbuf);
 
-                bool ints = intr_save();
-                if (!vmm_check_buffer(current->process->vmm, buf + done, n, VM_FLAG_USER)) {
+                size_t filled = 0;
+                while (filled < block) {
+                    size_t n = block - filled;
+                    if (n > 1024) n = 1024;
+
+                    bool ints = intr_save();
+                    if (!vmm_check_buffer(current->process->vmm, buf + done + filled, n, VM_FLAG_USER)) {
+                        intr_restore(ints);
+                        LOGF("[SYSCALL] SYS_WRITE: Invalid buffer pointer 0x%lx (len: %zu) from thread '%s' (PID %u)\n", (uintptr_t)buf, len, current->name, current->process ? current->process->pid : 0);
+                        sched_exit();
+                    }
+
+                    // SMAP must be relaxed while touching user memory
+                    smap_allow();
+                    kmemcpy(kbuf + filled, buf + done + filled, n);
+                    smap_deny();
                     intr_restore(ints);
-                    LOGF("[SYSCALL] SYS_WRITE: Invalid buffer pointer 0x%lx (len: %zu) from thread '%s' (PID %u)\n", (uintptr_t)buf, len, current->name, current->process ? current->process->pid : 0);
-                    sched_exit();
+                    filled += n;
                 }
-
-                // SMAP must be relaxed while touching user memory
-                smap_allow();
-                kmemcpy(kbuf, buf + done, n);
-                smap_deny();
-                intr_restore(ints);
 
                 // A userspace thread's stdout goes through this syscall
                 // regardless of output mode - GATA_OUTPUT_SERIAL only rewires
@@ -112,13 +121,13 @@ void syscall_dispatcher(cpu_context_t* regs) {
                 // this, "serial output" builds would still send userspace
                 // program output to the (headless, invisible) framebuffer TTY.
                 #ifdef GATA_OUTPUT_SERIAL
-                serial_write_len_port(SERIAL_COM1, kbuf, n);
+                serial_write_len_port(SERIAL_COM1, kbuf, block);
                 #else
                 if (current->process && current->process->tty) {
-                    tty_write(current->process->tty, kbuf, n);
+                    tty_write(current->process->tty, kbuf, block);
                 }
                 #endif
-                done += n;
+                done += block;
             }
             regs->rax = (uint64_t)len;
             break;
