@@ -140,6 +140,7 @@ void tty_destroy(tty_t* tty) {
 
     if (tty->console) {
         if (tty->console->buffer) kfree(tty->console->buffer);
+        if (tty->console->dirty) kfree(tty->console->dirty);
         kfree(tty->console);
     }
     kfree(tty);
