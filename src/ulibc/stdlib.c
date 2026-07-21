@@ -70,11 +70,14 @@ struct arena {
     size_t    total_alloc;
 };
 
+// Segregated free list bins
+#define UHEAP_BIN_COUNT 16
+
 // Heap
 typedef struct {
     uint32_t magic;
     arena_t *arenas;
-    block_t *free_list;
+    block_t *bins[UHEAP_BIN_COUNT];
     size_t   total_free;
     size_t   total_alloc;
     size_t   alloc_count;
@@ -116,6 +119,14 @@ static inline bool block_valid(block_t *b) {
 
 #pragma region Free List
 
+// Map a block size to its segregated bin
+static inline uint32_t bin_index(size_t size) {
+    if (size < BLOCK_ALIGN) size = BLOCK_ALIGN;
+    uint32_t i = (uint32_t)(63 - __builtin_clzll((uint64_t)(size >> 4)));
+    return i < UHEAP_BIN_COUNT ? i : UHEAP_BIN_COUNT - 1;
+}
+
+// Unlink a block from its size bin
 static void fl_remove(block_t *b) {
     if (b->prev_free && b->prev_free->next_free != b) {
         // Crash loudly, no kernel panic available here
@@ -126,27 +137,18 @@ static void fl_remove(block_t *b) {
     }
 
     if (b->prev_free) b->prev_free->next_free = b->next_free;
-    else              uheap.free_list = b->next_free;
+    else              uheap.bins[bin_index(b->size)] = b->next_free;
     if (b->next_free) b->next_free->prev_free = b->prev_free;
     b->next_free = b->prev_free = NULL;
 }
 
+// Push a block onto its size bin (LIFO, O(1))
 static void fl_insert(block_t *b) {
-    b->next_free = b->prev_free = NULL;
-    if (!uheap.free_list) { uheap.free_list = b; return; }
-    if (b->size <= uheap.free_list->size) {
-        b->next_free = uheap.free_list;
-        uheap.free_list->prev_free = b;
-        uheap.free_list = b;
-        return;
-    }
-    block_t *cur = uheap.free_list;
-    while (cur->next_free && cur->next_free->size < b->size)
-        cur = cur->next_free;
-    b->next_free = cur->next_free;
-    b->prev_free = cur;
-    if (cur->next_free) cur->next_free->prev_free = b;
-    cur->next_free = b;
+    uint32_t bin = bin_index(b->size);
+    b->prev_free = NULL;
+    b->next_free = uheap.bins[bin];
+    if (uheap.bins[bin]) uheap.bins[bin]->prev_free = b;
+    uheap.bins[bin] = b;
 }
 
 #pragma endregion
@@ -324,12 +326,14 @@ static arena_t *arena_create(size_t min_body) {
 static void arena_destroy(arena_t *arena) {
     if (!arena || arena->magic != ARENA_MAGIC) return;
 
-    // Remove all of this arena's blocks from the global free list
-    block_t *cur = uheap.free_list;
-    while (cur) {
-        block_t *nxt = cur->next_free;
-        if (cur->arena == arena) fl_remove(cur);
-        cur = nxt;
+    // Remove all of this arena's blocks from the free bins
+    for (uint32_t bin = 0; bin < UHEAP_BIN_COUNT; bin++) {
+        block_t *cur = uheap.bins[bin];
+        while (cur) {
+            block_t *nxt = cur->next_free;
+            if (cur->arena == arena) fl_remove(cur);
+            cur = nxt;
+        }
     }
 
     uheap.total_free -= arena->total_free;
@@ -370,26 +374,39 @@ static void heap_init(void) {
 
 #pragma region Core alloc/free
 
+/*
+ * find_free_block - Search the segregated free list bins for a block 
+ * that fits the requested size.
+ */
+static block_t *find_free_block(size_t size) {
+    for (uint32_t bin = bin_index(size); bin < UHEAP_BIN_COUNT; bin++) {
+        block_t *b = uheap.bins[bin];
+        while (b) {
+            if (b->size >= size) return b;
+            b = b->next_free;
+        }
+    }
+    return NULL;
+}
+
 static void *heap_alloc(size_t size, bool zero) {
     heap_init();
 
     size_t orig_size = size;
     size = align_up(size, BLOCK_ALIGN);
     if (size < orig_size) return NULL; // Overflow
-    
+
     if (size < MIN_BLOCK_SIZE) size = MIN_BLOCK_SIZE;
 
-    // First-fit from sorted free list
-    block_t *b = uheap.free_list;
-    while (b && b->size < size) b = b->next_free;
+    // First-fit from the segregated size bins
+    block_t *b = find_free_block(size);
 
     if (!b) {
         // No block fits; expand the heap with a new arena
         size_t needed = size + sizeof(block_t) + sizeof(bfooter_t);
         size_t body = needed > MIN_ARENA_BODY ? needed : MIN_ARENA_BODY;
         if (!arena_create(body)) return NULL;
-        b = uheap.free_list;
-        while (b && b->size < size) b = b->next_free;
+        b = find_free_block(size);
         if (!b) return NULL;
     }
 
