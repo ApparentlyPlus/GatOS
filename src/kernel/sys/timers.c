@@ -298,18 +298,19 @@ void sleep_us(uint64_t us) {
 /*
  * get_uptime_ms - Returns the number of milliseconds since the kernel booted
  */
-uint64_t get_uptime_ns(void) {
+uint64_t get_uptime_ms(void) {
     if (tsc_tpm == 0) return 0;
-    __uint128_t delta = tsc_read() - boot_tsc;
-    return (uint64_t)((delta * 1000000) / tsc_tpm);
+    return (tsc_read() - boot_tsc) / tsc_tpm;
 }
 
 /*
  * get_uptime_ns - Returns the number of nanoseconds since the kernel booted
+ * Uses 128-bit intermediate math: delta * 1e6 overflows u64 after ~1.7h at 3 GHz
  */
 uint64_t get_uptime_ns(void) {
     if (tsc_tpm == 0) return 0;
-    return ((tsc_read() - boot_tsc) * 1000000) / tsc_tpm;
+    __uint128_t delta = tsc_read() - boot_tsc;
+    return (uint64_t)((delta * 1000000) / tsc_tpm);
 }
 
 /*
