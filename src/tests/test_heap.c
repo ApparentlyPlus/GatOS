@@ -46,11 +46,13 @@ typedef struct heap_test_arena {
     size_t total_allocated;
 } heap_test_arena_t;
 
+#define HEAP_TEST_BIN_COUNT 16
+
 typedef struct {
     uint32_t magic;
     vmm_t* vmm;
     void* arenas;
-    void* free_list;
+    void* bins[HEAP_TEST_BIN_COUNT];
     size_t min_arena_size;
     size_t max_size;
     size_t current_size;
@@ -405,7 +407,7 @@ static bool t_split_thresh(void) {
     tr_free(); return true;
 }
 
-static bool t_freelist_sorted(void) {
+static bool t_freelist_binned(void) {
     tr_reset();
     void* s1 = kmalloc(16); tr_add(s1);
     void* large = kmalloc(256);
@@ -415,9 +417,17 @@ static bool t_freelist_sorted(void) {
     void* med = kmalloc(128);
     kfree(med); kfree(large); kfree(small);
     heap_test_t* h = heapv();
-    heap_test_hdr_t* cur = (heap_test_hdr_t*)h->free_list;
-    size_t prev_sz = 0; int cnt = 0;
-    while (cur) { TEST_ASSERT(cur->size >= prev_sz); prev_sz = cur->size; cur = cur->next_free; cnt++; }
+    int cnt = 0;
+    /* Every free block must sit in the bin covering its size: [16<<i, 32<<i) */
+    for (int bin = 0; bin < HEAP_TEST_BIN_COUNT; bin++) {
+        heap_test_hdr_t* cur = (heap_test_hdr_t*)h->bins[bin];
+        while (cur) {
+            size_t lo = (size_t)16 << bin;
+            TEST_ASSERT(cur->size >= lo);
+            if (bin < HEAP_TEST_BIN_COUNT - 1) TEST_ASSERT(cur->size < lo * 2);
+            cur = cur->next_free; cnt++;
+        }
+    }
     TEST_ASSERT(cnt >= 3);
     tr_free(); return true;
 }
@@ -596,7 +606,7 @@ void test_heap(void) {
     run_test("heap_stats: tracks alloc",      t_stats_track);
     run_test("coalesce: A+B+C merge",         t_coalesce_fwd);
     run_test("split threshold",               t_split_thresh);
-    run_test("free list sorted",              t_freelist_sorted);
+    run_test("free list binned",              t_freelist_binned);
     run_test("arena: expands on huge alloc",  t_arena_expand);
     run_test("arena: shrinks after free",     t_arena_shrink);
     run_test("corrupt: header detected",      t_hdr_corrupt);
