@@ -98,6 +98,6 @@ size_t console_get_height();
 // Crash console api (lock free, scheduler free)
 size_t con_crash_width(void);
 void con_crash_clear(uint8_t bg);
+void con_crash_shadow_init(void);
 void con_crash_puts(const char* s);
 void con_crash_printf(const char* fmt, ...);
-

@@ -111,6 +111,9 @@ bool kernel_bootstrap(void* mb_info, multiboot_parser_t* mb, bool verbose, const
 	}
 	QEMU_LOG("Initialized physical memory manager", TOTAL_DBG);
 
+	// The crash console can only size its scroll shadow now that the PMM is on
+	con_crash_shadow_init();
+
 	// Initialize slab allocator before VMM since VMM needs to allocate memory for its structures
 	slab_status_t slab_status = slab_init();
 	if(slab_status != SLAB_OK) {
