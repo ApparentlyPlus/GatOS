@@ -9,11 +9,16 @@
 
 #include <arch/x86_64/memory/paging.h>
 #include <arch/x86_64/multiboot2.h>
+#include <arch/x86_64/cpu/cpu.h>
+#include <arch/x86_64/cpu/msr.h>
 #include <kernel/drivers/serial.h>
 #include <kernel/sys/panic.h>
 #include <kernel/debug.h>
 #include <klibc/string.h>
 #include <stdbool.h>
+
+// True once pat_init has made PAT entry 1 (PWT) write-combining
+static bool patwc = false;
 
 /* 
  * This is a (self proclaimed) genius hack to statically reserve a single 2MB page for framebuffer purposes in the physmap,
@@ -196,6 +201,32 @@ uint64_t reserve_required_tablespace(multiboot_parser_t* multiboot) {
 }
 
 /*
+ * pat_init - Reprogram PAT entry 1 (PWT only PTEs) from write through to
+ * write combining, so the framebuffer can be mapped WC. Entries 0 (WB) and
+ * 3 (PCD|PWT, UC) keep their defaults for RAM and device MMIO.
+ */
+static void pat_init(void) {
+    uint32_t a, b, c, d;
+    cpuid(1, 0, &a, &b, &c, &d);
+    if (!(d & (1u << 16))) return;
+
+    uint64_t pat = read_msr(MSR_PAT);
+    pat &= ~(0xFFULL << 8);
+    pat |= (0x01ULL << 8);
+    write_msr(MSR_PAT, pat);
+    patwc = true;
+}
+
+/*
+ * fb_cache_flags - Cache attribute bits for framebuffer mappings.
+ * WC (PWT selects PAT entry 1) when available, UC otherwise
+ */
+static inline uint64_t fb_cache_flags(void) {
+    return patwc ? PAGE_PWT : (PAGE_PWT | PAGE_PCD);
+}
+
+
+/*
  * build_physmap - This function creates a mapping of all physical RAM into a reserved
  * region of the virtual address space (the physmap). This allows
  * the kernel to access any physical memory through a simple offset calculation.
@@ -208,6 +239,8 @@ void build_physmap() {
         LOGF("[ERROR] No physmap has been built.\n");
         return;
     }
+
+    pat_init();
 
     uintptr_t pt_base = physmap.tables_base;
     uintptr_t pd_base = pt_base + physmap.total_PTs * PAGE_SIZE;
@@ -247,7 +280,7 @@ void build_physmap() {
             uint64_t end2m = (fb_end + 0x1FFFFF) & ~(uint64_t)(0x1FFFFF);
             for (uint64_t pa2m = base2m; pa2m < end2m; pa2m += 0x200000)
                 fb_pd[(pa2m >> 21) & 0x1FF] =
-                    pa2m | (PAGE_PRESENT | PAGE_WRITABLE | PAGE_HUGE | PAGE_PWT | PAGE_PCD);
+                    pa2m | (PAGE_PRESENT | PAGE_WRITABLE | PAGE_HUGE | fb_cache_flags());
             PDPTs[0][pdpt_s] = KERNEL_V2P(fb_pd) | (PAGE_PRESENT | PAGE_WRITABLE);
         }
     } else if (physmap.fb_phys && physmap.fb_phys < physmap.total_RAM) {
@@ -256,7 +289,7 @@ void build_physmap() {
         for (pa = physmap.fb_phys; pa < fb_end && pa < physmap.total_RAM; pa += PAGE_SIZE) {
             uint64_t pti = (pa >> 12) / PAGE_ENTRIES;
             uint64_t pte = (pa >> 12) % PAGE_ENTRIES;
-            PTs[pti][pte] = pa | (PAGE_PRESENT | PAGE_WRITABLE | PAGE_PWT | PAGE_PCD);
+            PTs[pti][pte] = pa | (PAGE_PRESENT | PAGE_WRITABLE | fb_cache_flags());
         }
     }
 
