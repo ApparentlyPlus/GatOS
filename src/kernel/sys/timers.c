@@ -267,7 +267,7 @@ void sleep_ms(uint64_t ms) {
         uint64_t target = tsc_read() + (ms * tsc_tpm);
         while (tsc_read() < target) __asm__ volatile("pause");
     } else if (hpet_is_available()) {
-        uint64_t target = hpet_read_counter() + (ms * 1000000000000ULL / hpet_period);
+        uint64_t target = hpet_read_counter() + (uint64_t)(((__uint128_t)ms * 1000000000000ULL) / hpet_period);
         while (hpet_read_counter() < target) __asm__ volatile("pause");
     } else {
         for (uint64_t i = 0; i < ms; i++) {
@@ -298,9 +298,10 @@ void sleep_us(uint64_t us) {
 /*
  * get_uptime_ms - Returns the number of milliseconds since the kernel booted
  */
-uint64_t get_uptime_ms(void) {
+uint64_t get_uptime_ns(void) {
     if (tsc_tpm == 0) return 0;
-    return (tsc_read() - boot_tsc) / tsc_tpm;
+    __uint128_t delta = tsc_read() - boot_tsc;
+    return (uint64_t)((delta * 1000000) / tsc_tpm);
 }
 
 /*
