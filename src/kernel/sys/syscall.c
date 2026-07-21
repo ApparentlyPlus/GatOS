@@ -77,35 +77,36 @@ void syscall_dispatcher(cpu_context_t* regs) {
             }
 
             if (len > 65536) len = 65536;
-            char* kbuf = kmalloc(len);
-            if (!kbuf) {
-                regs->rax = (uint64_t)-1;
-                break;
-            }
+            
+            // Here, we can do something clever. We can copy through a 
+            // fixed stack chunk instead of a per call kmalloc.
+            char kbuf[1024];
+            size_t done = 0;
 
-            // Validate the user buffer before copying. We need to disable interrupts to prevent
-            // a malicious user from changing the buffer after validation and before copying.
-            bool ints = intr_save();
-            if (!vmm_check_buffer(current->process->vmm, buf, len, VM_FLAG_USER)) {
+            // Then, we can copy in bounded chunks with interrupts disabled per chunk
+            while (done < len) {
+                size_t n = len - done;
+                if (n > sizeof(kbuf)) n = sizeof(kbuf);
+
+                bool ints = intr_save();
+                if (!vmm_check_buffer(current->process->vmm, buf + done, n, VM_FLAG_USER)) {
+                    intr_restore(ints);
+                    LOGF("[SYSCALL] SYS_WRITE: Invalid buffer pointer 0x%lx (len: %zu) from thread '%s' (PID %u)\n", 
+                        (uintptr_t)buf, len, current->name, current->process ? current->process->pid : 0);
+                    sched_exit();
+                }
+
+                // SMAP must be relaxed while touching user memory
+                smap_allow();
+                kmemcpy(kbuf, buf + done, n);
+                smap_deny();
                 intr_restore(ints);
-                kfree(kbuf);
-                LOGF("[SYSCALL] SYS_WRITE: Invalid buffer pointer 0x%lx (len: %zu) from thread '%s' (PID %u)\n", (uintptr_t)buf, len, current->name, current->process ? current->process->pid : 0);
-                sched_exit();
-                break;
-            }
 
-            // Copy the data into the kernel and write to the TTY
-            // We need to allow SMAP here because the user buffer is in a high memory 
-            // region that SMAP would normally prevent us from accessing.
-            smap_allow();
-            kmemcpy(kbuf, buf, len);
-            smap_deny();
-            intr_restore(ints);
-
-            if (current->process && current->process->tty) {
-                tty_write(current->process->tty, kbuf, len);
+                if (current->process && current->process->tty) {
+                    tty_write(current->process->tty, kbuf, n);
+                }
+                done += n;
             }
-            kfree(kbuf);
             regs->rax = (uint64_t)len;
             break;
         }
@@ -118,6 +119,12 @@ void syscall_dispatcher(cpu_context_t* regs) {
             // Don't allow userspace to set flags other than these
             size_t user_allowed_flags = VM_FLAG_WRITE | VM_FLAG_EXEC | VM_FLAG_LAZY;
             vm_flags &= user_allowed_flags;
+
+            // no mapping may be both writable and executable
+            if ((vm_flags & VM_FLAG_WRITE) && (vm_flags & VM_FLAG_EXEC)) {
+                regs->rax = (uint64_t)-1;
+                break;
+            }
 
             void* out_addr = NULL;
             vmm_status_t status;
@@ -178,27 +185,29 @@ void syscall_dispatcher(cpu_context_t* regs) {
                 break;
             }
 
-            char* kbuf = kmalloc(count);
-            if (!kbuf) {
-                regs->rax = (uint64_t)-1;
-                break;
-            }
-
+            // Read into a stack buffer instead of a per call kmalloc, then
+            // copy out in bounded chunks with interrupts disabled per chunk
+            char kbuf[4096];
             size_t n = tty_read(tty, kbuf, count);
+            size_t done = 0;
 
-            bool ints = intr_save();
-            if (!vmm_check_buffer(current->process->vmm, buf, n, VM_FLAG_USER | VM_FLAG_WRITE)) {
+            // Copy out in bounded chunks with interrupts disabled per chunk
+            while (done < n) {
+                size_t c = n - done;
+                if (c > 1024) c = 1024;
+
+                bool ints = intr_save();
+                if (!vmm_check_buffer(current->process->vmm, buf + done, c, VM_FLAG_USER | VM_FLAG_WRITE)) {
+                    intr_restore(ints);
+                    sched_exit();
+                }
+
+                smap_allow();
+                kmemcpy(buf + done, kbuf + done, c);
+                smap_deny();
                 intr_restore(ints);
-                kfree(kbuf);
-                sched_exit();
-                break;
+                done += c;
             }
-
-            smap_allow();
-            kmemcpy(buf, kbuf, n);
-            smap_deny();
-            intr_restore(ints);
-            kfree(kbuf);
 
             regs->rax = (uint64_t)n;
             break;
