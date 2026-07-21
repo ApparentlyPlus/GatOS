@@ -77,35 +77,41 @@ void syscall_dispatcher(cpu_context_t* regs) {
             }
 
             if (len > 65536) len = 65536;
-            
-            // Here, we can do something clever. We can copy through a 
-            // fixed stack chunk instead of a per call kmalloc.
-            char kbuf[1024];
+
+            // Copy the user buffer into a kernel buffer in bounded chunks, checking each chunk for validity
+            char kbuf[4096];
             size_t done = 0;
 
-            // Then, we can copy in bounded chunks with interrupts disabled per chunk
+            // We copy in chunks of 4KB to avoid excessive stack usage 
+            // and to ensure we don't exceed the kernel's stack limits
             while (done < len) {
-                size_t n = len - done;
-                if (n > sizeof(kbuf)) n = sizeof(kbuf);
+                size_t block = len - done;
+                if (block > sizeof(kbuf)) block = sizeof(kbuf);
 
-                bool ints = intr_save();
-                if (!vmm_check_buffer(current->process->vmm, buf + done, n, VM_FLAG_USER)) {
+                size_t filled = 0;
+                while (filled < block) {
+                    size_t n = block - filled;
+                    if (n > 1024) n = 1024;
+
+                    bool ints = intr_save();
+                    if (!vmm_check_buffer(current->process->vmm, buf + done + filled, n, VM_FLAG_USER)) {
+                        intr_restore(ints);
+                        LOGF("[SYSCALL] SYS_WRITE: Invalid buffer pointer 0x%lx (len: %zu) from thread '%s' (PID %u)\n", (uintptr_t)buf, len, current->name, current->process ? current->process->pid : 0);
+                        sched_exit();
+                    }
+
+                    // SMAP must be relaxed while touching user memory
+                    smap_allow();
+                    kmemcpy(kbuf + filled, buf + done + filled, n);
+                    smap_deny();
                     intr_restore(ints);
-                    LOGF("[SYSCALL] SYS_WRITE: Invalid buffer pointer 0x%lx (len: %zu) from thread '%s' (PID %u)\n", 
-                        (uintptr_t)buf, len, current->name, current->process ? current->process->pid : 0);
-                    sched_exit();
+                    filled += n;
                 }
-
-                // SMAP must be relaxed while touching user memory
-                smap_allow();
-                kmemcpy(kbuf, buf + done, n);
-                smap_deny();
-                intr_restore(ints);
 
                 if (current->process && current->process->tty) {
-                    tty_write(current->process->tty, kbuf, n);
+                    tty_write(current->process->tty, kbuf, block);
                 }
-                done += n;
+                done += block;
             }
             regs->rax = (uint64_t)len;
             break;
@@ -191,7 +197,7 @@ void syscall_dispatcher(cpu_context_t* regs) {
             size_t n = tty_read(tty, kbuf, count);
             size_t done = 0;
 
-            // Copy out in bounded chunks with interrupts disabled per chunk
+            // Copy the kernel buffer into the user buffer in bounded chunks, checking each chunk for validity
             while (done < n) {
                 size_t c = n - done;
                 if (c > 1024) c = 1024;
