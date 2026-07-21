@@ -272,12 +272,12 @@ static bool t_mmio_map(void) {
     vmm_t* v = vmm_kernel_get();
     uint64_t phys; pmm_alloc(PG, &phys);
     void* p;
-    TEST_ASSERT_STATUS(vmm_alloc(v, PG, VM_FLAG_MMIO | VM_FLAG_WRITE, (void*)phys, &p), VMM_OK);
+    TEST_ASSERT_STATUS(vmm_alloc(v, PG, VM_FLAG_FOREIGN | VM_FLAG_WRITE, (void*)phys, &p), VMM_OK);
     tr_alloc(v, p, PG);
     uint64_t mp;
     TEST_ASSERT(vmm_get_physical(v, p, &mp));
     TEST_ASSERT(mp == phys);
-    TEST_ASSERT(vmm_check_flags(v, p, VM_FLAG_MMIO));
+    TEST_ASSERT(vmm_check_flags(v, p, VM_FLAG_FOREIGN));
     tr_free();
     pmm_free(phys, PG);
     return true;
@@ -303,7 +303,7 @@ static bool t_map_unmap_range(void) {
     uint64_t phys; size_t sz = PG * 4;
     if (pmm_alloc(sz, &phys) != PMM_OK) return true;
     void* virt = (void*)0xC00000000ULL;
-    TEST_ASSERT_STATUS(vmm_map_range(v, phys, virt, sz, VM_FLAG_WRITE | VM_FLAG_MMIO), VMM_OK);
+    TEST_ASSERT_STATUS(vmm_map_range(v, phys, virt, sz, VM_FLAG_WRITE | VM_FLAG_FOREIGN), VMM_OK);
     for (size_t off = 0; off < sz; off += PG) {
         uint64_t p;
         TEST_ASSERT(vmm_get_physical(v, (void*)((uintptr_t)virt + off), &p));

@@ -111,7 +111,7 @@ static void hpet_init(void) {
     void* virt_addr = NULL;
 
     // Map HPET registers
-    if (vmm_alloc(NULL, PAGE_SIZE, VM_FLAG_WRITE | VM_FLAG_MMIO | VM_FLAG_DEVICE, (void*)phys_addr, &virt_addr) != VMM_OK) {
+    if (vmm_alloc(NULL, PAGE_SIZE, VM_FLAG_WRITE | VM_FLAG_FOREIGN | VM_FLAG_DEVICE, (void*)phys_addr, &virt_addr) != VMM_OK) {
         LOGF("[TIMER] Failed to map HPET registers.\n");
         return;
     }
