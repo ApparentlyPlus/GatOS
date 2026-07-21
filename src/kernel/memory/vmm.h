@@ -22,6 +22,7 @@
 #define VM_FLAG_USER  (1 << 2)
 #define VM_FLAG_MMIO  (1 << 3)
 #define VM_FLAG_LAZY  (1 << 4)
+#define VM_FLAG_DEVICE (1 << 5)
 
 // Return codes
 typedef enum {

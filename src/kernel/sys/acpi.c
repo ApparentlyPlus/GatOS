@@ -36,7 +36,7 @@ void* acpi_map_phys(uint64_t phys_addr, size_t size) {
 
     // VM_FLAG_MMIO ensures we treat this as device memory
     // MMIO dude, I hate that we need the vmm for this dammit
-    vmm_status_t status = vmm_alloc(NULL, map_size, VM_FLAG_WRITE | VM_FLAG_MMIO, (void*)base_phys, &virt_addr);
+    vmm_status_t status = vmm_alloc(NULL, map_size, VM_FLAG_WRITE | VM_FLAG_MMIO | VM_FLAG_DEVICE, (void*)base_phys, &virt_addr);
 
     if (status != VMM_OK) {
         LOGF("[ACPI ERROR] Failed to map physical address 0x%lx (Status: %d)\n", phys_addr, status);
