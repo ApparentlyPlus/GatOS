@@ -18,7 +18,7 @@
 // Forward declaration of userspace app launcher
 extern void uapps(void);
 
-static char* KERNEL_VERSION = "v2.1.7";
+static char* KERNEL_VERSION = "v2.1.8";
 
 /*
  * kernel_main - Main entry point for the GatOS kernel
