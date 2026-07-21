@@ -18,6 +18,7 @@
 #include <kernel/drivers/tty.h>
 #include <kernel/debug.h>
 #include <kernel/memory/heap.h>
+#include <kernel/sys/timers.h>
 #include <klibc/string.h>
 
 extern void syscall_entry(void);
@@ -247,12 +248,23 @@ void syscall_dispatcher(cpu_context_t* regs) {
                     regs->rax = ((uint64_t)height << 32) | (uint64_t)width;
                     break;
                 }
+                case TTY_CTRL_SET_COLOR: {
+                    uint8_t fg = (uint8_t)(arg2 & 0xFF);
+                    uint8_t bg = (uint8_t)((arg2 >> 8) & 0xFF);
+                    con_set_color(tty->console, fg, bg);
+                    regs->rax = 0;
+                    break;
+                }
                 default:
                     regs->rax = (uint64_t)-1;
                     break;
             }
             break;
         }
+
+        case SYS_TIME_NS:
+            regs->rax = get_uptime_ns();
+            break;
 
         case SYS_SET_FS_BASE: {
             uint64_t base = regs->rdi;
