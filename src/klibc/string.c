@@ -8,30 +8,23 @@
 #include <stdint.h>
 
 void* kmemset(void *dest, int c, size_t n) {
-    uint8_t* p = (uint8_t*)dest;
-    while (n && ((uintptr_t)p & 7)) { *p++ = (uint8_t)c; n--; }
+    void* d = dest;
     uint64_t fill = (uint8_t)c;
     fill |= fill << 8; fill |= fill << 16; fill |= fill << 32;
-    uint64_t* q = (uint64_t*)p;
-    size_t words = n / 8; n &= 7;
-    while (words--) *q++ = fill;
-    p = (uint8_t*)q;
-    while (n--) *p++ = (uint8_t)c;
+    size_t q = n >> 3;
+    size_t r = n & 7;
+    __asm__ volatile("rep stosq" : "+D"(d), "+c"(q) : "a"(fill) : "memory");
+    __asm__ volatile("rep stosb" : "+D"(d), "+c"(r) : "a"(fill) : "memory");
     return dest;
 }
 
 void *kmemcpy(void *dest, const void *src, size_t n) {
-    uint8_t* d = (uint8_t*)dest;
-    const uint8_t* s = (const uint8_t*)src;
-    while (n && ((uintptr_t)d & 7)) { *d++ = *s++; n--; }
-    if (!((uintptr_t)s & 7)) {
-        uint64_t* dq = (uint64_t*)d;
-        const uint64_t* sq = (const uint64_t*)s;
-        size_t words = n / 8; n &= 7;
-        while (words--) *dq++ = *sq++;
-        d = (uint8_t*)dq; s = (const uint8_t*)sq;
-    }
-    while (n--) *d++ = *s++;
+    void* d = dest;
+    const void* s = src;
+    size_t q = n >> 3;
+    size_t r = n & 7;
+    __asm__ volatile("rep movsq" : "+D"(d), "+S"(s), "+c"(q) :: "memory");
+    __asm__ volatile("rep movsb" : "+D"(d), "+S"(s), "+c"(r) :: "memory");
     return dest;
 }
 
@@ -40,17 +33,16 @@ void *kmemmove(void *dest, const void *src, size_t n) {
     const uint8_t* s = (const uint8_t*)src;
     if (d == s || n == 0) return dest;
     if (d < s) {
-        while (n && ((uintptr_t)d & 7)) { *d++ = *s++; n--; }
-        if (!((uintptr_t)s & 7)) {
-            uint64_t* dq = (uint64_t*)d; const uint64_t* sq = (const uint64_t*)s;
-            size_t words = n / 8; n &= 7;
-            while (words--) *dq++ = *sq++;
-            d = (uint8_t*)dq; s = (const uint8_t*)sq;
-        }
-        while (n--) *d++ = *s++;
+        return kmemcpy(dest, src, n);
     } else {
-        d += n; s += n;
-        while (n--) *(--d) = *(--s);
+        uint8_t* d8 = d + n;
+        const uint8_t* s8 = s + n;
+        size_t r = n & 7;
+        while (r--) *(--d8) = *(--s8);
+        size_t q = n >> 3;
+        uint64_t* dq = (uint64_t*)d8;
+        const uint64_t* sq = (const uint64_t*)s8;
+        while (q--) *(--dq) = *(--sq);
     }
     return dest;
 }
