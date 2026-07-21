@@ -241,7 +241,7 @@ static void scroll(console_t* con) {
     extern tty_t* volatile active_tty;
     bool active = fb && active_tty && active_tty->console == con;
 
-    // If the console is active and we're not deferring rendering, we can do a diff pass to update the framebuffer directly
+    // Here we are in immediate mode, so we can scroll the framebuffer directly
     if (active && !con->defer_render) {
         console_char_t blank = (console_char_t){ ' ', con->fg, con->bg };
         for (size_t y = first; y < con->height; y++) {
@@ -252,6 +252,24 @@ static void scroll(console_t* con) {
                 DIRTY_CLR(con, idx);
                 if (nc.codepoint == oc.codepoint && nc.fg == oc.fg && nc.bg == oc.bg) continue;
                 draw_glyph(get_glyph(nc.codepoint), x * fw, y * (fh + PADDING_Y), VGA_PALETTE[nc.fg], VGA_PALETTE[nc.bg]);
+            }
+        }
+    }
+
+    // Here we are in deferred mode, so the framebuffer is not touched until flush_display.
+    // However, we still need to ensure that the backbuffer is consistent with the framebuffer.
+    if (active && con->defer_render && con->dirty) {
+        console_char_t blank = (console_char_t){ ' ', con->fg, con->bg };
+        for (size_t y = first; y < con->height; y++) {
+            for (size_t x = 0; x < con->width; x++) {
+                size_t idx = y * con->width + x;
+                
+                // Already stale on screen, so it is redrawn regardless
+                if (DIRTY_TST(con, idx)) continue;
+                console_char_t nc = (y + 1 < con->height) ? con->buffer[idx + con->width] : blank;
+                console_char_t oc = con->buffer[idx];
+                if (nc.codepoint != oc.codepoint || nc.fg != oc.fg || nc.bg != oc.bg)
+                    DIRTY_SET(con, idx);
             }
         }
     }
@@ -270,14 +288,6 @@ static void scroll(console_t* con) {
     // Move cursor up one line, but not into the header area
     con->cy--;
     if (con->cy < first) con->cy = first;
-
-    if (fb) {
-        if (active) {
-            if (con->defer_render) {
-                DIRTY_SET_ALL(con);
-            }
-        }
-    }
 }
 
 /*
