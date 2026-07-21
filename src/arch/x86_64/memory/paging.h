@@ -65,7 +65,7 @@
 #define PREALLOC_PML4s  1
 #define PREALLOC_PDPTs  1
 #define PREALLOC_PDs    1
-#define PREALLOC_PTs    512
+#define PREALLOC_PTs    0
 
 
 #define PT_ENTRY_MASK    0x1FF
@@ -120,6 +120,7 @@ typedef struct{
     uint64_t total_PDs;
     uint64_t total_PDPTs;
     uint64_t total_PML4s;
+    uint64_t total_kernel_PTs;
 } physmap_t;
 
 static physmap_t physmap = {0};
