@@ -43,7 +43,7 @@ extern void uapps(void);
 
 #define TOTAL_DBG 25
 
-static char* KERNEL_VERSION = "v2.0.0";
+static char* KERNEL_VERSION = "v2.1.0";
 
 // If it is a test build, the multiboot buffer will be defined in tests.c
 #ifndef TEST_BUILD
