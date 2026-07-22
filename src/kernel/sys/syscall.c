@@ -19,6 +19,7 @@
 #include <kernel/debug.h>
 #include <kernel/memory/heap.h>
 #include <kernel/sys/timers.h>
+#include <kernel/sys/power.h>
 #include <klibc/string.h>
 
 extern void syscall_entry(void);
@@ -264,6 +265,14 @@ void syscall_dispatcher(cpu_context_t* regs) {
 
         case SYS_TIME_NS:
             regs->rax = get_uptime_ns();
+            break;
+
+        case SYS_POWEROFF:
+            power_off();
+            break;
+
+        case SYS_REBOOT:
+            reboot();
             break;
 
         case SYS_SET_FS_BASE: {
