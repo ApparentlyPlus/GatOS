@@ -31,7 +31,7 @@ CONFIG = {
     },
     "win32": {
         "url": "https://github.com/ApparentlyPlus/GatOS/releases/download/build-toolchain/x86_64-win.zip",
-        "hash": "82197d1a8ad5ac725012d1f7ffdf01e6dbb3573703b3f7882bec9c8d63728333",
+        "hash": "9e395023e886c56f1d4d31b0d0a61f744890097d30596955b6bd7bb5a5200b03",
         "folder_name": "x86_64-win"
     }
 }

@@ -68,9 +68,9 @@ GRUB_MKRESCUE_CMD = GRUB_DIR / f"grub-mkrescue{EXE_EXT}"
 
 if OS_NAME == "win":
     QEMU_EXEC = PLATFORM_TOOLCHAIN_DIR / "qemu" / f"qemu-system-x86_64{EXE_EXT}"
-    XORRISO_EXEC = None
+    XORRISO_EXEC = PLATFORM_TOOLCHAIN_DIR / "xorriso" / f"xorriso{EXE_EXT}"
     GRUB_MODULE_DIR = GRUB_DIR / "x86_64-efi"
-    GRUB_FONT_PATH = None
+    GRUB_FONT_PATH = GRUB_DIR / "unicode.pf2"
 elif OS_NAME == "linux":
     QEMU_EXEC = PLATFORM_TOOLCHAIN_DIR / "qemu" / "QEMU-x86_64.AppImage"
     XORRISO_EXEC = PLATFORM_TOOLCHAIN_DIR / "xorriso" / "xorriso"
@@ -254,49 +254,28 @@ def link_kernel(obj_files: List[Path]):
         
     run_cmd([STRIP, str(KERNEL_BIN)])
 
-def make_uefi_grub():
-    UEFI_DIR.mkdir(parents=True, exist_ok=True)
-    run_cmd([GRUB_MKSTANDALONE, f"--directory={GRUB_MODULE_DIR}", "--format=x86_64-efi", f"--output={UEFI_GRUB}", "--locales=", "--fonts=", f"boot/grub/grub.cfg={GRUB_CFG}"])
-
 def make_iso(output_iso: Path):
     (ISO_DIR / "boot").mkdir(parents=True, exist_ok=True)
     shutil.copy2(KERNEL_BIN, ISO_DIR / "boot/kernel.bin")
     print(f"{YELLOW}[INFO] Creating hybrid ISO: {output_iso}{NC}")
 
-    if OS_NAME in ["linux", "macos"]:
-        if not GRUB_FONT_PATH.exists():
-            sys.stderr.write(f"{RED}[FATAL] Unicode font missing at {GRUB_FONT_PATH}{NC}\n")
-            sys.exit(1)
-            
-        cmd = [
-            "./grub-mkrescue",
-            f"--xorriso={XORRISO_EXEC}",
-            "--fonts=unicode",
-            "--themes=",
-            "-o", str(output_iso),
-            str(ISO_DIR)
-        ]
-        # Runs inside GRUB_DIR to satisfy internal relative paths on macOS/Linux
-        run_cmd(cmd, cwd=GRUB_DIR)
-        
-    else:
-        # Windows Logic (Absolute paths, C++ wrapper)
-        if not GRUB_MKRESCUE_CMD.exists():
-            sys.stderr.write(f"{RED}[FATAL] grub-mkrescue wrapper not found at: {GRUB_MKRESCUE_CMD}{NC}\n")
-            sys.exit(1)
-        
-        cmd = [
-            str(GRUB_MKRESCUE_CMD.resolve()), 
-            "-d", str(GRUB_DIR.resolve()), 
-            "-o", str(output_iso.resolve()), 
-            str(ISO_DIR.resolve())
-        ]
-        run_cmd(cmd, cwd=GRUB_DIR, check=True)
+    if not GRUB_FONT_PATH.exists():
+        sys.stderr.write(f"{RED}[FATAL] Unicode font missing at {GRUB_FONT_PATH}{NC}\n")
+        sys.exit(1)
+
+    cmd = [
+        str(GRUB_MKRESCUE_CMD),
+        f"--xorriso={XORRISO_EXEC}",
+        "--fonts=unicode",
+        "--themes=",
+        "-o", str(output_iso),
+        str(ISO_DIR)
+    ]
+    run_cmd(cmd, cwd=GRUB_DIR)
 
 def build_iso(c_src: List[Path], asm_src: List[Path], obj_files: List[Path], iso_name: str, profile: str):
     if compile_sources(c_src, asm_src, profile):
         link_kernel(obj_files)
-        make_uefi_grub()
         make_iso(DIST_DIR / iso_name)
 
 def clean():
@@ -313,8 +292,7 @@ def verify_environment() -> bool:
     print(f"{YELLOW}[INFO] Verifying environment...{NC}")
     fix_unix_permissions()
     missing = []
-    tools = {"QEMU": QEMU_EXEC, "GCC": CC, "LD": LD, "STRIP": STRIP, "GRUB Standalone": GRUB_MKSTANDALONE, "GRUB Rescue": GRUB_MKRESCUE_CMD}
-    if OS_NAME in ["linux", "macos"]: tools["Xorriso"] = XORRISO_EXEC
+    tools = {"QEMU": QEMU_EXEC, "GCC": CC, "LD": LD, "STRIP": STRIP, "GRUB Rescue": GRUB_MKRESCUE_CMD, "Xorriso": XORRISO_EXEC}
     for name, path in tools.items():
         if path and not path.exists(): missing.append(f"{name} ({path})")
     if missing:
