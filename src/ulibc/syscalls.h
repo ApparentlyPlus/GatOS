@@ -24,6 +24,8 @@
 #define SYS_TTY_CTRL 9
 #define SYS_DEBUG_WRITE 10
 #define SYS_TIME_NS 11
+#define SYS_POWEROFF 12
+#define SYS_REBOOT 13
 
 #define TTY_CTRL_CLEAR     0
 #define TTY_CTRL_CURSOR    1
@@ -122,5 +124,15 @@ userspace static inline void syscall_debug_write(const char* buf, size_t len) {
 // Monotonic nanoseconds since boot, from the kernel timer subsystem.
 userspace static inline uint64_t syscall_time_ns(void) {
     return sc0(SYS_TIME_NS);
+}
+
+userspace static inline void syscall_poweroff(void) {
+    sc0(SYS_POWEROFF);
+    while (1);
+}
+
+userspace static inline void syscall_reboot(void) {
+    sc0(SYS_REBOOT);
+    while (1);
 }
 

@@ -21,6 +21,7 @@
 #include <kernel/debug.h>
 #include <kernel/memory/heap.h>
 #include <kernel/sys/timers.h>
+#include <kernel/sys/power.h>
 #include <klibc/string.h>
 
 #ifdef GATA_CAP_THREADS
@@ -276,6 +277,14 @@ void syscall_dispatcher(cpu_context_t* regs) {
             }
             break;
         }
+
+        case SYS_POWEROFF:
+            power_off();
+            break;
+
+        case SYS_REBOOT:
+            reboot();
+            break;
 
         case SYS_SET_FS_BASE: {
             uint64_t base = regs->rdi;

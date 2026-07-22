@@ -22,6 +22,8 @@
 #define SYS_TTY_CTRL 9
 #define SYS_DEBUG_WRITE 10
 #define SYS_TIME_NS 11
+#define SYS_POWEROFF 12
+#define SYS_REBOOT 13
 
 // TTY Control Commands
 #define TTY_CTRL_CLEAR     0
