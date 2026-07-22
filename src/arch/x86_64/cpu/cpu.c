@@ -222,13 +222,13 @@ void cpu_idle_init(void) {
     cpuid(5, 0, &a, &b, &c, &d);
     mwait_ecx_ext = (c & 1u);
 
-    if      ((d >> 28) & 0xF) mwait_cstate_hint = 0x60;
+    if ((d >> 28) & 0xF) mwait_cstate_hint = 0x60;
     else if ((d >> 24) & 0xF) mwait_cstate_hint = 0x50;
     else if ((d >> 20) & 0xF) mwait_cstate_hint = 0x40;
     else if ((d >> 16) & 0xF) mwait_cstate_hint = 0x30;
     else if ((d >> 12) & 0xF) mwait_cstate_hint = 0x20;
     else if ((d >>  8) & 0xF) mwait_cstate_hint = 0x10;
-    else                      mwait_cstate_hint = 0x00;
+    else mwait_cstate_hint = 0x00;
 
     LOGF("[CPU] MONITOR/MWAIT: deepest C-state hint=0x%02x IBE=%u\n",
          mwait_cstate_hint, mwait_ecx_ext);

@@ -67,7 +67,6 @@
 #define PREALLOC_PDs    1
 #define PREALLOC_PTs    0
 
-
 #define PT_ENTRY_MASK    0x1FF
 #define PT_ENTRY_ADDR(entry) ((entry) & ADDR_MASK)
 

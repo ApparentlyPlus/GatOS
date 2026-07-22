@@ -117,7 +117,7 @@ static void hpet_init(void) {
     void* virt_addr = NULL;
 
     // Map HPET registers
-    if (vmm_alloc(NULL, PAGE_SIZE, VM_FLAG_WRITE | VM_FLAG_FOREIGN_PHYS | VM_FLAG_DEVICE, (void*)phys_addr, &virt_addr) != VMM_OK) {
+    if (vmm_alloc(NULL, PAGE_SIZE, VM_FLAG_WRITE | VM_FLAG_FOREIGN | VM_FLAG_DEVICE, (void*)phys_addr, &virt_addr) != VMM_OK) {
         LOGF("[TIMER] Failed to map HPET registers.\n");
         return;
     }
@@ -321,7 +321,7 @@ uint64_t get_uptime_ns(void) {
     if (tsc_tpm == 0) return 0;
     uint64_t delta = tsc_read() - boot_tsc;
     uint64_t whole = delta / tsc_tpm;
-    uint64_t rem   = delta % tsc_tpm;
+    uint64_t rem = delta % tsc_tpm;
     return whole * 1000000 + (rem * 1000000) / tsc_tpm;
 }
 

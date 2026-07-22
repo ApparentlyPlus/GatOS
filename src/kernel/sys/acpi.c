@@ -41,10 +41,10 @@ void* acpi_map_phys(uint64_t phys_addr, size_t size) {
     uint64_t base_phys = phys_addr - page_offset;
     size_t map_size = align_up(size + page_offset, PAGE_SIZE);
 
-    // VM_FLAG_DEVICE maps these registers uncacheable; FOREIGN_PHYS keeps the
+    // VM_FLAG_DEVICE maps these registers uncacheable; FOREIGN keeps the
     // VMM from ever freeing the firmware-owned physical range
     // MMIO dude, I hate that we need the vmm for this dammit
-    vmm_status_t status = vmm_alloc(NULL, map_size, VM_FLAG_WRITE | VM_FLAG_FOREIGN_PHYS | VM_FLAG_DEVICE, (void*)base_phys, &virt_addr);
+    vmm_status_t status = vmm_alloc(NULL, map_size, VM_FLAG_WRITE | VM_FLAG_FOREIGN | VM_FLAG_DEVICE, (void*)base_phys, &virt_addr);
 
     if (status != VMM_OK) {
         LOGF("[ACPI ERROR] Failed to map physical address 0x%lx (Status: %d)\n", phys_addr, status);

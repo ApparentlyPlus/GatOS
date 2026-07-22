@@ -145,7 +145,7 @@ uint64_t reserve_required_tablespace(multiboot_parser_t* multiboot) {
     uint64_t table_bytes = (total_PTs + total_PDs + total_PDPTs + total_PML4s) * 4 * MEASUREMENT_UNIT_KB;
 
     // The kernel range is mapped from this same pool, so the boot tables stay
-    // scratch: it needs its own PDPT and PD plus one PT per 2MiB. That size
+    // scratch, meaning it needs its own PDPT and PD plus one PT per 2MiB. That size
     // depends on KEND, which the pool itself moves, so settle it in two passes
     // and keep one PT of slack.
     uint64_t kernel_PTs = CEIL_DIV(KEND + table_bytes + 2 * PAGE_SIZE, PAGE_2MB);

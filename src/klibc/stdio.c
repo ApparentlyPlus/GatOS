@@ -179,7 +179,7 @@ static void _putbuf(const char* buf, size_t len) {
 
 // Accumulates printf output on the stack before hitting the sink
 typedef struct {
-  char   buf[256];
+  char buf[256];
   size_t n;
 } kout_buf_t;
 

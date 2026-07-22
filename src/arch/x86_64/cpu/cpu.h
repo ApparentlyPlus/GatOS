@@ -61,6 +61,8 @@ bool cpu_mwait_available(void);
 uint32_t cpu_mwait_hint(void);
 uint32_t cpu_mwait_ext(void);
 void cpu_idle(void);
+
+// CPU feature management
 bool cpu_has_feature(cpu_feature_t feature);
 bool cpu_enable_feature(cpu_feature_t feature);
 bool cpu_is_feature_enabled(cpu_feature_t feature);

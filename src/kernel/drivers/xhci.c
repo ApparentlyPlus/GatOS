@@ -1180,7 +1180,7 @@ bool xhci_init(void) {
 
         uint32_t ms = align_up(pci->bar0_size, PAGE_SIZE);
         if (ms < PAGE_SIZE) ms = PAGE_SIZE;
-        if (vmm_alloc(NULL, ms, VM_FLAG_WRITE | VM_FLAG_FOREIGN_PHYS | VM_FLAG_DEVICE, (void *)pci->bar0_phys, (void **)&hc->cap) != VMM_OK) {
+        if (vmm_alloc(NULL, ms, VM_FLAG_WRITE | VM_FLAG_FOREIGN | VM_FLAG_DEVICE, (void *)pci->bar0_phys, (void **)&hc->cap) != VMM_OK) {
             LOGF("[XHCI] failed to map BAR0 for %02x:%02x.%x\n", pci->bus, pci->dev, pci->func);
             continue;
         }

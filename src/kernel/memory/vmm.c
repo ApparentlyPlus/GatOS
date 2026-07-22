@@ -611,7 +611,7 @@ vmm_status_t vmm_alloc(vmm_t* vmm_pub, size_t length, size_t flags, void* arg, v
 
     bool lock_flags = spinlock_acquire(&vmm->lock);
 
-    if (flags & VM_FLAG_FOREIGN_PHYS) {
+    if (flags & VM_FLAG_FOREIGN) {
         uint64_t mmio_phys = (uint64_t)arg;
         if (mmio_phys & (PAGE_SIZE - 1)) {
             LOGF("[VMM ERROR] MMIO address 0x%lx is not page-aligned\n",
@@ -629,7 +629,7 @@ vmm_status_t vmm_alloc(vmm_t* vmm_pub, size_t length, size_t flags, void* arg, v
     }
 
     // Prefer 2MB aligned virtual base for large allocations so huge pages can fire
-    size_t virt_align = (!(flags & (VM_FLAG_FOREIGN_PHYS | VM_FLAG_LAZY)) && length >= PAGE_2MB)
+    size_t virt_align = (!(flags & (VM_FLAG_FOREIGN | VM_FLAG_LAZY)) && length >= PAGE_2MB)
                         ? PAGE_2MB : PAGE_SIZE;
 
     uintptr_t found_base = vma_find_gap(vmm, length, virt_align);
@@ -661,7 +661,7 @@ vmm_status_t vmm_alloc(vmm_t* vmm_pub, size_t length, size_t flags, void* arg, v
     // To be blunt, I quite hate MMIO stuff being shoehorned into this API, but it was either this or a separate mmio_map 
     // function and I don't want to write more code than I have to :P
     uint64_t phys_base = 0;
-    if (flags & VM_FLAG_FOREIGN_PHYS) {
+    if (flags & VM_FLAG_FOREIGN) {
         phys_base = (uint64_t)arg;
     } else {
         pmm_status_t status = pmm_alloc(length, &phys_base);
@@ -675,11 +675,11 @@ vmm_status_t vmm_alloc(vmm_t* vmm_pub, size_t length, size_t flags, void* arg, v
     }
 
     // Determine page table flags and map the pages
-    obj->phys_base   = (flags & VM_FLAG_FOREIGN_PHYS) ? VMM_PHYS_NONE : phys_base;
-    obj->phys_length = (flags & VM_FLAG_FOREIGN_PHYS) ? 0 : length;
+    obj->phys_base   = (flags & VM_FLAG_FOREIGN) ? VMM_PHYS_NONE : phys_base;
+    obj->phys_length = (flags & VM_FLAG_FOREIGN) ? 0 : length;
     bool is_user_vmm = !vmm->is_kernel;
     uint64_t pt_flags = vmm_convert_vm_flags(flags, vmm->is_kernel);
-    bool allow_huge = !(flags & (VM_FLAG_FOREIGN_PHYS | VM_FLAG_LAZY));
+    bool allow_huge = !(flags & (VM_FLAG_FOREIGN | VM_FLAG_LAZY));
     bool any_huge = false;
 
     // Map each page, trying to use 2MB pages where possible
@@ -705,7 +705,7 @@ vmm_status_t vmm_alloc(vmm_t* vmm_pub, size_t length, size_t flags, void* arg, v
         if (ms != VMM_OK) {
             for (size_t rb = 0; rb < offset; rb += PAGE_SIZE)
                 arch_unmap_page(vmm->public.pt_root, (void*)(obj->public.base + rb));
-            if (!(flags & VM_FLAG_FOREIGN_PHYS)) pmm_free(phys_base, length);
+            if (!(flags & VM_FLAG_FOREIGN)) pmm_free(phys_base, length);
             vma_remove(vmm, obj);
             vmm_free_vm_object(obj);
             spinlock_release(&vmm->lock, lock_flags);
@@ -720,7 +720,7 @@ vmm_status_t vmm_alloc(vmm_t* vmm_pub, size_t length, size_t flags, void* arg, v
     obj->pg_size = any_huge ? PAGE_2MB : PAGE_SIZE;
 
     // track MMIO usage for stats
-    if (flags & VM_FLAG_FOREIGN_PHYS)
+    if (flags & VM_FLAG_FOREIGN)
         __atomic_add_fetch(&mmio_bytes, length, __ATOMIC_RELAXED);
 
     *out_addr = (void*)obj->public.base;
@@ -767,7 +767,7 @@ vmm_status_t vmm_alloc_at(vmm_t* vmm_pub, void* desired_addr, size_t length, siz
     }
 
     // For MMIO, the physical base is provided by the caller and must be page aligned
-    if (flags & VM_FLAG_FOREIGN_PHYS) {
+    if (flags & VM_FLAG_FOREIGN) {
         uint64_t mmio_phys = (uint64_t)arg;
         if (mmio_phys & (PAGE_SIZE - 1)) {
             LOGF("[VMM] vmm_alloc_at: MMIO address 0x%lx not page-aligned\n",
@@ -797,7 +797,7 @@ vmm_status_t vmm_alloc_at(vmm_t* vmm_pub, void* desired_addr, size_t length, siz
     vma_insert(vmm, obj);
 
     uint64_t phys_base = 0;
-    if (flags & VM_FLAG_FOREIGN_PHYS) {
+    if (flags & VM_FLAG_FOREIGN) {
         phys_base = (uint64_t)arg;
     } else {
         pmm_status_t pmm_status = pmm_alloc(length, &phys_base);
@@ -809,11 +809,11 @@ vmm_status_t vmm_alloc_at(vmm_t* vmm_pub, void* desired_addr, size_t length, siz
         }
     }
 
-    obj->phys_base   = (flags & VM_FLAG_FOREIGN_PHYS) ? VMM_PHYS_NONE : phys_base;
-    obj->phys_length = (flags & VM_FLAG_FOREIGN_PHYS) ? 0 : length;
+    obj->phys_base   = (flags & VM_FLAG_FOREIGN) ? VMM_PHYS_NONE : phys_base;
+    obj->phys_length = (flags & VM_FLAG_FOREIGN) ? 0 : length;
     bool is_user_vmm = !vmm->is_kernel;
     uint64_t pt_flags = vmm_convert_vm_flags(flags, vmm->is_kernel);
-    bool allow_huge = !(flags & (VM_FLAG_FOREIGN_PHYS | VM_FLAG_LAZY));
+    bool allow_huge = !(flags & (VM_FLAG_FOREIGN | VM_FLAG_LAZY));
     bool any_huge = false;
 
     // Map each page, trying to use 2MB pages where possible
@@ -839,7 +839,7 @@ vmm_status_t vmm_alloc_at(vmm_t* vmm_pub, void* desired_addr, size_t length, siz
         if (ms != VMM_OK) {
             for (size_t rb = 0; rb < offset; rb += PAGE_SIZE)
                 arch_unmap_page(vmm->public.pt_root, (void*)(desired + rb));
-            if (!(flags & VM_FLAG_FOREIGN_PHYS)) pmm_free(phys_base, length);
+            if (!(flags & VM_FLAG_FOREIGN)) pmm_free(phys_base, length);
             vma_remove(vmm, obj);
             vmm_free_vm_object(obj);
             spinlock_release(&vmm->lock, lock_flags);
@@ -853,7 +853,7 @@ vmm_status_t vmm_alloc_at(vmm_t* vmm_pub, void* desired_addr, size_t length, siz
     obj->pg_size = any_huge ? PAGE_2MB : PAGE_SIZE;
 
     // MMIO tracking
-    if (flags & VM_FLAG_FOREIGN_PHYS)
+    if (flags & VM_FLAG_FOREIGN)
         __atomic_add_fetch(&mmio_bytes, length, __ATOMIC_RELAXED);
 
     *out_addr = desired_addr;
@@ -881,7 +881,7 @@ vmm_status_t vmm_free(vmm_t* vmm_pub, void* addr) {
         return VMM_ERR_INVALID;
     }
 
-    bool has_pmm_backing = !(cur->public.flags & VM_FLAG_FOREIGN_PHYS);
+    bool has_pmm_backing = !(cur->public.flags & VM_FLAG_FOREIGN);
     if (cur->pg_size > PAGE_SIZE) {
         // Here we got a huge page region, so we know for sure that the entire region is backed by one 
         // contiguous PMM block (or no block at all, for lazy regions). Just unmap the whole 
@@ -1036,7 +1036,7 @@ void vmm_destroy(vmm_t* vmm_pub) {
             break;
         }
         avl_node_t* nx = avl_next(n);
-        if (!(cur->public.flags & VM_FLAG_FOREIGN_PHYS)) {
+        if (!(cur->public.flags & VM_FLAG_FOREIGN)) {
             if (cur->pg_size > PAGE_SIZE) {
                 // Huge page, use phys_base directly
                 if (cur->phys_base != VMM_PHYS_NONE)
@@ -1408,7 +1408,7 @@ vmm_status_t vmm_map_range(vmm_t* vmm_pub, uint64_t phys, void* virt, size_t len
 
     uint64_t pt_flags = vmm_convert_vm_flags(flags, vmm->is_kernel);
     bool is_user_vmm = !vmm->is_kernel;
-    bool allow_huge = !(flags & (VM_FLAG_FOREIGN_PHYS | VM_FLAG_LAZY));
+    bool allow_huge = !(flags & (VM_FLAG_FOREIGN | VM_FLAG_LAZY));
 
     size_t offset = 0;
     while (offset < length) {
@@ -1498,7 +1498,7 @@ vmm_status_t vmm_resize(vmm_t* vmm_pub, void* addr, size_t new_length) {
         return VMM_ERR_NOT_FOUND;
     }
 
-    if ((cur->public.flags & VM_FLAG_FOREIGN_PHYS) || cur->pg_size > PAGE_SIZE) {
+    if ((cur->public.flags & VM_FLAG_FOREIGN) || cur->pg_size > PAGE_SIZE) {
         LOGF("[VMM ERROR] vmm_resize: Cannot resize MMIO or huge page region\n");
         spinlock_release(&vmm->lock, lock_flags);
         return VMM_ERR_INVALID;
@@ -1579,7 +1579,7 @@ vmm_status_t vmm_resize(vmm_t* vmm_pub, void* addr, size_t new_length) {
     else {
         size_t shrinkage = old_length - new_length;
         uintptr_t shrink_start = cur->public.base + new_length;
-        bool has_pmm_backing = !(cur->public.flags & VM_FLAG_FOREIGN_PHYS);
+        bool has_pmm_backing = !(cur->public.flags & VM_FLAG_FOREIGN);
 
         // Unmap virtual pages being shrunk away
         uintptr_t phys_end = cur->public.base + cur->phys_length;

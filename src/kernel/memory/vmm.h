@@ -23,10 +23,10 @@
 // Physical range the VMM does not own, so it is never freed on unmap. Covers
 // device BARs but also RAM-backed process images, so it implies nothing about
 // cacheability - use VM_FLAG_DEVICE for that.
-#define VM_FLAG_FOREIGN_PHYS (1 << 3)
+#define VM_FLAG_FOREIGN (1 << 3)
 #define VM_FLAG_LAZY         (1 << 4)
 // Real device registers, mapped uncacheable. Deliberately separate from
-// FOREIGN_PHYS: marking process images UC runs userspace straight off DRAM.
+// FOREIGN: marking process images UC runs userspace straight off DRAM.
 #define VM_FLAG_DEVICE       (1 << 5)
 
 // Return codes

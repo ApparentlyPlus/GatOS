@@ -158,8 +158,8 @@ check_long_mode:
 # -----------------------------------------------------------------------------
 # setup_page_tables:
 # Initializes the paging structures for long mode to map the first 1GB
-# of physical memory using 2MiB pages. This mapping is scratch: it only has
-# to survive until build_physmap installs the real tables.
+# of physical memory using 2MiB pages. This mapping is pure scratch and will
+# be discarded once build_physmap() runs in paging.c
 # -----------------------------------------------------------------------------
 setup_page_tables:
 	# The following code does 2 things:
