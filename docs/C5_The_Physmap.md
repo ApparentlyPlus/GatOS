@@ -92,7 +92,7 @@ GatOS also declares a few other important constants:
 #define PREALLOC_PML4s  1
 #define PREALLOC_PDPTs  1
 #define PREALLOC_PDs    1
-#define PREALLOC_PTs    512
+#define PREALLOC_PTs    0
 ```
 
 * `PAGE_SIZE`: Standard x86-64 page size: 4 KiB.
@@ -152,7 +152,7 @@ After integrating reserved space into the kernel (KEND updated):
 
 The final step is to actually populate these new page tables and point `cr3` to them. Here, we have to be careful: the old page tables contain the kernel range where we are currently executing. The new tables map the entirety of physical RAM, but not for execution. This means the execution will still happen in `[KERNEL_VIRTUAL_BASE, KEND]`, and our physical memory will be accessible starting at `PHYSMAP_VIRTUAL_BASE`.
 
-This means that in order to avoid breaking anything, we need to incorporate the old kernel tables into the new tables, ensuring that the kernel's virtual range continues to function exactly as before.
+This means that in order to avoid breaking anything, we rebuild the kernel's own mappings inside the new tables (sourced from the reserved pool) so the kernel's virtual range continues to function exactly as before, even once everything the assembler set up is thrown away.
 
 ## The `physmap_t` Struct
 
@@ -169,6 +169,7 @@ typedef struct{
     uint64_t total_PDs;
     uint64_t total_PDPTs;
     uint64_t total_PML4s;
+    uint64_t total_kernel_PTs;
 } physmap_t;
 
 static physmap_t physmap = {0};
@@ -242,10 +243,22 @@ Next, we calculate how many page tables of each level are needed to map all of R
 
 ```c
 uint64_t table_bytes = (total_PTs + total_PDs + total_PDPTs + total_PML4s) * 4 * MEASUREMENT_UNIT_KB;
+
+// The kernel range is mapped from this same pool, so the boot tables stay
+// scratch, meaning it needs its own PDPT and PD plus one PT per 2MiB. That size
+// depends on KEND, which the pool itself moves, so settle it in two passes
+// and keep one PT of slack.
+uint64_t kernel_PTs = CEIL_DIV(KEND + table_bytes + 2 * PAGE_SIZE, PAGE_2MB);
+kernel_PTs = CEIL_DIV(KEND + table_bytes + (2 + kernel_PTs) * PAGE_SIZE, PAGE_2MB) + 1;
+table_bytes += (2 + kernel_PTs) * PAGE_SIZE;
 table_bytes = align_up(table_bytes, PAGE_SIZE);
 ```
 
-Here we compute the total amount of memory needed to store all the tables. Each table is `4KB` in size, so we multiply the total number of tables by `4KB`. We then align the total table size to a page boundary using `align_up` to ensure proper alignment in virtual memory.
+Here we compute the total amount of memory needed to store all the tables. Each table is `4KB` in size, so we multiply the total number of tables by `4KB`.
+
+We then reserve a little extra. After `build_physmap` runs we want the kernel range itself to be mapped **from this same pool**, not from the throwaway boot tables — that's what lets us discard the boot map entirely. So the pool has to hold a private set of kernel tables too: one `PDPT`, one `PD`, and one `PT` per `2MiB` of the final kernel range (`kernel_PTs`).
+
+There's a chicken-and-egg problem here, though. The number of kernel `PTs` depends on how big the kernel range ends up being, but reserving those very tables is what grows that range. We break the cycle by settling it in two passes — an initial estimate, then a corrected one that also accounts for the tables the estimate itself added — and keep one `PT` of slack for safety. Finally we fold that `2 + kernel_PTs` pages worth of space into `table_bytes` and align the whole thing to a page boundary.
 
 ### Safety Checks
 
@@ -254,6 +267,16 @@ PANIC_ASSERT(KEND + table_bytes < (1UL << 30) && KEND + table_bytes < total_RAM)
 ```
 
 Before committing to the reserved range, we confirm two things: that the extended kernel region still fits within the 1 GiB preallocated window, and that it doesn't extend past the end of RAM itself. If either condition fails, we have either underestimated the required space or the machine simply doesn't have enough contiguous memory in the right place — either way, there is no safe path forward, so a panic is warranted.
+
+We add two more assertions, this time specific to the kernel tables we just reserved:
+
+```c
+// The kernel PTs must cover every byte of the final kernel range
+PANIC_ASSERT(kernel_PTs * PAGE_2MB >= KEND + table_bytes);
+PANIC_ASSERT(kernel_PTs <= PAGE_ENTRIES);
+```
+
+The first guarantees that `kernel_PTs` really is enough to map the entire final kernel range — if the two-pass estimate ever came up short, we'd rather panic here than silently leave part of the kernel unmapped the moment we switch page tables. The second guarantees those `PTs` all fit under a single `PD` (`512` entries), which keeps the kernel tables to exactly one `PDPT` → one `PD` → `kernel_PTs` `PTs`.
 
 We also walk the multiboot memory map to verify that the reserved table range does not land inside a region the firmware has marked unavailable:
 
@@ -292,10 +315,11 @@ physmap.total_PTs = total_PTs;
 physmap.total_PDs = total_PDs;
 physmap.total_PDPTs = total_PDPTs;
 physmap.total_PML4s = total_PML4s;
+physmap.total_kernel_PTs = kernel_PTs;
 physmap.tables_base = (uintptr_t)get_kend(true);
 ```
 
-All the calculated values are stored in `physmap`. `tables_base` is set to the current `KEND` virtual address, marking the start of the reserved space for our new tables.
+All the calculated values are stored in `physmap`. `total_kernel_PTs` carries the kernel-table count we just settled through to `build_physmap`, and `tables_base` is set to the current `KEND` virtual address, marking the start of the reserved space for our new tables.
 
 ### Reserving the Space
 
@@ -314,7 +338,7 @@ The only difference here is that we make sure to move that call *after* `reserve
 
 ## Building the Physmap
 
-The final step is constructing the physmap itself. The groundwork is already in place: we have reserved space for all page tables and cleaned up unnecessary mappings. The main thing to be careful about now is integrating the old page tables to preserve the kernel range while mapping the entirety of physical RAM. Everything lives in a function called `build_physmap`.
+The final step is constructing the physmap itself. The groundwork is already in place: we have reserved space for all page tables and cleaned up unnecessary mappings. The main thing to be careful about now is preserving the kernel range while mapping the entirety of physical RAM. Rather than leaning on the boot tables for that, we rebuild the kernel's mappings from the reserved pool as well, so the boot tables can be discarded outright. Everything lives in a function called `build_physmap`.
 
 ### Function Setup
 
@@ -334,9 +358,12 @@ uintptr_t pt_base    = physmap.tables_base;
 uintptr_t pd_base    = pt_base   + physmap.total_PTs   * PAGE_SIZE;
 uintptr_t pdpt_base  = pd_base   + physmap.total_PDs   * PAGE_SIZE;
 uintptr_t pml4_base  = pdpt_base + physmap.total_PDPTs * PAGE_SIZE;
+uintptr_t kpdpt_base = pml4_base + physmap.total_PML4s * PAGE_SIZE;
+uintptr_t kpd_base   = kpdpt_base + PAGE_SIZE;
+uintptr_t kpt_base   = kpd_base + PAGE_SIZE;
 ```
 
-Here we calculate the starting addresses for each level of the new page tables within the reserved region. Each base is offset by the total size of the lower-level tables to ensure nothing overlaps.
+Here we calculate the starting addresses for each level of the new page tables within the reserved region. Each base is offset by the total size of the lower-level tables to ensure nothing overlaps. The last three bases carve out the kernel tables we reserved earlier — one `KPDPT`, one `KPD`, and `total_kernel_PTs` of `KPTs` — laid out right after the physmap's own tables.
 
 ### Typedefs and Table Pointers
 
@@ -348,19 +375,23 @@ page_table_t* PTs    = (page_table_t*)pt_base;
 page_table_t* PDs    = (page_table_t*)pd_base;
 page_table_t* PDPTs  = (page_table_t*)pdpt_base;
 page_table_t* PML4   = (page_table_t*)pml4_base;
+page_table_t* KPDPT  = (page_table_t*)kpdpt_base;
+page_table_t* KPD    = (page_table_t*)kpd_base;
+page_table_t* KPTs   = (page_table_t*)kpt_base;
 ```
 
-We define `pte_t` for individual page entries and `page_table_t` for arrays of 512 entries. We then create typed pointers to each table level based on the base addresses calculated above.
+We define `pte_t` for individual page entries and `page_table_t` for arrays of 512 entries. We then create typed pointers to each table level based on the base addresses calculated above. The `K`-prefixed pointers (`KPDPT`, `KPD`, `KPTs`) are the dedicated kernel tables we'll use to remap the kernel range out of the pool.
 
 ### Clearing Reserved Space
 
 ```c
 kmemset((void*)physmap.tables_base, 0,
     (physmap.total_PTs + physmap.total_PDs +
-     physmap.total_PDPTs + physmap.total_PML4s) * PAGE_SIZE);
+     physmap.total_PDPTs + physmap.total_PML4s +
+     2 + physmap.total_kernel_PTs) * PAGE_SIZE);
 ```
 
-We zero out the entire reserved tables region to ensure a clean starting point for the new mappings. This region is accesible because it is within that 1GB preallocated boundary. Otherwise, we would page fault here. `physmap.tables_base` points to the new `KEND`, so right after our kernel's *linker* defined region.
+We zero out the entire reserved tables region to ensure a clean starting point for the new mappings. Notice the `2 + physmap.total_kernel_PTs` term — that's the kernel tables (the one `KPDPT` and one `KPD` make up the `2`, plus the `KPTs`), which live in the same reserved block and must be cleared too. This region is accesible because it is within that 1GB preallocated boundary. Otherwise, we would page fault here. `physmap.tables_base` points to the new `KEND`, so right after our kernel's *linker* defined region.
 
 ### Filling Page Tables (PTs)
 
@@ -443,6 +474,30 @@ for (uint64_t i = 0; i < physmap.total_PDPTs; i++)
 
 Same pattern, one level up: each PDPT entry points to a PD.
 
+### Remapping the Kernel from the Pool
+
+With the physmap tables done, we build the kernel's *own* tables out of the pool. This is the piece that lets us throw the boot tables away completely: instead of inheriting whatever `boot32.S` left behind, we remap the entire kernel range `[0, KEND)` from scratch, at `4KB` granularity, into tables we fully control.
+
+```c
+// Map the kernel range from the pool so nothing depends on the boot tables
+for (uint64_t p = 0; p < KEND; p += PAGE_SIZE) {
+    uint64_t kpti = (p >> 12) / PAGE_ENTRIES;
+    uint64_t kpte = (p >> 12) % PAGE_ENTRIES;
+    KPTs[kpti][kpte] = p | (PAGE_PRESENT | PAGE_WRITABLE);
+}
+for (uint64_t i = 0; i < physmap.total_kernel_PTs; i++)
+    KPD[0][i] = KERNEL_V2P(&KPTs[i]) | (PAGE_PRESENT | PAGE_WRITABLE);
+KPDPT[0][PDPT_INDEX(KERNEL_VIRTUAL_BASE)] = KERNEL_V2P(&KPD[0]) | (PAGE_PRESENT | PAGE_WRITABLE);
+```
+
+**What's happening here:**
+
+* The first loop walks the kernel's physical range one `4KB` page at a time and writes an identity-style entry into the `KPTs` — physical page `p >> 12` lands in `KPTs[kpti][kpte]`, mirroring exactly how the physmap PT loop above worked.
+* The second loop wires each populated `KPT` into the single `KPD`, one entry per `2MiB`.
+* Finally, we plug that `KPD` into the `KPDPT` at the slot the kernel's virtual base decodes to — `PDPT_INDEX(KERNEL_VIRTUAL_BASE)` is index `510`, exactly the value we saw back in Chapter 3.
+
+By the end of this we have a complete, self-contained kernel mapping sitting in the pool, ready to be hung off the new PML4 — with no reference to the boot tables anywhere.
+
 ### Integrating Kernel and Physmap into the PML4
 
 This is the critical part we need to handle carefully. Using [`virt_breakdown.py`](tools/virt_breakdown.py) to analyze the virtual addresses of `KERNEL_VIRTUAL_BASE` and `PHYSMAP_VIRTUAL_BASE` gives the following:
@@ -451,7 +506,7 @@ This is the critical part we need to handle carefully. Using [`virt_breakdown.py
 > Enter address: 0xFFFFFFFF80000000
 Virtual Address: 0xFFFFFFFF80000000
   PML4 Index : 0x01FF (511)
-  PDPT Index : 0x01FE (510)   <--- Old PDPT
+  PDPT Index : 0x01FE (510)   <--- Kernel PDPT (our KPDPT)
   PD   Index : 0x0000 (0)
   PT   Index : 0x0000 (0)
 
@@ -465,12 +520,12 @@ Virtual Address: 0xFFFF800000000000
 
 From this breakdown, we can see that:
 
-1. The kernel resides under PML4 index `511`, pointing to the old PDPT that contains all our existing kernel mappings.
+1. The kernel resides under PML4 index `511`, which will point to the `KPDPT` we just built from the pool — the one carrying our freshly-rebuilt kernel mappings.
 2. The physmap resides under PML4 index `256`, pointing to a brand-new PDPT that we will populate with the physmap page tables.
 
 In other words, our new PML4 must contain **two separate entries**:
 
-* `PML4[511]` points to the old PDPT (kernel mappings).
+* `PML4[511]` points to the kernel's `KPDPT` (kernel mappings).
 * `PML4[256]` points to the new PDPT (physmap).
 
 >[!IMPORTANT]
@@ -488,18 +543,17 @@ Implementing this in C is quite trivial, after you've grasped the logic:
 
 ```c
 kmemset(PML4, 0, PAGE_SIZE);
-uint64_t* old_pml4   = getPML4();
 size_t kernel_index  = PML4_INDEX(KERNEL_VIRTUAL_BASE);
 size_t physmap_index = PML4_INDEX(PHYSMAP_VIRTUAL_BASE);
 PANIC_ASSERT(kernel_index != physmap_index);
-PML4[0][kernel_index]  = old_pml4[kernel_index];
+PML4[0][kernel_index]  = KERNEL_V2P(&KPDPT[0]) | (PAGE_PRESENT | PAGE_WRITABLE);
 PML4[0][physmap_index] = KERNEL_V2P(&PDPTs[0]) | (PAGE_PRESENT | PAGE_WRITABLE);
 ```
 
 **What's happening here:**
 
 * The PML4 is cleared to start fresh.
-* We copy the old kernel entry into its exact index so the kernel remains mapped in the higher-half.
+* We point the kernel's index at `KPDPT` — the pool-backed kernel PDPT we built in the previous step — so the kernel stays mapped in the higher half, now entirely independent of the boot tables.
 * Then, we place the physmap PDPT at its designated virtual address in the PML4.
 * The assertion confirms that the two indexes are distinct — if they weren't, writing the physmap entry would silently clobber the kernel mapping, which would be catastrophic.
 
