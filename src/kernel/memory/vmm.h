@@ -20,7 +20,7 @@
 #define VM_FLAG_WRITE           (1 << 0)
 #define VM_FLAG_EXEC            (1 << 1)
 #define VM_FLAG_USER            (1 << 2)
-#define VM_FLAG_FOREIGN   (1 << 3) // Physical range the VMM does not own, so it is never freed on unmap.
+#define VM_FLAG_FOREIGN         (1 << 3) // Physical range the VMM does not own, so it is never freed on unmap.
 #define VM_FLAG_LAZY            (1 << 4)
 #define VM_FLAG_DEVICE          (1 << 5)
 
@@ -122,7 +122,7 @@ larger page sizes (2MB/1GB pages).
 
 For fork() later, we'll want CoW:
 
-#define VM_FLAG_COW (1 << 5)
+#define VM_FLAG_COW (1 << 6)
 
 In page fault handler:
 
