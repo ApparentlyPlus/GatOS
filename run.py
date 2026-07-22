@@ -69,9 +69,9 @@ GRUB_MKRESCUE_CMD = GRUB_DIR / f"grub-mkrescue{EXE_EXT}"
 
 if OS_NAME == "win":
     QEMU_EXEC = PLATFORM_TOOLCHAIN_DIR / "qemu" / f"qemu-system-x86_64{EXE_EXT}"
-    XORRISO_EXEC = None
+    XORRISO_EXEC = PLATFORM_TOOLCHAIN_DIR / "xorriso" / f"xorriso{EXE_EXT}"
     GRUB_MODULE_DIR = GRUB_DIR / "x86_64-efi"
-    GRUB_FONT_PATH = None
+    GRUB_FONT_PATH = GRUB_DIR / "unicode.pf2"
 elif OS_NAME == "linux":
     QEMU_EXEC = PLATFORM_TOOLCHAIN_DIR / "qemu" / "QEMU-x86_64.AppImage"
     XORRISO_EXEC = PLATFORM_TOOLCHAIN_DIR / "xorriso" / "xorriso"
@@ -140,13 +140,6 @@ def run_cmd(cmd: List[str | Path], cwd: Optional[Path] = None, env: Optional[Dic
     run_env = os.environ.copy()
     if env: run_env.update(env)
 
-    # Run in its own process group (not just subprocess.run's default child
-    # PID) so a timeout can kill the whole tree. This matters for QEMU on
-    # Linux specifically: the toolchain ships it as an AppImage, which
-    # mounts itself via FUSE and forks the real qemu-system-x86_64 as a
-    # child - killing only the launcher PID leaves that child (and the FUSE
-    # mount) running forever, holding this script's stdout open so anything
-    # piping our output (e.g. `| tail`) hangs indefinitely.
     try:
         proc = subprocess.Popen(cmd_str, cwd=cwd, env=run_env, text=True, start_new_session=True)
     except FileNotFoundError:
@@ -156,8 +149,6 @@ def run_cmd(cmd: List[str | Path], cwd: Optional[Path] = None, env: Optional[Dic
     try:
         ret = proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
-        # os.killpg is Unix-only; on Windows kill the whole tree via taskkill,
-        # otherwise the QEMU child survives and poisons every later run
         if OS_NAME == "win":
             subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
                            capture_output=True, check=False)
@@ -180,14 +171,6 @@ def run_cmd(cmd: List[str | Path], cwd: Optional[Path] = None, env: Optional[Dic
     return True
 
 def _reap_appimage_fuse_mounts(cmd_str: List[str]):
-    # The QEMU AppImage's launcher mounts itself via a `dwarfs` FUSE daemon
-    # that double-forks and re-parents to PID 1 (or the user's systemd
-    # instance) immediately on mount - it is never in our process group, so
-    # killpg above can never reach it even though it spawned from our child.
-    # Left alive, it keeps stdout/stderr open forever (it inherits our fds),
-    # which hangs anything piping this script's output (e.g. `| tail`),
-    # indefinitely, even after the launcher and qemu-system-x86_64 are both
-    # long dead. Only relevant on Linux, and only for the AppImage launcher.
     if OS_NAME != "linux": return
     if not any("AppImage" in c for c in cmd_str): return
     try:
@@ -233,11 +216,7 @@ def is_interrupt_path(src: Path) -> bool:
     return rel in KERNEL_INTERRUPT_PATH
 
 # Capability flags (see src/kernel/caps.h for the implication contract appa
-# and GatOS share). Default mirrors the historical "full build" behavior:
-# everything on, framebuffer output, hotplug-capable USB keyboard. Pass
-# tokens like "nomem", "nothreads", "noinput", "time", "serial",
-# "kbd=default" / "kbd=external" / "kbd=hotplug" on the run.py command line
-# to test a stripped-down configuration instead.
+# and GatOS share).
 DEFAULT_CAPS = {"mem": True, "threads": True, "input": True, "time": False, "output": "framebuffer", "kbd": "hotplug"}
 
 def caps_defines(caps: Dict) -> List[str]:
@@ -322,49 +301,29 @@ def link_kernel(obj_files: List[Path]):
         
     run_cmd([STRIP, str(KERNEL_BIN)])
 
-def make_uefi_grub():
-    UEFI_DIR.mkdir(parents=True, exist_ok=True)
-    run_cmd([GRUB_MKSTANDALONE, f"--directory={GRUB_MODULE_DIR}", "--format=x86_64-efi", f"--output={UEFI_GRUB}", "--locales=", "--fonts=", f"boot/grub/grub.cfg={GRUB_CFG}"])
-
 def make_iso(output_iso: Path):
     (ISO_DIR / "boot").mkdir(parents=True, exist_ok=True)
     shutil.copy2(KERNEL_BIN, ISO_DIR / "boot/kernel.bin")
     print(f"{YELLOW}[INFO] Creating hybrid ISO: {output_iso}{NC}")
 
-    if OS_NAME in ["linux", "macos"]:
-        if not GRUB_FONT_PATH.exists():
-            sys.stderr.write(f"{RED}[FATAL] Unicode font missing at {GRUB_FONT_PATH}{NC}\n")
-            sys.exit(1)
-            
-        cmd = [
-            "./grub-mkrescue",
-            f"--xorriso={XORRISO_EXEC}",
-            "--fonts=unicode",
-            "--themes=",
-            "-o", str(output_iso),
-            str(ISO_DIR)
-        ]
-        # Runs inside GRUB_DIR to satisfy internal relative paths on macOS/Linux
-        run_cmd(cmd, cwd=GRUB_DIR)
-        
-    else:
-        # Windows Logic (Absolute paths, C++ wrapper)
-        if not GRUB_MKRESCUE_CMD.exists():
-            sys.stderr.write(f"{RED}[FATAL] grub-mkrescue wrapper not found at: {GRUB_MKRESCUE_CMD}{NC}\n")
-            sys.exit(1)
-        
-        cmd = [
-            str(GRUB_MKRESCUE_CMD.resolve()),
-            "-d", str(GRUB_DIR.resolve()),
-            "-o", str(output_iso.resolve()),
-            str(ISO_DIR.resolve())
-        ]
-        run_cmd(cmd, cwd=GRUB_DIR, check=True)
+    if not GRUB_FONT_PATH.exists():
+        sys.stderr.write(f"{RED}[FATAL] Unicode font missing at {GRUB_FONT_PATH}{NC}\n")
+        sys.exit(1)
+
+    cmd = [
+        str(GRUB_MKRESCUE_CMD),
+        f"--xorriso={XORRISO_EXEC}",
+        "--fonts=unicode",
+        "--themes=",
+        "-o", str(output_iso),
+        str(ISO_DIR)
+    ]
+    run_cmd(cmd, cwd=GRUB_DIR)
+
 
 def build_iso(c_src: List[Path], asm_src: List[Path], obj_files: List[Path], iso_name: str, profile: str, caps: Dict):
     if compile_sources(c_src, asm_src, profile, caps):
         link_kernel(obj_files)
-        make_uefi_grub()
         make_iso(DIST_DIR / iso_name)
 
 def clean():
