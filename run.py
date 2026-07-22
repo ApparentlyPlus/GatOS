@@ -4,6 +4,7 @@ import os
 import re
 import sys
 import shutil
+import signal
 import argparse
 import subprocess
 from pathlib import Path
@@ -135,24 +136,53 @@ BUILD_PROFILES = {
 def run_cmd(cmd: List[str | Path], cwd: Optional[Path] = None, env: Optional[Dict] = None, check: bool = True, timeout: int = None) -> bool:
     cmd_str = [str(c) for c in cmd]
     print(f"{BLUE}>>> {' '.join(cmd_str)}{f' (in {cwd})' if cwd else ''}{NC}")
-    
+
     run_env = os.environ.copy()
     if env: run_env.update(env)
-    
+
     try:
-        subprocess.run(cmd_str, cwd=cwd, env=run_env, check=check, text=True, timeout=timeout)
-        return True
-    except subprocess.TimeoutExpired:
-        # Caller handles specific logic, but we print a generic warning here
-        sys.stderr.write(f"\n{YELLOW}[WARN] Process timed out after {timeout}s (This is expected for timeout tests).{NC}\n")
-        return False
-    except subprocess.CalledProcessError as e:
-        sys.stderr.write(f"{RED}[ERROR] Command failed with exit code {e.returncode}{NC}\n")
-        if check: sys.exit(e.returncode)
-        return False
-    except FileNotFoundError as e:
+        proc = subprocess.Popen(cmd_str, cwd=cwd, env=run_env, text=True, start_new_session=True)
+    except FileNotFoundError:
         sys.stderr.write(f"{RED}[FATAL] Executable not found: {cmd_str[0]}{NC}\n")
         sys.exit(1)
+
+    try:
+        ret = proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        if OS_NAME == "win":
+            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                           capture_output=True, check=False)
+        else:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        proc.wait()
+        _reap_appimage_fuse_mounts(cmd_str)
+        sys.stderr.write(f"\n{YELLOW}[WARN] Process timed out after {timeout}s (This is expected for timeout tests).{NC}\n")
+        return False
+
+    _reap_appimage_fuse_mounts(cmd_str)
+
+    if ret != 0:
+        sys.stderr.write(f"{RED}[ERROR] Command failed with exit code {ret}{NC}\n")
+        if check: sys.exit(ret)
+        return False
+    return True
+
+def _reap_appimage_fuse_mounts(cmd_str: List[str]):
+    if OS_NAME != "linux": return
+    if not any("AppImage" in c for c in cmd_str): return
+    try:
+        result = subprocess.run(["pgrep", "-f", "dwarfs .*QEMU-x86_64.AppImage"],
+                                 capture_output=True, text=True, check=False)
+        for pid_str in result.stdout.split():
+            try:
+                os.kill(int(pid_str), signal.SIGKILL)
+            except (ValueError, ProcessLookupError, PermissionError):
+                pass
+    except FileNotFoundError:
+        pass
 
 def get_kernel_version() -> str:
     pattern = re.compile(r'KERNEL_VERSION\s*=\s*"([^"]*)"')
