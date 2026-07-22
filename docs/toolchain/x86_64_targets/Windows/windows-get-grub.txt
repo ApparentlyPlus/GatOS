@@ -1,4 +1,89 @@
-Get grub-2.12-for-windows.zip from https://ftp.gnu.org/gnu/grub/.
-For grub-mkrescue (which is not included in the above prebuilt binaries), I have
-provided a grub-mkrescue.cpp wrapper, which is to be compiled using MSVC into an executable.
-You are then to place it inside grub/, along with the rest of the tools.
+Get grub-2.14-for-windows.zip from https://ftp.gnu.org/gnu/grub/ and unpack its
+contents into toolchain/x86_64-win/grub/ (the prebuilt grub-*.exe tools plus the
+i386-pc/ platform module dir, unicode.pf2, etc.).
+
+IMPORTANT -- the EFI platform module dirs (x86_64-efi/ and i386-efi/) shipped in
+grub-2.14-for-windows are BROKEN and were replaced with dirs rebuilt from source.
+Those prebuilt EFI modules were compiled with -fstack-protector and reference
+`_stack_chk_guard`, but the accompanying kernel does not register that symbol in
+the runtime module symbol table, so every stack-protected module (normal, iso9660,
+fat, part_gpt, tar, video ...) aborts at UEFI boot with
+"symbol `_stack_chk_guard' not found. Aborted." -- affecting real UEFI hardware
+(QEMU BIOS is unaffected because the i386-pc modules are not stack-protected).
+
+Fix: rebuild grub-2.14 from source for both EFI platforms with stack protector off
+(gcc's default when it can't satisfy GRUB's -mstack-protector-guard=global check),
+producing guard-free modules that load at runtime. Under MSYS2 (mingw64 env), with
+the GatOS x86_64-elf cross toolchain on PATH:
+
+    # one-time host prep (only the target *modules* need rebuilding, not host tools)
+    #   - configure test uses `-o /dev/null` which the native target gcc can't write:
+    #     patch it -> sed -i 's#-c -o /dev/null #-c -o conftest-asm.o #' configure
+    #   - the native target gcc can't read MSYS `/c/...` include paths baked into
+    #     generated files (symlist.h): create a junction  mklink /J C:\c C:\
+    # x86_64-efi:
+    ../src/configure --target=x86_64-elf --with-platform=efi \
+        --disable-werror --disable-grub-mkfont --disable-grub-themes --disable-nls \
+        TARGET_CC=x86_64-elf-gcc TARGET_CCAS=x86_64-elf-gcc \
+        TARGET_OBJCOPY=x86_64-elf-objcopy TARGET_STRIP=x86_64-elf-strip \
+        TARGET_NM=x86_64-elf-nm TARGET_RANLIB=x86_64-elf-ranlib BUILD_CC=gcc
+    # i386-efi: same but --target=i386-elf and TARGET_CC="x86_64-elf-gcc -m32"
+    #   (the x86_64-elf binutils support elf_i386)
+    # build (host gcc16 needs old warnings downgraded; man pages skipped):
+    make CFLAGS='-g -O2 -Wno-error=implicit-function-declaration \
+        -Wno-error=int-conversion -Wno-error=incompatible-pointer-types \
+        -Wno-error=implicit-int' man_MANS= MANS=
+    make -C grub-core install   # -> $prefix/lib/grub/<platform>/
+Then copy each installed dir's *.mod, *.lst, kernel.img and modinfo.sh into
+toolchain/x86_64-win/grub/<platform>/. i386-pc/ is left as the prebuilt dir (its
+modules are not stack-protected, so it boots fine unchanged).
+
+grub-mkrescue is NOT included in those prebuilt binaries. It is a full C program
+upstream (grub-2.14/util/grub-mkrescue.c), not a script, so this directory ships a
+faithful Windows port of it as grub-mkrescue.cpp. Compile it with MSVC and place the
+resulting grub-mkrescue.exe inside grub/, alongside the rest of the tools:
+
+    cl /std:c++17 /EHsc /O2 grub-mkrescue.cpp /Fe:grub-mkrescue.exe
+
+(A Visual Studio "Build Tools" install with the C++ workload provides cl.exe;
+run it from a "x64 Native Tools Command Prompt", or call vcvars64.bat first.)
+
+It is a drop-in for upstream grub-mkrescue: it accepts the same flags run.py uses
+on every OS -- `--xorriso=FILE`, `--fonts=`, `--themes=`, `--locales=`,
+`-o/--output=FILE`, `-d/--directory=DIR`, and trailing SOURCE args forwarded to
+xorriso -- and auto-discovers its platform module dirs (i386-pc/, i386-efi/,
+x86_64-efi/) from its own folder, so no `-d` is required. run.py therefore calls it
+identically on Windows, Linux and macOS:
+
+    grub-mkrescue --xorriso=<xorriso> --fonts=unicode --themes= -o OUT.iso ISO_DIR
+
+The port reproduces grub-mkrescue.c step for step by orchestrating the vendored
+tools instead of relinking GRUB's libutil. It therefore expects this layout, with
+mtools/ and xorriso/ as SIBLINGS of grub/:
+
+    toolchain/x86_64-win/
+      grub/       grub-mkrescue.exe (this port), grub-mkimage.exe, unicode.pf2,
+                  i386-pc/, i386-efi/, x86_64-efi/, ...
+      mtools/     mformat.exe, mcopy.exe, mmd.exe   (native build)
+      xorriso/    xorriso.exe + cygwin1.dll         (Cygwin build)
+
+What it produces is a true hybrid image (BIOS El Torito core + isohybrid MBR from
+boot_hybrid.img, a real FAT EFI System Partition efi.img with x86_64/ia32 GRUB
+cores, a GPT, the .disk/<uuid>.uuid marker the EFI cores search for, and the Apple
+HFS+/CoreServices structure) — i.e. an ISO that is discoverable and bootable on
+real BIOS and UEFI firmware and when written block-for-block to a USB stick, not
+just under QEMU.
+
+Notes / known limitations of the prebuilt grub-2.14-for-windows binaries:
+  - grub-render-label.exe and grub-glue-efi.exe cannot open their input files
+    through GRUB's file layer in this Windows distribution (they mangle any host
+    path to "/C:\..."). Both are only used for the niche Apple-Mac path, so the
+    port degrades gracefully: the Apple .disk_label boot-picker image is left
+    blank, and System/Library/CoreServices/boot.efi is the x86_64 loader rather
+    than a fat ia32+x64 universal binary. BIOS, UEFI64, UEFI32 and USB boot are
+    unaffected. If you obtain working versions of those two tools, the port will
+    use them automatically.
+  - mtools parses a leading "X:" as an MS-DOS drive letter, and this build cannot
+    open a host directory as an mcopy source, so the port runs mtools from inside
+    the staging tree with drive-letterless relative paths and builds the ESP with
+    mmd + per-file mcopy.
