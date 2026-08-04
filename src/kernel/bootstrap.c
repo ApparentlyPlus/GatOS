@@ -52,8 +52,8 @@ static uint8_t multiboot_buffer[8 * 1024];
 bool kernel_bootstrap(void* mb_info, multiboot_parser_t* mb, bool verbose, const char* version) {
 
 	// Init serial
-	serial_init_port(COM1_PORT);
-	serial_init_port(COM2_PORT);
+	serial_init_port(SERIAL_COM1);
+	serial_init_port(SERIAL_COM2);
 	QEMU_LOG("Kernel main reached, normal assembly boot succeeded", TOTAL_DBG);
 
 	// IDT must be initialized before pretty much anything else,

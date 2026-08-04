@@ -44,8 +44,8 @@ static uint8_t multiboot_buffer[8 * 1024];
 void kernel_test(void* mb_info, char* KERNEL_VERSION) {
 
 	// Serial Initialization
-	serial_init_port(COM1_PORT);
-	serial_init_port(COM2_PORT);
+	serial_init_port(SERIAL_COM1);
+	serial_init_port(SERIAL_COM2);
 
     LOGF("[!] This is a GatOS Kernel Test Build for version %s\n", KERNEL_VERSION);
 
