@@ -28,7 +28,7 @@ uint16_t get_port_base(serial_port_t port) {
  */
 void serial_init_port(serial_port_t port) {
     uint16_t port_base = get_port_base(port);
-    
+
     outb(port_base + 1, 0x00);
     outb(port_base + 3, 0x80);
     outb(port_base + 0, 0x03);

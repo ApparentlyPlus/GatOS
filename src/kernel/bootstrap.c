@@ -49,14 +49,10 @@ static uint8_t multiboot_buffer[8 * 1024];
  * failure (before panic is usable). verbose gates the kprintf banner.
  */
 bool kernel_bootstrap(void* mb_info, multiboot_parser_t* mb, bool verbose) {
-
-	// Init serial
-	serial_init_port(COM1_PORT);
-	serial_init_port(COM2_PORT);
+	serial_init_port(SERIAL_COM1);
+	serial_init_port(SERIAL_COM2);
 #ifdef GATA_CAP_THREADS
-	// COM3 is the userspace debug channel (ulibc/debug.h, SYS_DEBUG_WRITE) -
-	// only meaningful once there's a userspace to use it.
-	serial_init_port(COM3_PORT);
+	serial_init_port(SERIAL_COM3);
 #endif
 
 	// IDT must be initialized before pretty much anything else,
