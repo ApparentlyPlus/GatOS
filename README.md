@@ -15,17 +15,20 @@
 
 GatOS is a cleanly designed, modular kernel serving as the foundational layer for building custom operating systems. It is also part of my undergraduate thesis at the [University of Macedonia](https://www.uom.gr/en/dai), and serves as the backbone of a configurable OS-building toolchain called PawStack.
 
-It manages memory, schedules threads, runs your code in userspace, drives the display and supports USB devices — and you can boot the whole thing in QEMU with two commands with no dependencies. [What's Inside the Kernel](#whats-inside-the-kernel) has the full house tour.
+It manages memory, schedules threads, runs your code in userspace, drives the display and supports USB devices. [What's Inside the Kernel](#whats-inside-the-kernel) has the full house tour.
+
+And getting it running really is just 2 commands. Check [Getting Started](#getting-started) if you want to run it without reading the rest.
 
 > [!NOTE]
 > This is a student project, written solo as an undergraduate thesis, so expect the occasional rough edge and the odd bug. That said, I believe it is as close to production ready as it can be for its scope, so feel free to deploy it and play around. 
 
-The first section of this README focuses on providing some insight as to the vision of this project. If you're just interested in running GatOS in your system, skip to the [Getting Started](#getting-started) section.
+The first section of this README focuses on providing some insight as to the vision of this project. If you'd rather skip the philosophy, the technical part starts at [What's Inside the Kernel](#whats-inside-the-kernel).
 
 ## Table of Contents
 
 - [Project Overview & Background](#project-overview--background)
 - [What's Inside the Kernel](#whats-inside-the-kernel)
+- [What's *not* Inside the Kernel](#whats-not-inside-the-kernel)
 - [Getting Started](#getting-started)
 - [Building the Toolchain from Source](#building-the-toolchain-from-source)
 - [Testing](#testing)
@@ -34,6 +37,7 @@ The first section of this README focuses on providing some insight as to the vis
 - [Contributing](#contributing)
 - [License](#license)
 - [Acknowledgments](#acknowledgments)
+- [So... what now?](#so-what-now)
 
 
 ## Project Overview & Background
@@ -98,11 +102,15 @@ Yes, absolutely. Name **one** other person who's trying to finish a 4-year degre
 
 This is either a feat of legendary ambition or an elaborate self-inflicted stress experiment. Possibly both.
 
-Update: it's both. The kernel works, it's fast, it's robust, it's cleanly written and it does what the original vision asked of it. It evem talks to external USB keyboards via xHCI. I am also very tired, thank you for asking.
+Update: it's both. The kernel works, it's fast, it's robust, it's cleanly written and it does what the original vision asked of it. It even talks to external USB keyboards via xHCI. 
+
+Update<sup>2</sup>: I am also very tired, thank you for asking.
 
 ## What's Inside the Kernel
 
-GatOS targets **x86_64 long mode**, boots via **Multiboot2/GRUB**, and runs entirely in the higher half at, with all of physical RAM mirrored into a physmap. If neither of these terms make sense to you, I recommend ordering the [documentation special](#documentation) from today's menu. 
+GatOS targets **x86_64 long mode**, boots via **Multiboot2/GRUB**, and runs entirely in the higher half, with all of physical RAM mirrored into a physmap. 
+
+If none of these terms make sense to you, I recommend ordering the [documentation special](#documentation) from today's menu. 
 
 For the more tech savvy among you, here's the gist of what the kernel supports:
 
@@ -141,7 +149,7 @@ The kernel turns on the hardware protections it can and actually uses them:
 * **ACPI** table parsing (RSDP with RSDT/XSDT support) and **APIC**: Local APIC plus I/O APIC with per-IRQ redirection, masking and unmasking.
 * A four source timer stack: **PIT**, **HPET**, **LAPIC timer** and a calibrated **TSC**.
 * **Tickless operation.** Where TSC-deadline is available, the LAPIC is armed for the *next actual event*, aka the earlier of the scheduler quantum or the next sleeping thread's wake time, instead of interrupting on a fixed period. With nothing to wake, the timer is stopped outright. There's a 10ms periodic fallback for CPUs without it.
-* Uptime and sleep math done in 64- and 128-bit integer arithmetic, because the kernel builds with no floating point and no SSE on interrupt-sensitive paths/
+* Uptime and sleep math done in 64- and 128-bit integer arithmetic, because the kernel builds with no floating point and no SSE on interrupt-sensitive paths.
 * **Lazy FPU switching**: The FPU/SSE/AVX state area is per-thread and only swapped when a different thread actually uses it, so the kernel's own paths never pay for it.
 * **MONITOR/MWAIT** idle, so an idle system parks the core in a low-power state instead of spinning (with `HLT` as fallback).
 * Spinlocks with proper interrupt-state save and restore.
@@ -188,6 +196,24 @@ Currently exposed syscalls:
 * **`ulibc`** is the userspace counterpart: `stdio`, `stdlib`, `string`, `math`, spinlocks, and raw syscall wrappers.
 
 
+## What's *not* Inside the Kernel
+
+Equally important that you hear it from me now rather than discover it three hours in. None of these are things that broke or that I gave up on. They're things the PawStack model genuinely does not need, so I spent that time on the parts it does.
+
+| Not here | Why not |
+|---|---|
+| **SMP / multiple cores** | GatOS detects your core count, prints it proudly on the dashboard, and then politely uses exactly one of them. The scheduler, the allocators and the locking are all written for a single CPU. AP startup and per-CPU slab caches are the biggest item on the "after the thesis" list. |
+| **A filesystem** | No VFS, no disk driver, no `open()`. Your Gata program is compiled *into* the kernel image, so there is nothing to load from disk at runtime, and therefore nothing that needs to go looking for it.* |
+| **A network stack** | Same story. Nothing in the toolchain's model asks for one yet, and half-implementing TCP is a fantastic way to lose a semester.* |
+| **`fork()` / `exec()` / ELF loading** | Processes are created by the kernel at boot rather than spawned from executables. Userspace code lives in its own linker section and ships inside the image. |
+| **A bootloader** | GRUB already does this, and does it considerably better than I would have. |
+
+> [!NOTE]
+> If you came here looking for a general-purpose OS to run arbitrary programs on, this isn't it, and it was never trying to be. If you came here to compile *one* program into a bootable image that owns the entire machine, you are in exactly the right place.
+
+**For filesystems and networking: These are subsystems that, if implemented in GatOS, can be easily wired up to libgata for high level support, I just didn't have the time. I am but a student, after all.*
+
+
 ## Getting Started
 
 Building and running GatOS is designed to be exceedingly simple. If you have **Python 3.13+**, you can go from zero to running the kernel in two steps:
@@ -203,7 +229,7 @@ python3 run.py
 That's it!
 
 > [!IMPORTANT]
-> The kernel is under active development, so internal APIs can still shift between versions. What's there is tested and stable, just don't pin your project to a specific internal interface quite yet.
+> The kernel itself is feature complete and what's there is tested and stable. Internal APIs can still shift between releases though, so don't pin your project to a specific internal interface quite yet.
 
 ### How is this possible?
 
@@ -307,7 +333,7 @@ These scripts exist solely for transparency and educational insight, not as a su
 
 ## Testing
 
-As of GatOS version `1.7.5-alpha`, a test suite has been included in the kernel itself. It is built to be run in a live environment, which means the kernel itself will run the tests if you instruct it to do so.
+Since `v1.7.5`, a test suite has been included in the kernel itself. It is built to be run in a live environment, which means the kernel itself will run the tests if you instruct it to do so.
 
 The suite is around **500 assertions across 8 subsystems**: the PMM (including coalescing and exclusion behaviour), the slab allocator, the VMM, the heap's binned free lists, timers, spinlocks, the TTY subsystem, and multitasking. Since it runs live inside the kernel, it exercises the real allocators against real hardware state rather than a mocked-out host build.
 
@@ -386,7 +412,7 @@ You can also use all functions defined in `debug.h`, such as `QEMU_DUMP_PMT` for
 
 A *lot* of documentation and writeups are available in the [`docs/`](./docs/) folder. This includes development notes, architecture decisions, learning resources, and basically everything I've figured out (or struggled with) during this journey. Whatever question you have, it's probably answered there.
 
-The writeups are structured as chapters, and currently run to roughly **50,000 words**, officialy closer to a book than to release notes:
+The writeups are structured as chapters, and currently run to roughly **50,000 words**, officially closer to a book than to release notes:
 
 | Chapter | Topic |
 | --- | --- |
@@ -433,7 +459,9 @@ The restrictive nature is partly due to academic requirements and partly because
 
 ## So... what now?
 
-This project isn't really all that exciting on its own, because GatOS is not meant to be a standalone kernel. Where things get exciting is with [The Gata Programming Language](https://github.com/ApparentlyPlus/Gata) and [Appa](https://github.com/ApparentlyPlus/Appa), the transpiler for Gata, which lowers your code to target a custom GatOS build! Why don't you setup appa and try writing your first Gata program? You are 10 lines of Gata code away from your very own first, custom, real, awesome operating system!
+This project isn't really all that exciting on its own, because GatOS is not meant to be a standalone kernel. Where things get exciting is with [The Gata Programming Language](https://github.com/ApparentlyPlus/Gata) and [Appa](https://github.com/ApparentlyPlus/Appa), the transpiler for Gata, which lowers your code to target a custom GatOS build! 
+
+Why don't you setup appa and try writing your first Gata program? You are 10 lines of Gata code away from your very own first, custom, real, awesome operating system!
 
 
 ## Note to Readers
