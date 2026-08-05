@@ -9,7 +9,7 @@
   <a href="https://github.com/ApparentlyPlus/GatOS/actions/workflows/windows.yml"><img src="https://github.com/ApparentlyPlus/GatOS/actions/workflows/windows.yml/badge.svg" alt="GatOS Windows"></a>
   <a href="https://github.com/ApparentlyPlus/GatOS/actions/workflows/macOS.yml"><img src="https://github.com/ApparentlyPlus/GatOS/actions/workflows/macOS.yml/badge.svg" alt="GatOS macOS"></a>
   <a href="#license"><img src="https://img.shields.io/badge/License-Custom-red.svg" alt="License: Custom"></a>
-  <img src="https://img.shields.io/badge/kernel-v2.1.9-0deedd" alt="Kernel v2.1.9">
+  <img src="https://img.shields.io/badge/kernel-v2.1.9-0deedd" alt="Kernel v2.2.0">
   <img src="https://img.shields.io/badge/arch-x86__64-1263cf" alt="x86_64">
 </p>
 
