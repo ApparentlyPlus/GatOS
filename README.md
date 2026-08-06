@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/gatos.svg" alt="GatOS" width="650">
+  <img src="docs/assets/gatos.svg" alt="GatOS" width="700">
 </p>
 
 <h1 align="center">A Modular x86_64 Kernel for Custom Operating Systems</h1>
