@@ -58,15 +58,15 @@ static char cbuf[2048];
 
 // Text cell shadow for the crash console, so scrolling redraws from RAM
 // instead of reading the framebuffer (WC/UC reads are extremely slow).
-static uint16_t* crash_shadow = NULL;
+static uint32_t* crash_shadow = NULL;
 static size_t crash_sh_cols = 0;
 static size_t crash_sh_rows = 0;
 
 /*
- * glyph_index - Map a codepoint onto its CP437 font slot
+ * glyph_index - Map a codepoint onto its glyph slot (CP437 or synthesized)
  */
-static inline uint8_t glyph_index(uint32_t cp) {
-    uint8_t idx = unicode_to_cp437(cp);
+static inline uint16_t glyph_index(uint32_t cp) {
+    uint16_t idx = unicode_to_glyph(cp);
     if (idx == 0 && cp != 0) idx = 0x3F;
     return idx;
 }
@@ -74,8 +74,8 @@ static inline uint8_t glyph_index(uint32_t cp) {
 /*
  * crash_pack - Encode a codepoint with colors into one shadow cell
  */
-static inline uint16_t crash_pack(uint32_t cp, uint8_t fg, uint8_t bg) {
-    return (uint16_t)(glyph_index(cp) | ((uint16_t)(fg & 0xF) << 8) | ((uint16_t)(bg & 0xF) << 12));
+static inline uint32_t crash_pack(uint32_t cp, uint8_t fg, uint8_t bg) {
+    return (uint32_t)glyph_index(cp) | ((uint32_t)(fg & 0xF) << 16) | ((uint32_t)(bg & 0xF) << 20);
 }
 
 /*
@@ -88,13 +88,13 @@ void con_crash_shadow_init(void) {
 
     uint64_t phys;
     size_t cells = cols * rows;
-    if (pmm_alloc(cells * sizeof(uint16_t), &phys) != PMM_OK) return;
+    if (pmm_alloc(cells * sizeof(uint32_t), &phys) != PMM_OK) return;
 
-    crash_shadow = (uint16_t*)PHYSMAP_P2V(phys);
+    crash_shadow = (uint32_t*)PHYSMAP_P2V(phys);
     crash_sh_cols = cols;
     crash_sh_rows = rows;
 
-    uint16_t blank = crash_pack(' ', cfg, cbg);
+    uint32_t blank = crash_pack(' ', cfg, cbg);
     for (size_t i = 0; i < cells; i++) crash_shadow[i] = blank;
 }
 
@@ -148,10 +148,8 @@ static void draw_glyph(uint8_t* glyph, size_t px, size_t py, uint32_t fg, uint32
 /*
  * get_glyph_idx - Returns the PSF1 glyph data for an already resolved slot
  */
-static uint8_t* get_glyph_idx(uint8_t idx) {
-    psf1_font_t* font = font_get_current();
-    if (!font) return NULL;
-    return (uint8_t*)font->glyph_buffer + idx * font->header->charsize;
+static uint8_t* get_glyph_idx(uint16_t idx) {
+    return (uint8_t*)font_glyph(idx);
 }
 
 /*
@@ -401,6 +399,7 @@ static void emit_cp(console_t* con, uint32_t cp) {
         if (con->cx > 0) con->cx--;
         size_t idx = con->cy * con->width + con->cx;
         con->buffer[idx].codepoint = ' ';
+        
         // If this console is active and we're not deferring rendering
         // we can immediately erase the character on the framebuffer
         DIRTY_SET(con, idx);
@@ -428,7 +427,7 @@ bool con_init(console_t* con) {
     con->width = cols; con->height = rows;
     con->cx = 0; con->cy = 0;
     con->fg = CONSOLE_COLOR_WHITE; con->bg = CONSOLE_COLOR_BLACK;
-    con->u8n = 0; con->u8cp = 0;
+    con->u8n = 0; con->u8cp = 0; con->u8lead = 0;
     con->ansi_st = 0; con->reent = 0;
     con->on = true; con->header_rows = 0;
     con->defer_render = false;
@@ -522,16 +521,37 @@ static void _con_process_byte(console_t* con, uint8_t byte) {
         return;
     }
 
+// utf8 decoding state machine
+utf8_restart:
     if (con->u8n == 0) {
-        if      ((byte & 0x80) == 0x00) emit_cp(con, byte);
-        else if ((byte & 0xE0) == 0xC0) { con->u8n = 1; con->u8cp = byte & 0x1F; }
-        else if ((byte & 0xF0) == 0xE0) { con->u8n = 2; con->u8cp = byte & 0x0F; }
-        else if ((byte & 0xF8) == 0xF0) { con->u8n = 3; con->u8cp = byte & 0x07; }
-    } else {
-        if ((byte & 0xC0) == 0x80) {
-            con->u8cp = (con->u8cp << 6) | (byte & 0x3F);
-            if (--con->u8n == 0) emit_cp(con, con->u8cp);
-        } else { con->u8n = 0; emit_cp(con, 0xFFFD); }
+        if ((byte & 0x80u) == 0x00u) { emit_cp(con, byte); return; }
+        if ((byte & 0xE0u) == 0xC0u) {
+            if (byte < 0xC2u) { emit_cp(con, 0xFFFD); return; } // C0/C1 are always overlong
+            con->u8n = 1; con->u8cp = byte & 0x1Fu;
+        } else if ((byte & 0xF0u) == 0xE0u) {
+            con->u8n = 2; con->u8cp = byte & 0x0Fu;
+        } else if ((byte & 0xF8u) == 0xF0u && byte <= 0xF4u) {
+            con->u8n = 3; con->u8cp = byte & 0x07u;
+        } else {
+            emit_cp(con, 0xFFFD); return; // 80..BF stray, F5..FF invalid
+        }
+        con->u8lead = byte;
+        return;
+    }
+
+    if ((byte & 0xC0u) != 0x80u) { // sequence cut short
+        con->u8n = 0;
+        emit_cp(con, 0xFFFD);
+        goto utf8_restart;
+    }
+
+    con->u8cp = (con->u8cp << 6) | (byte & 0x3Fu);
+    if (--con->u8n == 0) {
+        uint32_t cp  = con->u8cp;
+        uint32_t min = (con->u8lead < 0xE0u) ? 0x80u
+                     : (con->u8lead < 0xF0u) ? 0x800u : 0x10000u;
+        if (cp < min || cp > 0x10FFFFu || (cp >= 0xD800u && cp <= 0xDFFFu)) cp = 0xFFFD;
+        emit_cp(con, cp);
     }
 }
 
@@ -700,7 +720,7 @@ static inline void crash_set_cell(uint32_t x, uint32_t y, uint32_t cp) {
  * crash_draw_glyph - Draw one codepoint cell to the framebuffer (write-only).
  * Works at any resolution, independent of the shadow's coverage.
  */
-static void crash_draw_glyph(uint8_t gidx, uint8_t fg, uint8_t bg, uint32_t x, uint32_t y) {
+static void crash_draw_glyph(uint16_t gidx, uint8_t fg, uint8_t bg, uint32_t x, uint32_t y) {
     if (x >= (uint32_t)cols || y >= (uint32_t)rows) return;
     uint32_t row_h = (uint32_t)fh + PADDING_Y;
     uint32_t px = x * 8;
@@ -749,12 +769,12 @@ static void crash_scroll(void) {
     }
 
     // Compare each cell to the one below it and redraw only those that change
-    uint16_t blank = crash_pack(' ', cfg, cbg);
+    uint32_t blank = crash_pack(' ', cfg, cbg);
     for (uint32_t y = 0; y + 1 < r; y++)
         for (uint32_t x = 0; x < c; x++) {
-            uint16_t nc = crash_shadow[(size_t)(y + 1) * c + x];
+            uint32_t nc = crash_shadow[(size_t)(y + 1) * c + x];
             if (nc != crash_shadow[(size_t)y * c + x])
-                crash_draw_glyph(nc & 0xFF, (nc >> 8) & 0xF, (nc >> 12) & 0xF, x, y);
+                crash_draw_glyph((uint16_t)(nc & 0xFFFF), (nc >> 16) & 0xF, (nc >> 20) & 0xF, x, y);
         }
 
     // Clear the last row in the shadow and redraw any non-blank cells that were scrolled off
@@ -763,7 +783,7 @@ static void crash_scroll(void) {
             crash_draw_glyph(glyph_index(' '), cfg, cbg, x, r - 1);
 
     // Shift the shadow up by one row and clear the last row
-    kmemmove(crash_shadow, crash_shadow + c, (size_t)(r - 1) * c * sizeof(uint16_t));
+    kmemmove(crash_shadow, crash_shadow + c, (size_t)(r - 1) * c * sizeof(uint32_t));
     for (uint32_t x = 0; x < c; x++)
         crash_shadow[(size_t)(r - 1) * c + x] = blank;
     if (ccy > 0) ccy = r - 1;
@@ -802,7 +822,7 @@ void con_crash_clear(uint8_t bg) {
     if (!fb) return;
     cbg = bg & 0xF; ccx = 0; ccy = 0;
     if (crash_shadow) {
-        uint16_t blank = crash_pack(' ', cfg, cbg);
+        uint32_t blank = crash_pack(' ', cfg, cbg);
         size_t cells = crash_sh_cols * crash_sh_rows;
         for (size_t i = 0; i < cells; i++) crash_shadow[i] = blank;
     }

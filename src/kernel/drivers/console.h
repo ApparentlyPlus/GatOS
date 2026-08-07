@@ -47,6 +47,7 @@ typedef struct {
     // UTF8 State
     uint32_t u8cp;
     int u8n;
+    uint8_t u8lead;
 
     // ANSI State
     uint8_t ansi_st;
