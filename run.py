@@ -103,7 +103,8 @@ KERNEL_INTERRUPT_PATH = {
     "kernel/memory/pmm.c",             # pmm_alloc, pmm_free (demand paging)
     "klibc/avl.c",                     # called by vmm.c for VMA tree operations
 }
-CPPFLAGS = [f"-I{HEADER_DIR}", "-D__ASSEMBLER__"]
+
+CPPFLAGS = [f"-I{HEADER_DIR}", f"-Wa,-I{HEADER_DIR}", "-D__ASSEMBLER__"]
 LDFLAGS = ["-n", "-nostdlib", "--gc-sections", f"-T{ROOT_DIR / 'targets/x86_64/linker.ld'}", "--no-relax", "-g"]
 
 # Optimization Levels
