@@ -5,6 +5,7 @@
  */
 
 #include <arch/x86_64/cpu/interrupts.h>
+#include <kernel/caps.h>
 #include <kernel/drivers/console.h>
 #include <kernel/drivers/serial.h>
 #include <kernel/sys/panic.h>
@@ -12,6 +13,35 @@
 #include <klibc/stdio.h>
 #include <klibc/string.h>
 #include <stdarg.h>
+
+#ifdef GATA_OUTPUT_SERIAL
+
+#define PNC_WIDTH() ((uint16_t)80)
+#define PNC_BEGIN() ((void)0)
+#define PNC_PUTS(s) serial_write_port(SERIAL_COM1, (s))
+#define PNC_PRINTF(...) pnc_printf(__VA_ARGS__)
+
+static void pnc_printf(const char* fmt, ...)
+{
+    char buf[512];
+    va_list args;
+    va_start(args, fmt);
+    kvsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    serial_write_port(SERIAL_COM1, buf);
+}
+
+#else
+
+#define PNC_WIDTH() ((uint16_t)con_crash_width())
+#define PNC_BEGIN() do {                                                  \
+        con_crash_set_colors(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_RED);         \
+        con_crash_clear(CONSOLE_COLOR_RED);                                   \
+    } while (0)
+#define PNC_PUTS(s) con_crash_puts(s)
+#define PNC_PRINTF(...) con_crash_printf(__VA_ARGS__)
+
+#endif
 
 /*
  * halt_system - Halts the CPU indefinitely
@@ -68,63 +98,56 @@ void panic_c(const char* message, cpu_context_t* context)
     intr_off();
     panic_log(message, context);
 
-    uint16_t screen_width = (uint16_t)con_crash_width();
+    uint16_t screen_width = PNC_WIDTH();
 
-    // Force both colors explicitly, not just the background: in builds with
-    // no scheduler/TTY the crash console doubles as the normal static
-    // output console (kernel/caps.h, GATA_CAP_THREADS), so a program could
-    // have left the foreground set to something else via Console.SetColor
-    // right before panicking - without this, the panic text could end up
-    // unreadable against the red background.
-    con_crash_set_colors(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_RED);
-    con_crash_clear(CONSOLE_COLOR_RED);
+    PNC_BEGIN();
 
     #define HEADER_MSG "Oh no! Your GatOS ventured into undefined behavior and never returned :("
     #define SEP_MSG    "---"
 
-    con_crash_puts("\n");
+    PNC_PUTS("\n");
 
     pad = (screen_width - (int)kstrlen(HEADER_MSG)) / 2;
-    for (i = 0; i < pad; i++) con_crash_puts(" ");
-    con_crash_puts(HEADER_MSG "\n");
+    for (i = 0; i < pad; i++) PNC_PUTS(" ");
+    PNC_PUTS(HEADER_MSG "\n");
 
-    con_crash_puts("\n");
+    PNC_PUTS("\n");
 
     pad = (screen_width - (int)kstrlen(SEP_MSG)) / 2;
-    for (i = 0; i < pad; i++) con_crash_puts(" ");
-    con_crash_puts(SEP_MSG "\n");
+    for (i = 0; i < pad; i++) PNC_PUTS(" ");
+    PNC_PUTS(SEP_MSG "\n");
 
-    con_crash_printf("[+] Reason: %s\n", message);
+    PNC_PRINTF("[+] Reason: %s\n", message);
 
     // If we have CPU context, print detailed register and error information
     if (context) {
-        con_crash_printf("[+] Exception: %s (#%lu)\n",
+        PNC_PRINTF("[+] Exception: %s (#%lu)\n",
                          exc_name(context->vector_number),
                          context->vector_number);
-        con_crash_printf("[+] Error Code: 0x%04lx\n", context->error_code);
+        PNC_PRINTF("[+] Error Code: 0x%04lx\n", context->error_code);
 
         if (context->vector_number == INT_PAGE_FAULT) {
             uint64_t cr2;
             __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
-            con_crash_printf("[+] CR2 (fault addr): 0x%016lx\n", cr2);
-            con_crash_printf("[+] Access: %s  Mode: %s  Cause: %s\n",
+            PNC_PRINTF("[+] CR2 (fault addr): 0x%016lx\n", cr2);
+            PNC_PRINTF("[+] Access: %s  Mode: %s  Cause: %s\n",
                 (context->error_code & 0x02) ? "write"      : "read",
                 (context->error_code & 0x04) ? "user"       : "supervisor",
                 (context->error_code & 0x01) ? "protection" : "not-present");
-            if (context->error_code & 0x08) con_crash_puts("[+] Reserved bit set in PTE\n");
-            if (context->error_code & 0x10) con_crash_puts("[+] Caused by instruction fetch\n");
+            if (context->error_code & 0x08) PNC_PUTS("[+] Reserved bit set in PTE\n");
+            if (context->error_code & 0x10) PNC_PUTS("[+] Caused by instruction fetch\n");
         }
 
-        con_crash_printf("\nInstruction Pointer:\n");
-        con_crash_printf("  RIP: 0x%016lx\n", context->iret_rip);
-        con_crash_printf("  CS:  0x%04lx\n",  context->iret_cs);
-        con_crash_printf("  RSP: 0x%016lx\n", context->iret_rsp);
-        con_crash_printf("  SS:  0x%04lx\n",  context->iret_ss);
+        PNC_PRINTF("\nInstruction Pointer:\n");
+        PNC_PRINTF("  RIP: 0x%016lx\n", context->iret_rip);
+        PNC_PRINTF("  CS:  0x%04lx\n",  context->iret_cs);
+        PNC_PRINTF("  RSP: 0x%016lx\n", context->iret_rsp);
+        PNC_PRINTF("  SS:  0x%04lx\n",  context->iret_ss);
 
 
         uint64_t fl = context->iret_flags;
-        con_crash_printf("\nCPU Flags (RFLAGS): 0x%016lx\n", fl);
-        con_crash_printf("  Flags:%s%s%s%s%s%s%s%s%s\n",
+        PNC_PRINTF("\nCPU Flags (RFLAGS): 0x%016lx\n", fl);
+        PNC_PRINTF("  Flags:%s%s%s%s%s%s%s%s%s\n",
             (fl & (1 <<  0)) ? " CF" : "",
             (fl & (1 <<  2)) ? " PF" : "",
             (fl & (1 <<  4)) ? " AF" : "",
@@ -135,15 +158,15 @@ void panic_c(const char* message, cpu_context_t* context)
             (fl & (1 << 10)) ? " DF" : "",
             (fl & (1 << 11)) ? " OF" : "");
     } else {
-        con_crash_puts("\n(no CPU context)\n");
+        PNC_PUTS("\n(no CPU context)\n");
     }
 
-    con_crash_puts("\n");
+    PNC_PUTS("\n");
 
     #define FOOTER_MSG "SYSTEM HALTED"
     pad = (screen_width - (int)kstrlen(FOOTER_MSG)) / 2;
-    for (i = 0; i < pad; i++) con_crash_puts(" ");
-    con_crash_puts(FOOTER_MSG "\n");
+    for (i = 0; i < pad; i++) PNC_PUTS(" ");
+    PNC_PUTS(FOOTER_MSG "\n");
 
     halt_system();
 }

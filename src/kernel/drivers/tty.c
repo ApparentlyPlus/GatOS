@@ -10,6 +10,7 @@
 
 #include <kernel/caps.h>
 #include <kernel/drivers/tty.h>
+#include <kernel/drivers/serial.h>
 #include <kernel/drivers/ldisc.h>
 #include <kernel/memory/heap.h>
 #include <kernel/sys/scheduler.h>
@@ -67,6 +68,7 @@ tty_t* tty_create(void) {
     tty_t* tty = (tty_t*)kmalloc(sizeof(tty_t));
     if (!tty) return NULL;
 
+#ifdef GATA_CAP_FRAMEBUFFER
     console_t* console = (console_t*)kmalloc(sizeof(console_t));
     if (!console) {
         kfree(tty);
@@ -79,6 +81,9 @@ tty_t* tty_create(void) {
         return NULL;
     }
     tty_init(tty, console);
+#else
+    tty_init(tty, NULL);
+#endif
 
     bool flags = spinlock_acquire(&tty_lock);
     if (tty_list == NULL) {
@@ -131,9 +136,11 @@ void tty_destroy(tty_t* tty) {
 
     if (active_tty == tty) {
         active_tty = tty_list;
-        if (active_tty) {
+#ifdef GATA_CAP_FRAMEBUFFER
+        if (active_tty && active_tty->console) {
             con_refresh(active_tty->console);
         }
+#endif
     }
 
     spinlock_release(&tty_lock, flags);
@@ -154,9 +161,11 @@ void tty_switch(tty_t* tty) {
 
     active_tty = tty;
 
+#ifdef GATA_CAP_FRAMEBUFFER
     if (tty->console) {
         con_refresh(tty->console);
     }
+#endif
 }
 
 /*
@@ -282,8 +291,14 @@ size_t tty_read(tty_t* tty, char* buf, size_t count) {
  * tty_write - High-level console write
  */
 void tty_write(tty_t* tty, const char* buf, size_t count) {
-    if (!tty || !tty->console) return;
-    con_write_batch(tty->console, buf, count);
+    if (!tty) return;
+#ifdef GATA_CAP_FRAMEBUFFER
+    if (tty->console) {
+        con_write_batch(tty->console, buf, count);
+        return;
+    }
+#endif
+    serial_write_len_port(SERIAL_COM1, buf, count);
 }
 
 /*
@@ -291,16 +306,36 @@ void tty_write(tty_t* tty, const char* buf, size_t count) {
  * header that is never scrolled or overwritten by normal output
  */
 void tty_header_init(tty_t* tty, size_t rows) {
+#ifdef GATA_CAP_FRAMEBUFFER
     if (!tty || !tty->console) return;
     con_header_init(tty->console, rows);
+#else
+    (void)tty; (void)rows;
+#endif
 }
 
 /*
  * tty_header_write - Writes centred text into sticky header row and redraws it immediately
  */
 void tty_header_write(tty_t* tty, size_t row, const char* text, uint8_t fg, uint8_t bg) {
+#ifdef GATA_CAP_FRAMEBUFFER
     if (!tty || !tty->console) return;
     con_header_write(tty->console, row, text, fg, bg);
+#else
+    (void)tty; (void)row; (void)text; (void)fg; (void)bg;
+#endif
+}
+
+/*
+ * tty_echo - Echo one input character to wherever this TTY renders
+ */
+static void tty_echo(tty_t* tty, char c) {
+#ifdef GATA_CAP_FRAMEBUFFER
+    if (tty->console) { con_putc(tty->console, c); return; }
+#else
+    (void)tty;
+#endif
+    serial_write_char_port(SERIAL_COM1, c);
 }
 
 /*
@@ -321,13 +356,13 @@ void ldisc_input(tty_t* tty, char c) {
     if (c == '\b') {
         if (ld->pos > 0) {
             ld->pos--;
-            if (ld->echo && tty->console) con_putc(tty->console, '\b');
+            if (ld->echo) tty_echo(tty, '\b');
         }
         return;
     }
 
     if (c == '\n' || c == '\r') {
-        if (ld->echo && tty->console) con_putc(tty->console, '\n');
+        if (ld->echo) tty_echo(tty, '\n');
         for (uint32_t i = 0; i < ld->pos; i++) tty_push_char_raw(tty, ld->line_buffer[i]);
         tty_push_char_raw(tty, '\n');
         ld->pos = 0;
@@ -336,7 +371,7 @@ void ldisc_input(tty_t* tty, char c) {
 
     if (ld->pos < LDISC_LINE_MAX - 1) {
         ld->line_buffer[ld->pos++] = c;
-        if (ld->echo && tty->console) con_putc(tty->console, c);
+        if (ld->echo) tty_echo(tty, c);
     }
 }
 

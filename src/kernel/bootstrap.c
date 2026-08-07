@@ -75,8 +75,9 @@ bool kernel_bootstrap(void* mb_info, multiboot_parser_t* mb, bool verbose) {
 	build_physmap();
 
 	// We need panic to work right about now
-	// if we panic before this, something went catastrophically wrong
+#ifdef GATA_CAP_FRAMEBUFFER
 	console_init(mb);
+#endif
 
 	// Initialize PMM before VMM since VMM needs to allocate memory for page tables
 	pmm_status_t pmm_status = pmm_init(0x0, PHYSMAP_V2P(get_physmap_end()), PAGE_SIZE);
@@ -100,10 +101,9 @@ bool kernel_bootstrap(void* mb_info, multiboot_parser_t* mb, bool verbose) {
 		pmm_populate((uint64_t)region_start, (uint64_t)region_end);
 	}
 
-	// The crash console can only size its scroll shadow now that the PMM is
-	// up; console_init ran before this, so until here a panic could render
-	// but not scroll.
+#ifdef GATA_CAP_FRAMEBUFFER
 	con_crash_shadow_init();
+#endif
 
 #ifdef GATA_CAP_MEM
 	// Initialize slab allocator before VMM since VMM needs to allocate memory for its structures
@@ -119,8 +119,6 @@ bool kernel_bootstrap(void* mb_info, multiboot_parser_t* mb, bool verbose) {
 	}
 #endif // GATA_CAP_MEM
 
-	// With the VMM online (if built), we can use virtual addresses for everything from now on.
-	// GDT/CPU init don't actually need the heap - they get their stacks straight from the PMM.
 	gdt_init();
 	cpu_init();
 
@@ -134,8 +132,6 @@ bool kernel_bootstrap(void* mb_info, multiboot_parser_t* mb, bool verbose) {
 #endif // GATA_CAP_MEM
 
 #ifdef GATA_NEEDS_INTERRUPT_SUBSYS
-	// ACPI and APIC come after memory management since they require dynamic memory for tables and structures
-	// and they need to be initialized before we can safely enable interrupts
 	acpi_init(mb);
 	if (verbose) {
 		kprintf("[ACPI] Revision %u detected (%s supported), manufacturer: %.6s\n",
@@ -164,10 +160,6 @@ bool kernel_bootstrap(void* mb_info, multiboot_parser_t* mb, bool verbose) {
 	active_tty = k_tty;
 	kernel_tty = k_tty; // Protect this from ALT+F4
 #endif // GATA_CAP_THREADS
-
-	// Input drivers and subsystems (the static ring-buffer path when there's
-	// no scheduler/TTY is harmless to init either way - it's a no-op if
-	// GATA_CAP_INPUT is also off)
 	input_init();
 
 	if (verbose) {
@@ -226,10 +218,10 @@ bool kernel_bootstrap(void* mb_info, multiboot_parser_t* mb, bool verbose) {
 #if defined(GATA_KBD_EXTERNAL) || defined(GATA_KBD_HOTPLUG)
 	xhci_hotplug_init();
 #endif
-
-	// Dashboard and final touches
 	dash_init();
+#ifdef GATA_CAP_FRAMEBUFFER
 	if (verbose) kprintf("[KERNEL] Dashboard ready (CTRL+SHIFT+ESC)\n");
+#endif
 #endif // GATA_CAP_THREADS
 
 	// Let the good times roll

@@ -239,6 +239,38 @@ void syscall_dispatcher(cpu_context_t* regs) {
             uint64_t cmd = regs->rdi;
             uint64_t arg2 = regs->rsi;
             
+            #ifdef GATA_OUTPUT_SERIAL
+
+            (void)current;
+            switch (cmd) {
+                case TTY_CTRL_CLEAR:
+                    serial_write_port(SERIAL_COM1, "\x1b[2J\x1b[H");
+                    regs->rax = 0;
+                    break;
+                case TTY_CTRL_CURSOR:
+                    serial_write_port(SERIAL_COM1, (arg2 & 0xFF) ? "\x1b[?25h" : "\x1b[?25l");
+                    regs->rax = 0;
+                    break;
+                case TTY_CTRL_GET_DIMS:
+                    regs->rax = ((uint64_t)24 << 32) | (uint64_t)80;
+                    break;
+                case TTY_CTRL_SET_COLOR: {
+
+                    static const int a[8] = { 0, 4, 2, 6, 1, 5, 3, 7 };
+                    char seq[24];
+                    int fg = (int)(arg2 & 0xF), bg = (int)((arg2 >> 8) & 0xF);
+                    ksnprintf(seq, sizeof(seq), "\x1b[%d;%dm",
+                              (fg & 8) ? 90 + a[fg & 7] : 30 + a[fg & 7],
+                              (bg & 8) ? 100 + a[bg & 7] : 40 + a[bg & 7]);
+                    serial_write_port(SERIAL_COM1, seq);
+                    regs->rax = 0;
+                    break;
+                }
+                default:
+                    regs->rax = (uint64_t)-1;
+                    break;
+            }
+            #else
             tty_t* tty = current->process->tty;
             if (!tty || !tty->console) {
                 regs->rax = (uint64_t)-1;
@@ -275,6 +307,7 @@ void syscall_dispatcher(cpu_context_t* regs) {
                     regs->rax = (uint64_t)-1;
                     break;
             }
+            #endif
             break;
         }
 
@@ -300,9 +333,6 @@ void syscall_dispatcher(cpu_context_t* regs) {
         }
 
         case SYS_DEBUG_WRITE: {
-            // Straight to COM3, bypassing the TTY entirely - this is the
-            // userspace side of the kernel's own debug-only serial channel
-            // (kernel uses COM2 via LOGF; see ulibc/debug.h).
             const char* buf = (const char*)regs->rdi;
             size_t len = (size_t)regs->rsi;
 
@@ -342,9 +372,6 @@ void syscall_dispatcher(cpu_context_t* regs) {
         }
 
         case SYS_TIME_NS:
-            // Monotonic nanoseconds since boot. The dispatcher only exists under
-            // GATA_CAP_THREADS, which implies GATA_NEEDS_INTERRUPT_SUBSYS (caps.h),
-            // so the timer subsystem backing get_uptime_ns is always present here.
             regs->rax = get_uptime_ns();
             break;
 

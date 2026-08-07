@@ -19,8 +19,19 @@
  *   GATA_CAP_TIME        - the program reads the clock (Time.Nanos/Millis via
  *                           _env_time_ns). Implies the interrupt subsystem,
  *                           whose timer tick is what the uptime counter is.
- *   GATA_CAP_FRAMEBUFFER - output renders to the framebuffer console.
- *   GATA_OUTPUT_SERIAL   - output goes to the COM1 serial port instead.
+ *   GATA_CAP_FRAMEBUFFER - output renders to the framebuffer console. Gates
+ *                           the console driver and the font it draws with
+ *                           (drivers/console.c, drivers/font.c, vgafont.S)
+ *                           plus the dashboard, which is purely visual.
+ *   GATA_OUTPUT_SERIAL   - output goes to the COM1 serial port instead. Every
+ *                           path that would have drawn goes to COM1: kernel
+ *                           output (klibc/stdio.c), program output (the env
+ *                           bridge and SYS_WRITE), screen control as ANSI
+ *                           escapes (the env bridge and SYS_TTY_CTRL), input
+ *                           echo (drivers/input.c, drivers/tty.c) and the
+ *                           panic report (sys/panic.c). A TTY still exists
+ *                           under THREADS for its line discipline and input
+ *                           buffer, but its tty->console is NULL.
  *   GATA_KBD_DEFAULT     - PS/2 only.
  *   GATA_KBD_EXTERNAL    - + USB HID (xHCI/PCI), no hotplug watch thread.
  *   GATA_KBD_HOTPLUG     - + USB hotplug watch (runs as a kernel thread).

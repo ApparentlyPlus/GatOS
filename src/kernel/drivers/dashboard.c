@@ -22,9 +22,7 @@
 #include <klibc/stdio.h>
 #include <klibc/string.h>
 
-// The dashboard is pure introspection UI over the scheduler/process/TTY
-// stack - dead weight without it. See GATA_CAP_THREADS in kernel/caps.h.
-#ifdef GATA_CAP_THREADS
+#if defined(GATA_CAP_THREADS) && defined(GATA_CAP_FRAMEBUFFER)
 
 static tty_t* dashTTY;
 static tty_t* lastTTY;
@@ -1046,4 +1044,4 @@ void dash_init(void) {
     sched_add(t);
 }
 
-#endif // GATA_CAP_THREADS
+#endif // GATA_CAP_THREADS && GATA_CAP_FRAMEBUFFER

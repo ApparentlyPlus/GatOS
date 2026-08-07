@@ -14,15 +14,21 @@
 #include <kernel/drivers/dashboard.h>
 #else
 #include <kernel/drivers/console.h>
+#include <kernel/drivers/serial.h>
 #include <kernel/sys/spinlock.h>
 #endif
 #include <kernel/debug.h>
 
 #ifndef GATA_CAP_THREADS
-// Static ring buffer feeding input_getchar() when there's no scheduler/TTY
-// to route key events through. Producer: nothread_ldisc_input (via
-// input_handle_key, below). Consumer: input_getchar(), called by _getchar()
-// in klibc/stdio.c.
+
+static inline void input_echo(char c) {
+#ifdef GATA_OUTPUT_SERIAL
+    serial_write_char_port(SERIAL_COM1, c);
+#else
+    con_crash_putc(c);
+#endif
+}
+
 #define INPUT_RING_SIZE 256
 static struct {
     char buffer[INPUT_RING_SIZE];
@@ -31,9 +37,6 @@ static struct {
     spinlock_t lock;
 } input_ring;
 
-// Minimal canonical-mode line discipline for the no-threads path.
-// Mirrors ldisc_input/ldisc_init in tty.c but talks directly to
-// con_crash_putc (echo) and input_ring (commit) instead of a tty_t.
 #define INPUT_LINE_MAX 1024
 static struct {
     char line[INPUT_LINE_MAX];
@@ -44,13 +47,13 @@ static void nothread_ldisc_input(char c) {
     if (c == '\b') {
         if (input_ld.pos > 0) {
             input_ld.pos--;
-            con_crash_putc('\b');
+            input_echo('\b');
         }
         return;
     }
 
     if (c == '\n' || c == '\r') {
-        con_crash_putc('\n');
+        input_echo('\n');
         bool flags = spinlock_acquire(&input_ring.lock);
         for (uint32_t i = 0; i < input_ld.pos; i++) {
             uint32_t next = (input_ring.head + 1) % INPUT_RING_SIZE;
@@ -71,7 +74,7 @@ static void nothread_ldisc_input(char c) {
 
     if (input_ld.pos < INPUT_LINE_MAX - 1) {
         input_ld.line[input_ld.pos++] = c;
-        con_crash_putc(c);
+        input_echo(c);
     }
 }
 #endif
@@ -87,6 +90,7 @@ void input_init(void) {
 }
 
 #ifdef GATA_CAP_THREADS
+
 /*
  * input_handle_key - Entry point for keyboard events. Handles system
  * hotkeys and routes input to the active TTY.
