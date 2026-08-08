@@ -47,6 +47,7 @@ typedef struct {
     // UTF8 State
     uint32_t u8cp;
     int u8n;
+    uint8_t u8lead;
 
     // ANSI State
     uint8_t ansi_st;
@@ -98,6 +99,6 @@ size_t console_get_height();
 // Crash console api (lock free, scheduler free)
 size_t con_crash_width(void);
 void con_crash_clear(uint8_t bg);
+void con_crash_shadow_init(void);
 void con_crash_puts(const char* s);
 void con_crash_printf(const char* fmt, ...);
-

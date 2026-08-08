@@ -9,11 +9,16 @@
 
 #include <arch/x86_64/memory/paging.h>
 #include <arch/x86_64/multiboot2.h>
+#include <arch/x86_64/cpu/cpu.h>
+#include <arch/x86_64/cpu/msr.h>
 #include <kernel/drivers/serial.h>
 #include <kernel/sys/panic.h>
 #include <kernel/debug.h>
 #include <klibc/string.h>
 #include <stdbool.h>
+
+// True once pat_init has made PAT entry 1 (PWT) write-combining
+static bool patwc = false;
 
 /* 
  * This is a (self proclaimed) genius hack to statically reserve a single 2MB page for framebuffer purposes in the physmap,
@@ -73,7 +78,6 @@ void cleanup_kpt(uintptr_t start, uintptr_t end) {
     uint64_t* PML4 = getPML4();
     uint64_t* PDPT = PML4 + PAGE_ENTRIES * PREALLOC_PML4s;
     uint64_t* PD = PDPT + PAGE_ENTRIES * PREALLOC_PDPTs;
-    uint64_t* PT = PD + PAGE_ENTRIES * PREALLOC_PDs;
 
     uintptr_t kernel_size = end - start;
     if (kernel_size > (1UL << 30)) return; // > 1 GiB not allowed
@@ -88,11 +92,6 @@ void cleanup_kpt(uintptr_t start, uintptr_t end) {
     size_t hh_pdpt = PDPT_INDEX(virt_start);
     size_t hh_pd_start = PD_INDEX(virt_start);
     size_t hh_pd_end = PD_INDEX(virt_end - 1);
-
-    uintptr_t start_page = start >> 12;
-    uintptr_t end_page = (end - 1) >> 12;
-    size_t total_pages = end_page - start_page + 1;
-    size_t total_pds = hh_pd_end + 1;
 
     // Zero out all PML4 entries except the higher half one we're using
     for (size_t i = 0; i < PAGE_ENTRIES; i++) {
@@ -113,27 +112,14 @@ void cleanup_kpt(uintptr_t start, uintptr_t end) {
     // Set only the higher half PDPT entry
     PDPT[hh_pdpt] = KERNEL_V2P(PD) | (PAGE_PRESENT | PAGE_WRITABLE);
 
-    // Zero out all PD entries except the higher half ones we're using
+    // The boot tables map this range with 2MiB pages, so the trim happens at
+    // PD level. build_physmap replaces all of it with pool backed tables.
     for (size_t i = 0; i < PAGE_ENTRIES; i++) {
-        if (!(i >= hh_pd_start && i <= hh_pd_end)) {
+        if (i < hh_pd_start || i > hh_pd_end) {
             PD[i] = 0;
+        } else {
+            PD[i] = ((uint64_t)(i - hh_pd_start) << 21) | (PAGE_PRESENT | PAGE_WRITABLE | PAGE_HUGE);
         }
-    }
-    // Set only the higher half PD entries
-    for (size_t pd_index = hh_pd_start; pd_index <= hh_pd_end; ++pd_index) {
-        PD[pd_index] = KERNEL_V2P(PT + ((pd_index - hh_pd_start) << 9)) | (PAGE_PRESENT | PAGE_WRITABLE);
-    }
-
-    // Zero out all PT entries except the ones we're using for higher half
-    for (size_t i = 0; i < (PAGE_ENTRIES * (hh_pd_end - hh_pd_start + 1)); i++) {
-        if (i >= total_pages) {
-            PT[i] = 0;
-        }
-    }
-    // Set only the higher half PT entries
-    for (uintptr_t i = 0; i < total_pages; ++i) {
-        uintptr_t phys = (start_page + i) << 12;
-        PT[i] = phys | (PAGE_PRESENT | PAGE_WRITABLE);
     }
 
     LOGF("[PAGING] Cleaned up kernel page tabeles (only 0x%lx - 0x%lx remains)\n", virt_start, virt_end);
@@ -157,9 +143,21 @@ uint64_t reserve_required_tablespace(multiboot_parser_t* multiboot) {
     uint64_t total_PML4s = CEIL_DIV(total_PDPTs, PAGE_ENTRIES);
 
     uint64_t table_bytes = (total_PTs + total_PDs + total_PDPTs + total_PML4s) * 4 * MEASUREMENT_UNIT_KB;
+
+    // The kernel range is mapped from this same pool, so the boot tables stay
+    // scratch, meaning it needs its own PDPT and PD plus one PT per 2MiB. That size
+    // depends on KEND, which the pool itself moves, so settle it in two passes
+    // and keep one PT of slack.
+    uint64_t kernel_PTs = CEIL_DIV(KEND + table_bytes + 2 * PAGE_SIZE, PAGE_2MB);
+    kernel_PTs = CEIL_DIV(KEND + table_bytes + (2 + kernel_PTs) * PAGE_SIZE, PAGE_2MB) + 1;
+    table_bytes += (2 + kernel_PTs) * PAGE_SIZE;
     table_bytes = align_up(table_bytes, PAGE_SIZE);
 
     PANIC_ASSERT(KEND + table_bytes < (1UL << 30) && KEND + table_bytes < total_RAM);
+
+    // The kernel PTs must cover every byte of the final kernel range
+    PANIC_ASSERT(kernel_PTs * PAGE_2MB >= KEND + table_bytes);
+    PANIC_ASSERT(kernel_PTs <= PAGE_ENTRIES);
 
     // We need to ensure that we are still within usable memory
 	for (size_t i = 0; i < (*multiboot).memory_map_length; i++) {
@@ -187,6 +185,7 @@ uint64_t reserve_required_tablespace(multiboot_parser_t* multiboot) {
     physmap.total_PDs = total_PDs;
     physmap.total_PDPTs = total_PDPTs;
     physmap.total_PML4s = total_PML4s;
+    physmap.total_kernel_PTs = kernel_PTs;
     physmap.tables_base = (uintptr_t)get_kend(true);
 
     KEND += table_bytes;
@@ -194,6 +193,32 @@ uint64_t reserve_required_tablespace(multiboot_parser_t* multiboot) {
     LOGF("[PAGING] Reserved physmap tablespace (%d MiB)\n", table_bytes / MEASUREMENT_UNIT_MB);
     return table_bytes;
 }
+
+/*
+ * pat_init - Reprogram PAT entry 1 (PWT only PTEs) from write through to
+ * write combining, so the framebuffer can be mapped WC. Entries 0 (WB) and
+ * 3 (PCD|PWT, UC) keep their defaults for RAM and device MMIO.
+ */
+static void pat_init(void) {
+    uint32_t a, b, c, d;
+    cpuid(1, 0, &a, &b, &c, &d);
+    if (!(d & (1u << 16))) return;
+
+    uint64_t pat = read_msr(MSR_PAT);
+    pat &= ~(0xFFULL << 8);
+    pat |= (0x01ULL << 8);
+    write_msr(MSR_PAT, pat);
+    patwc = true;
+}
+
+/*
+ * fb_cache_flags - Cache attribute bits for framebuffer mappings.
+ * WC (PWT selects PAT entry 1) when available, UC otherwise
+ */
+static inline uint64_t fb_cache_flags(void) {
+    return patwc ? PAGE_PWT : (PAGE_PWT | PAGE_PCD);
+}
+
 
 /*
  * build_physmap - This function creates a mapping of all physical RAM into a reserved
@@ -209,10 +234,15 @@ void build_physmap() {
         return;
     }
 
+    pat_init();
+
     uintptr_t pt_base = physmap.tables_base;
     uintptr_t pd_base = pt_base + physmap.total_PTs * PAGE_SIZE;
     uintptr_t pdpt_base = pd_base + physmap.total_PDs * PAGE_SIZE;
     uintptr_t pml4_base = pdpt_base + physmap.total_PDPTs * PAGE_SIZE;
+    uintptr_t kpdpt_base = pml4_base + physmap.total_PML4s * PAGE_SIZE;
+    uintptr_t kpd_base = kpdpt_base + PAGE_SIZE;
+    uintptr_t kpt_base = kpd_base + PAGE_SIZE;
 
     typedef uint64_t pte_t;
     typedef pte_t page_table_t[PAGE_ENTRIES];
@@ -220,11 +250,15 @@ void build_physmap() {
     page_table_t* PDs = (page_table_t*)pd_base;
     page_table_t* PDPTs = (page_table_t*)pdpt_base;
     page_table_t* PML4 = (page_table_t*)pml4_base;
+    page_table_t* KPDPT = (page_table_t*)kpdpt_base;
+    page_table_t* KPD = (page_table_t*)kpd_base;
+    page_table_t* KPTs = (page_table_t*)kpt_base;
 
     // Zero all tables
     kmemset((void*)physmap.tables_base, 0,
         (physmap.total_PTs + physmap.total_PDs +
-         physmap.total_PDPTs + physmap.total_PML4s) * PAGE_SIZE);
+         physmap.total_PDPTs + physmap.total_PML4s +
+         2 + physmap.total_kernel_PTs) * PAGE_SIZE);
 
     // Map RAM (writeback)
     uint64_t pa = 0;
@@ -247,7 +281,7 @@ void build_physmap() {
             uint64_t end2m = (fb_end + 0x1FFFFF) & ~(uint64_t)(0x1FFFFF);
             for (uint64_t pa2m = base2m; pa2m < end2m; pa2m += 0x200000)
                 fb_pd[(pa2m >> 21) & 0x1FF] =
-                    pa2m | (PAGE_PRESENT | PAGE_WRITABLE | PAGE_HUGE | PAGE_PWT | PAGE_PCD);
+                    pa2m | (PAGE_PRESENT | PAGE_WRITABLE | PAGE_HUGE | fb_cache_flags());
             PDPTs[0][pdpt_s] = KERNEL_V2P(fb_pd) | (PAGE_PRESENT | PAGE_WRITABLE);
         }
     } else if (physmap.fb_phys && physmap.fb_phys < physmap.total_RAM) {
@@ -256,7 +290,7 @@ void build_physmap() {
         for (pa = physmap.fb_phys; pa < fb_end && pa < physmap.total_RAM; pa += PAGE_SIZE) {
             uint64_t pti = (pa >> 12) / PAGE_ENTRIES;
             uint64_t pte = (pa >> 12) % PAGE_ENTRIES;
-            PTs[pti][pte] = pa | (PAGE_PRESENT | PAGE_WRITABLE | PAGE_PWT | PAGE_PCD);
+            PTs[pti][pte] = pa | (PAGE_PRESENT | PAGE_WRITABLE | fb_cache_flags());
         }
     }
 
@@ -272,13 +306,22 @@ void build_physmap() {
         for (int e = 0; e < PAGE_ENTRIES && used_pd < physmap.total_PDs; e++)
             PDPTs[i][e] = KERNEL_V2P(&PDs[used_pd++]) | (PAGE_PRESENT | PAGE_WRITABLE);
 
+    // Map the kernel range from the pool so nothing depends on the boot tables
+    for (uint64_t p = 0; p < KEND; p += PAGE_SIZE) {
+        uint64_t kpti = (p >> 12) / PAGE_ENTRIES;
+        uint64_t kpte = (p >> 12) % PAGE_ENTRIES;
+        KPTs[kpti][kpte] = p | (PAGE_PRESENT | PAGE_WRITABLE);
+    }
+    for (uint64_t i = 0; i < physmap.total_kernel_PTs; i++)
+        KPD[0][i] = KERNEL_V2P(&KPTs[i]) | (PAGE_PRESENT | PAGE_WRITABLE);
+    KPDPT[0][PDPT_INDEX(KERNEL_VIRTUAL_BASE)] = KERNEL_V2P(&KPD[0]) | (PAGE_PRESENT | PAGE_WRITABLE);
+
     // Build new PML4
     kmemset(PML4, 0, PAGE_SIZE);
-    uint64_t* old_pml4 = getPML4();
     size_t kernel_index = PML4_INDEX(KERNEL_VIRTUAL_BASE);
     size_t physmap_index = PML4_INDEX(PHYSMAP_VIRTUAL_BASE);
     PANIC_ASSERT(kernel_index != physmap_index);
-    PML4[0][kernel_index] = old_pml4[kernel_index];
+    PML4[0][kernel_index] = KERNEL_V2P(&KPDPT[0]) | (PAGE_PRESENT | PAGE_WRITABLE);
     PML4[0][physmap_index] = KERNEL_V2P(&PDPTs[0]) | (PAGE_PRESENT | PAGE_WRITABLE);
 
     PML4_switch(KERNEL_V2P(pml4_base));

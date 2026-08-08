@@ -117,6 +117,31 @@ void u_putchar(char character){
 }
 
 
+// Accumulates printf output on the stack before hitting the write syscall
+typedef struct {
+  char buf[256];
+  size_t n;
+} uout_buf_t;
+
+/*
+ * _uout_flush - Drain the accumulator through a single write syscall
+ */
+static void _uout_flush(uout_buf_t* b) {
+  if (b->n) syscall_write(b->buf, b->n);
+  b->n = 0;
+}
+
+/*
+ * _uout_append - fctprintf-style sink that fills the accumulator,
+ * flushing in chunks so arbitrarily long output is never truncated
+ */
+static void _uout_append(char character, void* arg) {
+  uout_buf_t* b = (uout_buf_t*)arg;
+  b->buf[b->n++] = character;
+  if (b->n == sizeof(b->buf)) _uout_flush(b);
+}
+
+
 // internal buffer output
 static inline void _out_buffer(char character, void* buffer, size_t idx, size_t maxlen)
 {
@@ -845,13 +870,12 @@ int uprintf_(const char* format, ...)
 {
   va_list va;
   va_start(va, format);
-  char buffer[1024];
-  const int ret = _vsnprintf(_out_buffer, buffer, sizeof(buffer), format, va);
+  uout_buf_t b;
+  b.n = 0;
+  const out_fct_wrap_type wrap = { _uout_append, &b };
+  const int ret = _vsnprintf(_out_fct, (char*)(uintptr_t)&wrap, (size_t)-1, format, va);
+  _uout_flush(&b);
   va_end(va);
-  if (ret > 0) {
-      size_t to_write = ((size_t)ret < sizeof(buffer)) ? (size_t)ret : (sizeof(buffer) - 1);
-      syscall_write(buffer, to_write);
-  }
   return ret;
 }
 
@@ -878,12 +902,11 @@ int usnprintf_(char* buffer, size_t count, const char* format, ...)
 
 int uvprintf_(const char* format, va_list va)
 {
-  char buffer[1024];
-  const int ret = _vsnprintf(_out_buffer, buffer, sizeof(buffer), format, va);
-  if (ret > 0) {
-      size_t to_write = ((size_t)ret < sizeof(buffer)) ? (size_t)ret : (sizeof(buffer) - 1);
-      syscall_write(buffer, to_write);
-  }
+  uout_buf_t b;
+  b.n = 0;
+  const out_fct_wrap_type wrap = { _uout_append, &b };
+  const int ret = _vsnprintf(_out_fct, (char*)(uintptr_t)&wrap, (size_t)-1, format, va);
+  _uout_flush(&b);
   return ret;
 }
 

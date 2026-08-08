@@ -24,8 +24,8 @@ struct thread; // forward declaration for wait queue
 
 typedef struct tty {
     char buffer[TTY_BUFFER_SIZE];
-    uint32_t head;      // Write index
-    uint32_t tail;      // Read index
+    volatile uint32_t head; // Write index
+    volatile uint32_t tail; // Read index
 
     spinlock_t lock;
     struct thread* wait_head;  // threads blocked waiting for input

@@ -158,11 +158,12 @@ check_long_mode:
 # -----------------------------------------------------------------------------
 # setup_page_tables:
 # Initializes the paging structures for long mode to map the first 1GB
-# of physical memory using 4KiB pages.
+# of physical memory using 2MiB pages. This mapping is pure scratch and will
+# be discarded once build_physmap() runs in paging.c
 # -----------------------------------------------------------------------------
 setup_page_tables:
 	# The following code does 2 things:
-	# 1. Identity maps the first 1GB worth of 4kb pages (kvirt = kphys)
+	# 1. Identity maps the first 1GB worth of 2MiB pages (kvirt = kphys)
 	# 2. Maps the same 1GB to kvirt higher half with base address 0xFFFFFFFF80000000
 
     # PML4[0] entry points to the base address of our PDPT table.
@@ -183,30 +184,18 @@ setup_page_tables:
 	# PDPT[510] should also point to PD (for higher half)
 	mov dword ptr [KERNEL_V2P(PDPT) + 510 * 8], eax
 
+    # Each PD entry maps 2MiB directly (Present, Read/Write, Huge)
     mov ecx, 0
 .PD_loop:
     mov eax, ecx
-    shl eax, 12
-    add eax, offset KERNEL_V2P(PT)
-    or eax, 0b11
+    shl eax, 21
+    or eax, 0b10000011
     mov ebx, ecx
     shl ebx, 3
     mov dword ptr [KERNEL_V2P(PD) + ebx], eax
     inc ecx
     cmp ecx, 512
     jne .PD_loop
-
-    mov ecx, 0
-.PT_loop:
-    mov eax, ecx
-    shl eax, 12
-    or eax, 0b11
-    mov ebx, ecx
-    shl ebx, 3
-    mov dword ptr [KERNEL_V2P(PT) + ebx], eax
-    inc ecx
-    cmp ecx, 512 * 512
-    jne .PT_loop
 
     ret
 
@@ -290,8 +279,6 @@ PDPT:
 	.skip 4096
 PD:
 	.skip 4096
-PT:
-	.skip 4096 * 512
 
 # -----------------------------------------------------------------------------
 # Read-only data section containing 64-bit GDT entries and pointer descriptor

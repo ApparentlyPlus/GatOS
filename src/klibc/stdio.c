@@ -135,6 +135,53 @@ void _putchar(char character){
     tty_write(target_tty, &character, 1);
 }
 
+/*
+ * _putbuf - Batched counterpart of _putchar: one sink call per chunk
+ * instead of one lock/cursor cycle per character
+ */
+static void _putbuf(const char* buf, size_t len) {
+    if (!len) return;
+    tty_t* target_tty = active_tty;
+
+    // Route to the calling thread's own TTY if the scheduler is running
+    if (sched_active()) {
+        thread_t* current = sched_current();
+        if (current && current->process && current->process->tty) {
+            target_tty = current->process->tty;
+        }
+    }
+
+    // If the TTY is NULL (closed via ALT+F4), discard the output
+    if (!target_tty) {
+        return;
+    }
+
+    tty_write(target_tty, buf, len);
+}
+
+// Accumulates printf output on the stack before hitting the sink
+typedef struct {
+  char buf[256];
+  size_t n;
+} kout_buf_t;
+
+/*
+ * _kout_flush - Drain the accumulator through _putbuf
+ */
+static void _kout_flush(kout_buf_t* b) {
+  _putbuf(b->buf, b->n);
+  b->n = 0;
+}
+
+/*
+ * _kout_append - fctprintf-style sink that fills the accumulator
+ */
+static void _kout_append(char character, void* arg) {
+  kout_buf_t* b = (kout_buf_t*)arg;
+  b->buf[b->n++] = character;
+  if (b->n == sizeof(b->buf)) _kout_flush(b);
+}
+
 // internal buffer output
 static inline void _out_buffer(char character, void* buffer, size_t idx, size_t maxlen)
 {
@@ -863,8 +910,11 @@ int printf_(const char* format, ...)
 {
   va_list va;
   va_start(va, format);
-  char buffer[1];
-  const int ret = _vsnprintf(_out_char, buffer, (size_t)-1, format, va);
+  kout_buf_t b;
+  b.n = 0;
+  const out_fct_wrap_type wrap = { _kout_append, &b };
+  const int ret = _vsnprintf(_out_fct, (char*)(uintptr_t)&wrap, (size_t)-1, format, va);
+  _kout_flush(&b);
   va_end(va);
   return ret;
 }
@@ -892,8 +942,12 @@ int snprintf_(char* buffer, size_t count, const char* format, ...)
 
 int vprintf_(const char* format, va_list va)
 {
-  char buffer[1];
-  return _vsnprintf(_out_char, buffer, (size_t)-1, format, va);
+  kout_buf_t b;
+  b.n = 0;
+  const out_fct_wrap_type wrap = { _kout_append, &b };
+  const int ret = _vsnprintf(_out_fct, (char*)(uintptr_t)&wrap, (size_t)-1, format, va);
+  _kout_flush(&b);
+  return ret;
 }
 
 

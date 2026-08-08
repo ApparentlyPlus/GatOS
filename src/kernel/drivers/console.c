@@ -19,6 +19,7 @@
 #include <kernel/drivers/tty.h>
 #include <arch/x86_64/memory/paging.h>
 #include <kernel/memory/heap.h>
+#include <kernel/memory/pmm.h>
 #include <klibc/string.h>
 #include <klibc/stdio.h>
 #include <stdarg.h>
@@ -53,7 +54,49 @@ static uint32_t ccx = 0;
 static uint32_t ccy = 0;
 static uint8_t cfg = CONSOLE_COLOR_WHITE;
 static uint8_t cbg = CONSOLE_COLOR_RED;
-static char     cbuf[2048];
+static char cbuf[2048];
+
+// Text cell shadow for the crash console, so scrolling redraws from RAM
+// instead of reading the framebuffer (WC/UC reads are extremely slow).
+static uint32_t* crash_shadow = NULL;
+static size_t crash_sh_cols = 0;
+static size_t crash_sh_rows = 0;
+
+/*
+ * glyph_index - Map a codepoint onto its glyph slot (CP437 or synthesized)
+ */
+static inline uint16_t glyph_index(uint32_t cp) {
+    uint16_t idx = unicode_to_glyph(cp);
+    if (idx == 0 && cp != 0) idx = 0x3F;
+    return idx;
+}
+
+/*
+ * crash_pack - Encode a codepoint with colors into one shadow cell
+ */
+static inline uint32_t crash_pack(uint32_t cp, uint8_t fg, uint8_t bg) {
+    return (uint32_t)glyph_index(cp) | ((uint32_t)(fg & 0xF) << 16) | ((uint32_t)(bg & 0xF) << 20);
+}
+
+/*
+ * con_crash_shadow_init - Give the crash console its scroll shadow.
+ * console_init runs before the PMM exists, so this is called separately once
+ * memory is available.
+ */
+void con_crash_shadow_init(void) {
+    if (crash_shadow || !cols || !rows) return;
+
+    uint64_t phys;
+    size_t cells = cols * rows;
+    if (pmm_alloc(cells * sizeof(uint32_t), &phys) != PMM_OK) return;
+
+    crash_shadow = (uint32_t*)PHYSMAP_P2V(phys);
+    crash_sh_cols = cols;
+    crash_sh_rows = rows;
+
+    uint32_t blank = crash_pack(' ', cfg, cbg);
+    for (size_t i = 0; i < cells; i++) crash_shadow[i] = blank;
+}
 
 #pragma region Hardware Drawing
 
@@ -85,33 +128,35 @@ static void draw_glyph(uint8_t* glyph, size_t px, size_t py, uint32_t fg, uint32
         return;
     }
 
-    // Fast path for 32bpp framebuffers is to write an entire glyph row as 8 pixels in a tight loop
+    // Fast path for 32bpp framebuffers
     uint32_t* row_ptr = (uint32_t*)(fb + py * fb_pitch + px * 4);
     size_t pitch_u32 = fb_pitch / 4;
     uint32_t colors[2] = { bg, fg };
+
+    // Each glyph row is 8 pixels wide, so we can write it as 4 pairs of 32-bit pixels (64 bits total)
     for (size_t y = 0; y < fh; y++) {
         uint8_t bits = glyph[y];
-        row_ptr[0] = colors[(bits >> 7) & 1];
-        row_ptr[1] = colors[(bits >> 6) & 1];
-        row_ptr[2] = colors[(bits >> 5) & 1];
-        row_ptr[3] = colors[(bits >> 4) & 1];
-        row_ptr[4] = colors[(bits >> 3) & 1];
-        row_ptr[5] = colors[(bits >> 2) & 1];
-        row_ptr[6] = colors[(bits >> 1) & 1];
-        row_ptr[7] = colors[(bits >> 0) & 1];
+        uint64_t* p = (uint64_t*)row_ptr;
+        p[0] = (uint64_t)colors[(bits >> 7) & 1] | ((uint64_t)colors[(bits >> 6) & 1] << 32);
+        p[1] = (uint64_t)colors[(bits >> 5) & 1] | ((uint64_t)colors[(bits >> 4) & 1] << 32);
+        p[2] = (uint64_t)colors[(bits >> 3) & 1] | ((uint64_t)colors[(bits >> 2) & 1] << 32);
+        p[3] = (uint64_t)colors[(bits >> 1) & 1] | ((uint64_t)colors[(bits >> 0) & 1] << 32);
         row_ptr += pitch_u32;
     }
 }
 
 /*
- * get_glyph - Returns a pointer to the PSF1 glyph data for the given codepoint
+ * get_glyph_idx - Returns the PSF1 glyph data for an already resolved slot
+ */
+static uint8_t* get_glyph_idx(uint16_t idx) {
+    return (uint8_t*)font_glyph(idx);
+}
+
+/*
+ * get_glyph - Returns the PSF1 glyph data for the given codepoint
  */
 static uint8_t* get_glyph(uint32_t cp) {
-    psf1_font_t* font = font_get_current();
-    if (!font) return NULL;
-    uint8_t idx = unicode_to_cp437(cp);
-    if (idx == 0 && cp != 0) idx = 0x3F;
-    return (uint8_t*)font->glyph_buffer + idx * font->header->charsize;
+    return get_glyph_idx(glyph_index(cp));
 }
 
 /*
@@ -135,13 +180,12 @@ static void render_cursor(console_t* con, bool on) {
         bool clipped = (px + fw > fb_w) || (py + fh > fb_h);
         if (fb_bpp == 32 && !clipped) {
             uint32_t color = VGA_PALETTE[con->fg];
+            uint64_t c2 = (uint64_t)color | ((uint64_t)color << 32);
             uint32_t* row_ptr = (uint32_t*)(fb + py * fb_pitch + px * 4);
             size_t pitch_u32 = fb_pitch / 4;
             for (size_t y = 0; y < fh; y++) {
-                row_ptr[0] = color; row_ptr[1] = color;
-                row_ptr[2] = color; row_ptr[3] = color;
-                row_ptr[4] = color; row_ptr[5] = color;
-                row_ptr[6] = color; row_ptr[7] = color;
+                uint64_t* p = (uint64_t*)row_ptr;
+                p[0] = c2; p[1] = c2; p[2] = c2; p[3] = c2;
                 row_ptr += pitch_u32;
             }
         } else {
@@ -167,6 +211,57 @@ static void render_cursor(console_t* con, bool on) {
 #define DIRTY_SET_ALL(con)  if ((con)->dirty) kmemset((con)->dirty, 0xFF, ((con)->width * (con)->height + 7) / 8)
 #define DIRTY_CLR_ALL(con)  if ((con)->dirty) kmemset((con)->dirty, 0x00, ((con)->width * (con)->height + 7) / 8)
 
+// Max glyph run length for flush_display
+#define GLYPH_RUN_MAX 16
+
+/*
+ * draw_glyph_run - Renders count consecutive cells of row y in one pass
+ */
+static void draw_glyph_run(console_t* con, size_t y, size_t x0, size_t count) {
+    size_t py = y * (fh + PADDING_Y);
+    size_t px = x0 * fw;
+
+    // Anything but a fully onscreen 32bpp run goes through the per-cell path
+    if (fb_bpp != 32 || px + count * fw > fb_w || py + fh > fb_h) {
+        for (size_t i = 0; i < count; i++) {
+            console_char_t c = con->buffer[y * con->width + x0 + i];
+            draw_glyph(get_glyph(c.codepoint), (x0 + i) * fw, py, VGA_PALETTE[c.fg], VGA_PALETTE[c.bg]);
+        }
+        return;
+    }
+
+    // Resolve each cell once, not once per glyph row
+    uint8_t* glyphs[GLYPH_RUN_MAX];
+    uint32_t fgc[GLYPH_RUN_MAX];
+    uint32_t bgc[GLYPH_RUN_MAX];
+
+    // Gather glyphs and colors for the run
+    for (size_t i = 0; i < count; i++) {
+        console_char_t c = con->buffer[y * con->width + x0 + i];
+        glyphs[i] = get_glyph(c.codepoint);
+        fgc[i] = VGA_PALETTE[c.fg];
+        bgc[i] = VGA_PALETTE[c.bg];
+    }
+
+    uint32_t* row_ptr = (uint32_t*)(fb + py * fb_pitch + px * 4);
+    size_t pitch_u32 = fb_pitch / 4;
+
+    // Each glyph row is 8 pixels wide, so we can write it as 4 pairs of 32bit pixels (64 bits total)
+    for (size_t gy = 0; gy < fh; gy++) {
+        uint64_t* p = (uint64_t*)row_ptr;
+        for (size_t i = 0; i < count; i++) {
+            uint8_t bits = glyphs[i] ? glyphs[i][gy] : 0;
+            uint32_t colors[2] = { bgc[i], fgc[i] };
+            p[0] = (uint64_t)colors[(bits >> 7) & 1] | ((uint64_t)colors[(bits >> 6) & 1] << 32);
+            p[1] = (uint64_t)colors[(bits >> 5) & 1] | ((uint64_t)colors[(bits >> 4) & 1] << 32);
+            p[2] = (uint64_t)colors[(bits >> 3) & 1] | ((uint64_t)colors[(bits >> 2) & 1] << 32);
+            p[3] = (uint64_t)colors[(bits >> 1) & 1] | ((uint64_t)colors[(bits >> 0) & 1] << 32);
+            p += 4;
+        }
+        row_ptr += pitch_u32;
+    }
+}
+
 /*
  * flush_display - Flushes dirty character cells to the framebuffer
  * Assumption: No SMP
@@ -191,17 +286,37 @@ static void flush_display(console_t* con) {
         return;
     }
 
-    // With dirty tracking, we can skip cells that haven't changed since the last flush
-    for (size_t y = 0; y < con->height; y++) {
-        for (size_t x = 0; x < con->width; x++) {
-            size_t idx = y * con->width + x;
-            // skipskipskip
-            if (!DIRTY_TST(con, idx)) continue;
-            console_char_t c = con->buffer[idx];
-            draw_glyph(get_glyph(c.codepoint), x * fw, y * (fh + PADDING_Y), VGA_PALETTE[c.fg], VGA_PALETTE[c.bg]);
-            DIRTY_CLR(con, idx);
+    // With dirty tracking, scan the bitmap a word at a time and skip
+    // clean runs of 64 cells with a single compare
+    size_t cells = con->width * con->height;
+    uint64_t* dw = (uint64_t*)con->dirty;
+    size_t words = (cells + 63) / 64;
+    size_t run_y = 0, run_x = 0, run_n = 0;
+
+    // Scan each word of the dirty bitmap
+    for (size_t w = 0; w < words; w++) {
+        uint64_t bits = dw[w];
+        if (!bits) continue;
+        dw[w] = 0;
+
+        // Scan each bit in the word, which corresponds to a cell in the backbuffer
+        while (bits) {
+            size_t idx = w * 64 + (size_t)__builtin_ctzll(bits);
+            bits &= bits - 1;
+            if (idx >= cells) break;
+            size_t x = idx % con->width;
+            size_t y = idx / con->width;
+
+            // Extend the current run when this cell simply follows it
+            if (run_n && y == run_y && x == run_x + run_n && run_n < GLYPH_RUN_MAX) {
+                run_n++;
+                continue;
+            }
+            if (run_n) draw_glyph_run(con, run_y, run_x, run_n);
+            run_y = y; run_x = x; run_n = 1;
         }
     }
+    if (run_n) draw_glyph_run(con, run_y, run_x, run_n);
 
     // After flushing, ensure the cursor is drawn on top of any recently changed cells
     if (con->on) render_cursor(con, true);
@@ -219,11 +334,47 @@ static void scroll(console_t* con) {
     size_t rows = con->height - first;
     if (!rows) return;
 
+    extern tty_t* volatile active_tty;
+    bool active = fb && active_tty && active_tty->console == con;
+
+    // Here we are in immediate mode, so we can scroll the framebuffer directly
+    if (active && !con->defer_render) {
+        console_char_t blank = (console_char_t){ ' ', con->fg, con->bg };
+        for (size_t y = first; y < con->height; y++) {
+            for (size_t x = 0; x < con->width; x++) {
+                size_t idx = y * con->width + x;
+                console_char_t nc = (y + 1 < con->height) ? con->buffer[idx + con->width] : blank;
+                console_char_t oc = con->buffer[idx];
+                DIRTY_CLR(con, idx);
+                if (nc.codepoint == oc.codepoint && nc.fg == oc.fg && nc.bg == oc.bg) continue;
+                draw_glyph(get_glyph(nc.codepoint), x * fw, y * (fh + PADDING_Y), VGA_PALETTE[nc.fg], VGA_PALETTE[nc.bg]);
+            }
+        }
+    }
+
+    // Here we are in deferred mode, so the framebuffer is not touched until flush_display.
+    // However, we still need to ensure that the backbuffer is consistent with the framebuffer.
+    if (active && con->defer_render && con->dirty) {
+        console_char_t blank = (console_char_t){ ' ', con->fg, con->bg };
+        for (size_t y = first; y < con->height; y++) {
+            for (size_t x = 0; x < con->width; x++) {
+                size_t idx = y * con->width + x;
+
+                // Already stale on screen, so it is redrawn regardless
+                if (DIRTY_TST(con, idx)) continue;
+                console_char_t nc = (y + 1 < con->height) ? con->buffer[idx + con->width] : blank;
+                console_char_t oc = con->buffer[idx];
+                if (nc.codepoint != oc.codepoint || nc.fg != oc.fg || nc.bg != oc.bg)
+                    DIRTY_SET(con, idx);
+            }
+        }
+    }
+
     // Move all rows up by one in the backbuffer, then clear the last row
     if (rows > 1){
         kmemmove(con->buffer + first * con->width, con->buffer + (first + 1) * con->width, (rows - 1) * con->width * sizeof(console_char_t));
     }
-    
+
     // Clear the last row in the backbuffer and update cursor position
     for (size_t x = 0; x < con->width; x++) {
         size_t idx = (con->height - 1) * con->width + x;
@@ -233,43 +384,6 @@ static void scroll(console_t* con) {
     // Move cursor up one line, but not into the header area
     con->cy--;
     if (con->cy < first) con->cy = first;
-
-    if (fb) {
-        extern tty_t* volatile active_tty;
-        // If we have a framebuffer and this console is active
-        // we can do an efficient pixel level scroll using memmove and a single fill for the new line
-        if (active_tty && active_tty->console == con) {
-            if (!con->defer_render) {
-                uint32_t row_h = (uint32_t)(fh + PADDING_Y);
-                size_t first_px = first * row_h;
-                size_t src_off = (first_px + row_h) * fb_pitch;
-                size_t dst_off = first_px * fb_pitch;
-                size_t move_bytes = (rows - 1) * row_h * fb_pitch;
-
-                if (move_bytes > 0)
-                    kmemmove(fb + dst_off, fb + src_off, move_bytes);
-
-                // Clear the last line
-                uint32_t bg_color = VGA_PALETTE[con->bg];
-                size_t last_row_off = (con->height - 1) * row_h * fb_pitch;
-                size_t last_row_len = row_h * fb_pitch;
-
-                // If the framebuffer is 32bpp we can do a single memset for the entire row, otherwise we have to loop
-                if (fb_bpp == 32) {
-                    uint32_t* p = (uint32_t*)(fb + last_row_off);
-                    for (size_t i = 0; i < last_row_len / 4; i++) p[i] = bg_color;
-                } else {
-                    for (uint32_t y = 0; y < row_h; y++)
-                        for (uint32_t x = 0; x < fb_w; x++)
-                            put_pixel(x, (uint32_t)((con->height - 1) * row_h) + y, bg_color);
-                }
-            } else {
-                // Deferred mode here
-                // Mark all content cells dirty so flush_display redraws from the scrolled backbuffer
-                DIRTY_SET_ALL(con);
-            }
-        }
-    }
 }
 
 /*
@@ -285,6 +399,7 @@ static void emit_cp(console_t* con, uint32_t cp) {
         if (con->cx > 0) con->cx--;
         size_t idx = con->cy * con->width + con->cx;
         con->buffer[idx].codepoint = ' ';
+        
         // If this console is active and we're not deferring rendering
         // we can immediately erase the character on the framebuffer
         DIRTY_SET(con, idx);
@@ -312,13 +427,13 @@ bool con_init(console_t* con) {
     con->width = cols; con->height = rows;
     con->cx = 0; con->cy = 0;
     con->fg = CONSOLE_COLOR_WHITE; con->bg = CONSOLE_COLOR_BLACK;
-    con->u8n = 0; con->u8cp = 0;
+    con->u8n = 0; con->u8cp = 0; con->u8lead = 0;
     con->ansi_st = 0; con->reent = 0;
     con->on = true; con->header_rows = 0;
     con->defer_render = false;
     con->buffer = kmalloc(con->width * con->height * sizeof(console_char_t));
     if (!con->buffer) return false;
-    size_t dirty_bytes = (con->width * con->height + 7) / 8;
+    size_t dirty_bytes = ((con->width * con->height + 63) / 64) * 8;
     con->dirty = kmalloc(dirty_bytes);
     if (con->dirty) kmemset(con->dirty, 0, dirty_bytes);
     spinlock_init(&con->lock, "console_lock");
@@ -349,8 +464,13 @@ void con_clear(console_t* con, uint8_t background) {
         size_t start_py = con->header_rows * (fh + PADDING_Y);
         if (fb_bpp == 32) {
             size_t off = start_py * fb_pitch / 4;
+            size_t count = (fb_sz / 4) - off;
             uint32_t* p = (uint32_t*)fb + off;
-            for (size_t i = 0; i < (fb_sz / 4) - off; i++) p[i] = bg_color;
+            uint64_t c2 = (uint64_t)bg_color | ((uint64_t)bg_color << 32);
+            size_t pairs = count / 2;
+            uint64_t* q = (uint64_t*)p;
+            for (size_t i = 0; i < pairs; i++) q[i] = c2;
+            if (count & 1) p[count - 1] = bg_color;
         } else {
             for (uint32_t y = (uint32_t)start_py; y < fb_h; y++)
                 for (uint32_t x = 0; x < fb_w; x++)
@@ -401,16 +521,37 @@ static void _con_process_byte(console_t* con, uint8_t byte) {
         return;
     }
 
+// utf8 decoding state machine
+utf8_restart:
     if (con->u8n == 0) {
-        if      ((byte & 0x80) == 0x00) emit_cp(con, byte);
-        else if ((byte & 0xE0) == 0xC0) { con->u8n = 1; con->u8cp = byte & 0x1F; }
-        else if ((byte & 0xF0) == 0xE0) { con->u8n = 2; con->u8cp = byte & 0x0F; }
-        else if ((byte & 0xF8) == 0xF0) { con->u8n = 3; con->u8cp = byte & 0x07; }
-    } else {
-        if ((byte & 0xC0) == 0x80) {
-            con->u8cp = (con->u8cp << 6) | (byte & 0x3F);
-            if (--con->u8n == 0) emit_cp(con, con->u8cp);
-        } else { con->u8n = 0; emit_cp(con, 0xFFFD); }
+        if ((byte & 0x80u) == 0x00u) { emit_cp(con, byte); return; }
+        if ((byte & 0xE0u) == 0xC0u) {
+            if (byte < 0xC2u) { emit_cp(con, 0xFFFD); return; } // C0/C1 are always overlong
+            con->u8n = 1; con->u8cp = byte & 0x1Fu;
+        } else if ((byte & 0xF0u) == 0xE0u) {
+            con->u8n = 2; con->u8cp = byte & 0x0Fu;
+        } else if ((byte & 0xF8u) == 0xF0u && byte <= 0xF4u) {
+            con->u8n = 3; con->u8cp = byte & 0x07u;
+        } else {
+            emit_cp(con, 0xFFFD); return; // 80..BF stray, F5..FF invalid
+        }
+        con->u8lead = byte;
+        return;
+    }
+
+    if ((byte & 0xC0u) != 0x80u) { // sequence cut short
+        con->u8n = 0;
+        emit_cp(con, 0xFFFD);
+        goto utf8_restart;
+    }
+
+    con->u8cp = (con->u8cp << 6) | (byte & 0x3Fu);
+    if (--con->u8n == 0) {
+        uint32_t cp  = con->u8cp;
+        uint32_t min = (con->u8lead < 0xE0u) ? 0x80u
+                     : (con->u8lead < 0xF0u) ? 0x800u : 0x10000u;
+        if (cp < min || cp > 0x10FFFFu || (cp >= 0xD800u && cp <= 0xDFFFu)) cp = 0xFFFD;
+        emit_cp(con, cp);
     }
 }
 
@@ -565,47 +706,110 @@ static inline void crash_pix(uint32_t x, uint32_t y, uint32_t color) {
     else { dst[0] = color & 0xFF; dst[1] = (color >> 8) & 0xFF; dst[2] = (color >> 16) & 0xFF; }
 }
 
+void con_crash_clear(uint8_t bg);
+
 /*
- * crash_scroll - Pixel-level scroll of the crash view by one text row
+ * crash_set_cell - Record a codepoint with the current colors in the shadow
  */
-static void crash_scroll(void) {
-    uint32_t row_h = (uint32_t)fh + PADDING_Y;
-    size_t row_bytes = row_h * fb_pitch;
-    size_t total = (size_t)fb_h * fb_pitch;
-    kmemmove(fb, fb + row_bytes, total - row_bytes);
-    uint32_t bg = VGA_PALETTE[cbg];
-    uint8_t* last = fb + total - row_bytes;
-    if (fb_bpp == 32) {
-        uint32_t* p = (uint32_t*)last;
-        for (size_t i = 0; i < row_bytes / 4; i++) p[i] = bg;
-    } else {
-        for (uint32_t y = 0; y < row_h; y++)
-            for (uint32_t x = 0; x < fb_w; x++)
-                crash_pix(x, fb_h - row_h + y, bg);
-    }
-    if (ccy > 0) ccy = (uint32_t)rows - 1;
+static inline void crash_set_cell(uint32_t x, uint32_t y, uint32_t cp) {
+    if (crash_shadow && x < crash_sh_cols && y < crash_sh_rows)
+        crash_shadow[(size_t)y * crash_sh_cols + x] = crash_pack(cp, cfg, cbg);
 }
 
 /*
- * crash_emit - Renders one ASCII byte directly to the framebuffer
+ * crash_draw_glyph - Draw one codepoint cell to the framebuffer (write-only).
+ * Works at any resolution, independent of the shadow's coverage.
  */
-static void crash_emit(uint8_t c) {
+static void crash_draw_glyph(uint16_t gidx, uint8_t fg, uint8_t bg, uint32_t x, uint32_t y) {
+    if (x >= (uint32_t)cols || y >= (uint32_t)rows) return;
     uint32_t row_h = (uint32_t)fh + PADDING_Y;
-    if      (c == '\n') { ccx = 0; ccy++; }
-    else if (c == '\r') { ccx = 0; }
-    else if (c == '\t') { ccx = (ccx + 4) & ~3u; }
+    uint32_t px = x * 8;
+    uint32_t py = y * row_h;
+    uint32_t fgc = VGA_PALETTE[fg & 0xF];
+    uint32_t bgc = VGA_PALETTE[bg & 0xF];
+    uint8_t* glyph = get_glyph_idx(gidx);
+
+    // paired 64bit stores per glyph row for 32bpp
+    if (fb_bpp == 32 && px + 8 <= fb_w && py + row_h <= fb_h) {
+        uint32_t* row_ptr = (uint32_t*)(fb + (size_t)py * fb_pitch + px * 4);
+        size_t pitch_u32 = fb_pitch / 4;
+        uint32_t colors[2] = { bgc, fgc };
+        for (uint32_t gy = 0; gy < row_h; gy++) {
+            uint8_t bits = (glyph && gy < (uint32_t)fh) ? glyph[gy] : 0;
+            uint64_t* p = (uint64_t*)row_ptr;
+            p[0] = (uint64_t)colors[(bits >> 7) & 1] | ((uint64_t)colors[(bits >> 6) & 1] << 32);
+            p[1] = (uint64_t)colors[(bits >> 5) & 1] | ((uint64_t)colors[(bits >> 4) & 1] << 32);
+            p[2] = (uint64_t)colors[(bits >> 3) & 1] | ((uint64_t)colors[(bits >> 2) & 1] << 32);
+            p[3] = (uint64_t)colors[(bits >> 1) & 1] | ((uint64_t)colors[(bits >> 0) & 1] << 32);
+            row_ptr += pitch_u32;
+        }
+        return;
+    }
+
+    // Fallback to per pixel writes for any other case (non-32bpp, partial glyphs, etc)
+    for (uint32_t gy = 0; gy < row_h; gy++) {
+        uint8_t bits = (glyph && gy < (uint32_t)fh) ? glyph[gy] : 0;
+        for (uint32_t gx = 0; gx < 8; gx++)
+            crash_pix(px + gx, py + gy, ((bits >> (7 - gx)) & 1) ? fgc : bgc);
+    }
+}
+
+/*
+ * crash_scroll - Scroll the crash view by one text row
+ */
+static void crash_scroll(void) {
+    uint32_t r = (uint32_t)rows;
+    uint32_t c = (uint32_t)cols;
+
+    // No shadow means no record of what is on screen (a panic before the PMM
+    // came up, or the allocation failed), so clear rather than scroll
+    if (!crash_shadow || c != crash_sh_cols || r != crash_sh_rows) {
+        con_crash_clear(cbg);
+        return;
+    }
+
+    // Compare each cell to the one below it and redraw only those that change
+    uint32_t blank = crash_pack(' ', cfg, cbg);
+    for (uint32_t y = 0; y + 1 < r; y++)
+        for (uint32_t x = 0; x < c; x++) {
+            uint32_t nc = crash_shadow[(size_t)(y + 1) * c + x];
+            if (nc != crash_shadow[(size_t)y * c + x])
+                crash_draw_glyph((uint16_t)(nc & 0xFFFF), (nc >> 16) & 0xF, (nc >> 20) & 0xF, x, y);
+        }
+
+    // Clear the last row in the shadow and redraw any non-blank cells that were scrolled off
+    for (uint32_t x = 0; x < c; x++)
+        if (crash_shadow[(size_t)(r - 1) * c + x] != blank)
+            crash_draw_glyph(glyph_index(' '), cfg, cbg, x, r - 1);
+
+    // Shift the shadow up by one row and clear the last row
+    kmemmove(crash_shadow, crash_shadow + c, (size_t)(r - 1) * c * sizeof(uint32_t));
+    for (uint32_t x = 0; x < c; x++)
+        crash_shadow[(size_t)(r - 1) * c + x] = blank;
+    if (ccy > 0) ccy = r - 1;
+}
+
+/*
+ * crash_emit - Renders one Unicode codepoint directly to the framebuffer.
+ * Drawing never depends on the shadow, so output is correct at any
+ * resolution.
+ */
+static void crash_emit(uint32_t cp) {
+    if      (cp == '\n') { ccx = 0; ccy++; }
+    else if (cp == '\r') { ccx = 0; }
+    else if (cp == '\t') { ccx = (ccx + 4) & ~3u; }
+    else if (cp == '\b') {
+        if (ccx > 0) {
+            ccx--;
+            crash_set_cell(ccx, ccy, ' ');
+            crash_draw_glyph(glyph_index(' '), cfg, cbg, ccx, ccy);
+        }
+    }
     else {
         if (ccx >= (uint32_t)cols) { ccx = 0; ccy++; }
         if (ccy >= (uint32_t)rows) crash_scroll();
-        uint32_t px = ccx * 8;
-        uint32_t py = ccy * row_h;
-        uint8_t* glyph = get_glyph(c);
-        if (glyph)
-            for (uint32_t y = 0; y < (uint32_t)fh; y++) {
-                uint8_t bits = glyph[y];
-                for (uint32_t x = 0; x < 8; x++)
-                    crash_pix(px + x, py + y, ((bits >> (7 - x)) & 1) ? VGA_PALETTE[cfg] : VGA_PALETTE[cbg]);
-            }
+        crash_set_cell(ccx, ccy, cp);
+        crash_draw_glyph(glyph_index(cp), cfg, cbg, ccx, ccy);
         ccx++;
     }
     if (ccy >= (uint32_t)rows) crash_scroll();
@@ -617,11 +821,21 @@ static void crash_emit(uint8_t c) {
 void con_crash_clear(uint8_t bg) {
     if (!fb) return;
     cbg = bg & 0xF; ccx = 0; ccy = 0;
+    if (crash_shadow) {
+        uint32_t blank = crash_pack(' ', cfg, cbg);
+        size_t cells = crash_sh_cols * crash_sh_rows;
+        for (size_t i = 0; i < cells; i++) crash_shadow[i] = blank;
+    }
     uint32_t color = VGA_PALETTE[cbg];
     size_t total = (size_t)fb_h * fb_pitch;
     if (fb_bpp == 32) {
+        size_t count = total / 4;
         uint32_t* p = (uint32_t*)fb;
-        for (size_t i = 0; i < total / 4; i++) p[i] = color;
+        uint64_t c2 = (uint64_t)color | ((uint64_t)color << 32);
+        size_t pairs = count / 2;
+        uint64_t* q = (uint64_t*)p;
+        for (size_t i = 0; i < pairs; i++) q[i] = c2;
+        if (count & 1) p[count - 1] = color;
     } else {
         for (uint32_t y = 0; y < fb_h; y++)
             for (uint32_t x = 0; x < fb_w; x++)

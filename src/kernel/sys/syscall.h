@@ -20,11 +20,15 @@
 #define SYS_SLEEP_MS 7
 #define SYS_READ 8
 #define SYS_TTY_CTRL 9
+#define SYS_TIME_NS 11
+#define SYS_POWEROFF 12
+#define SYS_REBOOT 13
 
 // TTY Control Commands
-#define TTY_CTRL_CLEAR    0
-#define TTY_CTRL_CURSOR   1
-#define TTY_CTRL_GET_DIMS 2
+#define TTY_CTRL_CLEAR     0
+#define TTY_CTRL_CURSOR    1
+#define TTY_CTRL_GET_DIMS  2
+#define TTY_CTRL_SET_COLOR 3
 
 void syscall_init(void);
 void syscall_dispatcher(cpu_context_t* regs);

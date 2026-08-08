@@ -682,12 +682,14 @@ cleanup_kpt(0x0, get_kend(false));
 
 Internally, the function:
 
-1. Determines which PML4, PDPT, PD, and PT indices are needed to cover the given range as a higher-half virtual mapping.
+1. Determines which PML4, PDPT, and PD indices are needed to cover the given range as a higher-half virtual mapping.
 2. Zeros every PML4 entry except the one pointing to the kernel's higher-half region.
 3. Zeros every PDPT entry except the one used by the kernel.
-4. Zeros every PD entry that falls outside the kernel's range.
-5. Zeros every PT entry that maps a page beyond the end of the kernel.
-6. Calls `flush_tlb`.
+4. Rewrites the PD: entries outside the kernel's range are zeroed, and each in-range entry is written as a `2MiB` huge page that maps the kernel directly.
+5. Calls `flush_tlb`.
+
+>[!NOTE]
+> The boot tables map the kernel with `2MiB` huge pages (Chapter 3), so the trim bottoms out at the PD — there are no scratch PTs to walk. This is only ever a stopgap anyway: `build_physmap` shortly replaces the whole thing with proper pool-backed tables.
 
 ### If we wanted to be explicit?
 
@@ -748,10 +750,10 @@ Finally, in `paging.h`, the preallocated page table counts used in the pointer a
 #define PREALLOC_PML4s  1
 #define PREALLOC_PDPTs  1
 #define PREALLOC_PDs    1
-#define PREALLOC_PTs    512
+#define PREALLOC_PTs    0
 ```
 
-These reflect the layout established during bootstrap in `boot32.S`. Since the tables are allocated contiguously in `.bss`, arithmetic like `PML4 + PAGE_ENTRIES * PREALLOC_PML4s` skips 512 entries forward to reach the start of the PDPT.
+These reflect the layout established during bootstrap in `boot32.S`. Since the tables are allocated contiguously in `.bss`, arithmetic like `PML4 + PAGE_ENTRIES * PREALLOC_PML4s` skips 512 entries forward to reach the start of the PDPT. `PREALLOC_PTs` is `0` because the boot map uses `2MiB` huge pages straight out of the `PD` — there is no scratch PT level anymore.
 
 >[!IMPORTANT]
 > Any attempt to access a lower-half address after this cleanup will cause a page fault. This is intentional. The kernel has no reason to operate in low memory anymore.

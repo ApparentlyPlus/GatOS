@@ -111,7 +111,7 @@ static void hpet_init(void) {
     void* virt_addr = NULL;
 
     // Map HPET registers
-    if (vmm_alloc(NULL, PAGE_SIZE, VM_FLAG_WRITE | VM_FLAG_MMIO, (void*)phys_addr, &virt_addr) != VMM_OK) {
+    if (vmm_alloc(NULL, PAGE_SIZE, VM_FLAG_WRITE | VM_FLAG_FOREIGN | VM_FLAG_DEVICE, (void*)phys_addr, &virt_addr) != VMM_OK) {
         LOGF("[TIMER] Failed to map HPET registers.\n");
         return;
     }
@@ -267,7 +267,9 @@ void sleep_ms(uint64_t ms) {
         uint64_t target = tsc_read() + (ms * tsc_tpm);
         while (tsc_read() < target) __asm__ volatile("pause");
     } else if (hpet_is_available()) {
-        uint64_t target = hpet_read_counter() + (ms * 1000000000000ULL / hpet_period);
+        uint64_t q = 1000000000000ULL / hpet_period;
+        uint64_t r = 1000000000000ULL % hpet_period;
+        uint64_t target = hpet_read_counter() + ms * q + (ms * r) / hpet_period;
         while (hpet_read_counter() < target) __asm__ volatile("pause");
     } else {
         for (uint64_t i = 0; i < ms; i++) {
@@ -308,7 +310,10 @@ uint64_t get_uptime_ms(void) {
  */
 uint64_t get_uptime_ns(void) {
     if (tsc_tpm == 0) return 0;
-    return ((tsc_read() - boot_tsc) * 1000000) / tsc_tpm;
+    uint64_t delta = tsc_read() - boot_tsc;
+    uint64_t whole = delta / tsc_tpm;
+    uint64_t rem = delta % tsc_tpm;
+    return whole * 1000000 + (rem * 1000000) / tsc_tpm;
 }
 
 /*

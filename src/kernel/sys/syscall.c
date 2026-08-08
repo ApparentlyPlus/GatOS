@@ -18,6 +18,8 @@
 #include <kernel/drivers/tty.h>
 #include <kernel/debug.h>
 #include <kernel/memory/heap.h>
+#include <kernel/sys/timers.h>
+#include <kernel/sys/power.h>
 #include <klibc/string.h>
 
 extern void syscall_entry(void);
@@ -77,35 +79,42 @@ void syscall_dispatcher(cpu_context_t* regs) {
             }
 
             if (len > 65536) len = 65536;
-            char* kbuf = kmalloc(len);
-            if (!kbuf) {
-                regs->rax = (uint64_t)-1;
-                break;
-            }
 
-            // Validate the user buffer before copying. We need to disable interrupts to prevent
-            // a malicious user from changing the buffer after validation and before copying.
-            bool ints = intr_save();
-            if (!vmm_check_buffer(current->process->vmm, buf, len, VM_FLAG_USER)) {
-                intr_restore(ints);
-                kfree(kbuf);
-                LOGF("[SYSCALL] SYS_WRITE: Invalid buffer pointer 0x%lx (len: %zu) from thread '%s' (PID %u)\n", (uintptr_t)buf, len, current->name, current->process ? current->process->pid : 0);
-                sched_exit();
-                break;
-            }
+            // Copy the user buffer into a kernel buffer in bounded chunks, checking each chunk for validity
+            char kbuf[4096];
+            size_t done = 0;
 
-            // Copy the data into the kernel and write to the TTY
-            // We need to allow SMAP here because the user buffer is in a high memory 
-            // region that SMAP would normally prevent us from accessing.
-            smap_allow();
-            kmemcpy(kbuf, buf, len);
-            smap_deny();
-            intr_restore(ints);
+            // We copy in chunks of 4KB to avoid excessive stack usage 
+            // and to ensure we don't exceed the kernel's stack limits
+            while (done < len) {
+                size_t block = len - done;
+                if (block > sizeof(kbuf)) block = sizeof(kbuf);
 
-            if (current->process && current->process->tty) {
-                tty_write(current->process->tty, kbuf, len);
+                size_t filled = 0;
+                while (filled < block) {
+                    size_t n = block - filled;
+                    if (n > 1024) n = 1024;
+
+                    bool ints = intr_save();
+                    if (!vmm_check_buffer(current->process->vmm, buf + done + filled, n, VM_FLAG_USER)) {
+                        intr_restore(ints);
+                        LOGF("[SYSCALL] SYS_WRITE: Invalid buffer pointer 0x%lx (len: %zu) from thread '%s' (PID %u)\n", (uintptr_t)buf, len, current->name, current->process ? current->process->pid : 0);
+                        sched_exit();
+                    }
+
+                    // SMAP must be relaxed while touching user memory
+                    smap_allow();
+                    kmemcpy(kbuf + filled, buf + done + filled, n);
+                    smap_deny();
+                    intr_restore(ints);
+                    filled += n;
+                }
+
+                if (current->process && current->process->tty) {
+                    tty_write(current->process->tty, kbuf, block);
+                }
+                done += block;
             }
-            kfree(kbuf);
             regs->rax = (uint64_t)len;
             break;
         }
@@ -118,6 +127,12 @@ void syscall_dispatcher(cpu_context_t* regs) {
             // Don't allow userspace to set flags other than these
             size_t user_allowed_flags = VM_FLAG_WRITE | VM_FLAG_EXEC | VM_FLAG_LAZY;
             vm_flags &= user_allowed_flags;
+
+            // no mapping may be both writable and executable
+            if ((vm_flags & VM_FLAG_WRITE) && (vm_flags & VM_FLAG_EXEC)) {
+                regs->rax = (uint64_t)-1;
+                break;
+            }
 
             void* out_addr = NULL;
             vmm_status_t status;
@@ -178,27 +193,29 @@ void syscall_dispatcher(cpu_context_t* regs) {
                 break;
             }
 
-            char* kbuf = kmalloc(count);
-            if (!kbuf) {
-                regs->rax = (uint64_t)-1;
-                break;
-            }
-
+            // Read into a stack buffer instead of a per call kmalloc, then
+            // copy out in bounded chunks with interrupts disabled per chunk
+            char kbuf[4096];
             size_t n = tty_read(tty, kbuf, count);
+            size_t done = 0;
 
-            bool ints = intr_save();
-            if (!vmm_check_buffer(current->process->vmm, buf, n, VM_FLAG_USER | VM_FLAG_WRITE)) {
+            // Copy the kernel buffer into the user buffer in bounded chunks, checking each chunk for validity
+            while (done < n) {
+                size_t c = n - done;
+                if (c > 1024) c = 1024;
+
+                bool ints = intr_save();
+                if (!vmm_check_buffer(current->process->vmm, buf + done, c, VM_FLAG_USER | VM_FLAG_WRITE)) {
+                    intr_restore(ints);
+                    sched_exit();
+                }
+
+                smap_allow();
+                kmemcpy(buf + done, kbuf + done, c);
+                smap_deny();
                 intr_restore(ints);
-                kfree(kbuf);
-                sched_exit();
-                break;
+                done += c;
             }
-
-            smap_allow();
-            kmemcpy(buf, kbuf, n);
-            smap_deny();
-            intr_restore(ints);
-            kfree(kbuf);
 
             regs->rax = (uint64_t)n;
             break;
@@ -232,12 +249,31 @@ void syscall_dispatcher(cpu_context_t* regs) {
                     regs->rax = ((uint64_t)height << 32) | (uint64_t)width;
                     break;
                 }
+                case TTY_CTRL_SET_COLOR: {
+                    uint8_t fg = (uint8_t)(arg2 & 0xFF);
+                    uint8_t bg = (uint8_t)((arg2 >> 8) & 0xFF);
+                    con_set_color(tty->console, fg, bg);
+                    regs->rax = 0;
+                    break;
+                }
                 default:
                     regs->rax = (uint64_t)-1;
                     break;
             }
             break;
         }
+
+        case SYS_TIME_NS:
+            regs->rax = get_uptime_ns();
+            break;
+
+        case SYS_POWEROFF:
+            power_off();
+            break;
+
+        case SYS_REBOOT:
+            reboot();
+            break;
 
         case SYS_SET_FS_BASE: {
             uint64_t base = regs->rdi;

@@ -512,9 +512,8 @@ As discussed in the previous chapter, GatOS pre-allocates page tables capable of
 - 1 PML4 (Page Map Level 4)
 - 1 PDPT (Page Directory Pointer Table) 
 - 1 PD (Page Directory)
-- 512 PTs (Page Tables)
 
-This configuration requires `2060KB` (roughly `2MB`) of reserved, harcoded space. While this may seem substantial, it's an acceptable compromise because it provides the kernel with sufficient mapped memory in order to set up the *physmap* — a direct mapping of all physical memory — later in the boot process. 
+This configuration requires only `12KB` (three `4KB` tables) of reserved, hardcoded space. We get away with so little because the `PD` maps the whole `1GB` using `2MiB` huge pages, so there are no bottom-level PTs to reserve. That is still more than enough mapped memory to set up the *physmap*, a direct mapping of all physical memory. This happens later in the boot process. 
 
 The *physmap* is absolutely crucial for our kernel, as it is a prerequisite for the *PMM (Physical Memory Manager)* and the *VMM (Virtual Memory Manager)* to work.
 
@@ -538,8 +537,6 @@ PDPT:
     .skip 4096
 PD:
     .skip 4096
-PT:
-    .skip 4096 * 512
 ```
 
 **Key Details:**
@@ -553,13 +550,15 @@ PT:
   - **PML4**: 4096 bytes (512 entries × 8 bytes each)
   - **PDPT**: 4096 bytes (512 entries × 8 bytes each)  
   - **PD**: 4096 bytes (512 entries × 8 bytes each)
-  - **PT**: 4096 × 512 bytes (512 page tables, each 4096 bytes)
 
-- **Symbol Creation**: Each label (`PML4`, `PDPT`, `PD`, `PT`) creates a named symbol that we can reference from our assembly code when setting up the page table entries. The `PT` symbol points to the first of our 512 `PTs`, so we can access the `i`-th `PT` at `PT + 4096*i`.
+- **Symbol Creation**: Each label (`PML4`, `PDPT`, `PD`) creates a named symbol that we can reference from our assembly code when setting up the page table entries.
+
+>[!NOTE]
+> Notice there is no `PT` here. This early mapping is pure scratch, it only has to keep us running until `build_physmap()` (Chapter 5) tears it down and installs the real tables, so we map the `1GB` with **2MiB huge pages** straight out of the `PD` and skip the bottom level entirely. That saves us a full `4096 * 512` bytes of `.bss` (one `PT` per `2MiB` of the range) and, as we'll see, an entire population loop.
 
 We have two primary objectives for our initial page table mappings:
 
-1. **Identity Mapping**: Map the first `1GB` of physical memory to identical virtual addresses (`virt = phys`) for every `4KB` page in the range `[0x0, 1GB]`. This ensures our code continues to execute correctly during the transition to long mode.
+1. **Identity Mapping**: Map the first `1GB` of physical memory to identical virtual addresses (`virt = phys`) across the range `[0x0, 1GB]`, using `2MiB` huge pages. This ensures our code continues to execute correctly during the transition to long mode.
 
 2. **Higher-Half Mapping**: Map the same `1GB` of physical memory to the higher-half virtual address space starting at `KERNEL_VIRTUAL_BASE`. This creates the mapping `[KERNEL_VIRTUAL_BASE, KERNEL_VIRTUAL_BASE + 1GB]` virtual → `[0x0, 1GB]` physical.
 
@@ -582,9 +581,8 @@ The mapping strategy is surprisingly straightforward. The key insight is that **
 > [!TIP]
 > Why does one PD equal 1 GB?
 >
-> * Each PD has 512 entries → each points to a Page Table (PT).
-> * Each PT has 512 entries → each points to a 4 KB frame.
-> * Total: `512 × 512 × 4 KB = 2^30 = 1 GB`.
+> * Each PD has 512 entries → with the huge-page (`PS`) bit set, each entry maps a `2 MiB` region directly, no PT involved.
+> * Total: `512 × 2 MiB = 2^30 = 1 GB`.
 
 
 ### The Ranges We Need
@@ -623,19 +621,19 @@ All we have to do is make sure that both ranges inevitably go through the same `
 Think of the hierarchy:
 
 ```
-PML4 → PDPT → PD → PT → Physical Frame
+PML4 → PDPT → PD → 2 MiB Frame
 ```
 
-* For `0x0`, the path is: `PML4[0] → PDPT[0] → PD → PTs`
-* For `0xFFFFFFFF80000000`, the path is: `PML4[511] → PDPT[510] → PD → PTs`
+* For `0x0`, the path is: `PML4[0] → PDPT[0] → PD`
+* For `0xFFFFFFFF80000000`, the path is: `PML4[511] → PDPT[510] → PD`
 
-Both paths converge on the **same PD**, which already holds a complete `1 GB` mapping. That’s the trick: once we’re at the PD, the lower levels don’t care which higher-level indices we came from.
+Both paths converge on the **same PD**, which already holds a complete `1 GB` mapping. That’s the trick: once we’re at the PD, the huge-page entries there don’t care which higher-level indices we came from.
 
 ---
 
 ### Why Share the PD?
 
-Because **the PD is where the actual 1 GB mapping lives**. If we built separate `PDs` for both ranges, we’d have to duplicate all 512 PTs and their entries — a massive waste, since they’d point to the same physical frames anyway.
+Because **the PD is where the actual 1 GB mapping lives**. If we built separate `PDs` for both ranges, we’d have to duplicate all 512 huge-page entries — a waste, since they’d point to the same physical memory anyway.
 
 By reusing a single `PD`, both virtual ranges resolve to the same physical memory without duplication.
 
@@ -645,7 +643,7 @@ By reusing a single `PD`, both virtual ranges resolve to the same physical memor
 
 In the end, it’s just three steps:
 
-1. Fill all 512 `PTs` and make a single `PD` point to them.
+1. Fill the `PD`'s 512 entries, each mapping a `2MiB` huge page (`512 × 2MiB = 1GB`).
 2. Make `PDPT[0]` and `PDPT[510]` point at that `PD`.
 3. Make `PML4[0]` and `PML4[511]` point at the aforementioned `PDPT`.
 
@@ -705,12 +703,12 @@ Now we set up the PDPT to point to our Page Directory:
 #### 3. Populating the PD
 
 ```asm
+# Each PD entry maps 2MiB directly (Present, Read/Write, Huge)
 mov ecx, 0
 .PD_loop:
     mov eax, ecx
-    shl eax, 12 
-    add eax, offset KERNEL_V2P(PT)  # eax = PT + i*4KB as explained before
-    or eax, 0b11                    # Present + Read/Write
+    shl eax, 21                     # eax = i * 2MiB (physical base of this huge page)
+    or eax, 0b10000011              # Present + Read/Write + Huge (PS bit)
     mov ebx, ecx
     shl ebx, 3                      # Multiply by 8 (entry size)
     mov dword ptr [KERNEL_V2P(PD) + ebx], eax
@@ -719,38 +717,23 @@ mov ecx, 0
     jne .PD_loop
 ```
 
-This loop creates 512 entries in the Page Directory, each pointing to a different Page Table. The calculation `ecx × 4096` ensures each Page Table is properly aligned in memory.
+This loop creates 512 entries in the Page Directory, and that's the entire mapping. The `PS` (page size) bit, the high bit set in `0b10000011`, tells the CPU to stop the walk here and treat the entry as a `2MiB` page instead of a pointer to a PT. So entry `i` maps `i * 2MiB` directly, and `512 × 2MiB` covers the full `1GB`.
 
-#### 4. Setting Up the Page Tables
-```asm
-mov ecx, 0
-.PT_loop:
-    mov eax, ecx
-    shl eax, 12      # Multiply by 4096 to get physical address
-    or eax, 0b11     # Present + Read/Write
-    mov ebx, ecx
-    shl ebx, 3       # Multiply by 8 (entry size)
-    mov dword ptr [KERNEL_V2P(PT) + ebx], eax
-    inc ecx
-    cmp ecx, 512 * 512
-    jne .PT_loop
-```
+Without the `PS` bit we'd have to follow this with a `.PT_loop` populating all `512 × 512 = 262,144` bottom-level entries by hand, one per `4KB` frame — the single most intensive part of the old boot path. Huge pages collapse all of it into the 512 writes above.
 
-This is the most intensive part - we populate all 512 × 512 = 262,144 page table entries:
-- Each entry maps a 4KB physical frame
-- The calculation `ecx × 4096` creates a direct identity mapping
-- We map exactly 1GB of physical memory (`262,144 × 4KB = 1GB`)
+>[!NOTE]
+> The coarse granularity (2MB pages instead of the normal 4KB) here costs us nothing. These huge pages only back the throwaway boot mapping; `build_physmap()` later rebuilds the whole address space from the physmap pool at proper `4KB` granularity. Being coarse now just gets us through long-mode setup faster and with `2MB` less `.bss` reserved.
 
 ### The Complete Picture
 
 After this setup, our page table hierarchy looks like this:
 
 ```
-PML4[0]  → PDPT[0]  → PD → PTs → Physical 0x0 to 0x3FFFFFFF
-PML4[511] → PDPT[510] → (same PD) → (same PTs) → (same physical memory)
+PML4[0]   → PDPT[0]   → PD → Physical 0x0 to 0x3FFFFFFF
+PML4[511] → PDPT[510] → (same PD) → (same physical memory)
 ```
 
-The beauty of this approach is that we only need to populate the page tables once, but we can access the same physical memory through two different virtual address ranges. This gives us both identity mapping (for the early boot transition) and higher-half kernel mapping (for long-term operation) with minimal memory overhead.
+The beauty of this approach is that we only need to populate a single `PD` once, but we can access the same physical memory through two different virtual address ranges. This gives us both identity mapping (for the early boot transition) and higher-half kernel mapping (for long-term operation) with minimal memory overhead.
 
 ## Setting up the GDT
 

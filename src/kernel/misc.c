@@ -12,20 +12,33 @@
 #include <klibc/string.h>
 #include <stdint.h>
 
-/*
- * print_banner - Prints the GatOS kernel banner and metadata centered
- */
-void print_banner(char* KERNEL_VERSION) {
-    uint16_t screen_width = console_get_width();
-    int i, j, pad;
-    size_t len;
-    
-    const int CONTENT_WIDTH = 59; 
+#define UTF8_COLS(s, out) do {                                  \
+        const char* _p = (s);                                   \
+        (out) = 0;                                              \
+        while (*_p) { if ((*_p & 0xC0) != 0x80) (out)++; _p++; } \
+    } while (0)
 
-    // Print Logo
-    console_set_color(CONSOLE_COLOR_CYAN, CONSOLE_COLOR_BLACK);
-    
-    const char* logo_lines[] = {
+/*
+ * print_banner - Prints the GatOS kernel banner (optionally the logo too) and metadata centered
+ */
+void print_banner(char* KERNEL_VERSION)
+{
+    static const char* ll[] = {
+        "      🬭🬵🬹🬹████████🬹🬹🬭🬏       🬭🬭🬭           🬞   ",
+        "   🬞🬹█████████████████🬺🬱     █████🬹🬱🬭🬭🬭🬭🬭🬵🬻█🬱  ",
+        "  🬵██████████████████████🬏   ▐███████████████🬱 ",
+        " 🬻██████🬎🬂🬂🬂🬂🬊🬬███████████🬏  ▐████████████████🬓",
+        "🬷█████🬝🬀       🬊██████████🬺  ▐█████████████████",
+        "██████🬀         🬨██████████🬏 🬉█████████████████",
+        "██████🬏         ▐██████████🬲  🬬███████🬎🬂  🬊███🬄",
+        "🬨█████🬺🬏        🬁███████████🬱  🬊🬎🬎🬎🬎🬂       🬂🬀 ",
+        " 🬬██████🬹🬭🬭🬭     🬊███████████🬺🬱🬭🬭              ",
+        "  🬊█████████████🬱 🬊██████████████████🬹         ",
+        "   🬁🬎████████████   🬊🬬████████████████🬄        ",
+        "      🬂🬊🬎🬎█████🬎🬂     🬁🬂🬎🬎🬬█████████🬎🬆         "
+    };
+
+    static const char* ww[] = {
         "   █████████             █████       ███████     █████████ ",
         "  ███░░░░░███           ░░███      ███░░░░░███  ███░░░░░███",
         " ███     ░░░   ██████   ███████   ███     ░░███░███    ░░░ ",
@@ -36,52 +49,96 @@ void print_banner(char* KERNEL_VERSION) {
         "  ░░░░░░░░░   ░░░░░░░░    ░░░░░     ░░░░░░░     ░░░░░░░░░  "
     };
 
-    kprintf("\n");
-
-    pad = (screen_width - CONTENT_WIDTH) / 2;
-    if (pad < 0) pad = 0;
-
-    for (i = 0; i < 8; i++) {
-        for (j = 0; j < pad; j++) kprintf(" ");
-        kprintf("%s\n", logo_lines[i]);
-    }
-
-    // Print Version
-    console_set_color(CONSOLE_COLOR_MAGENTA, CONSOLE_COLOR_BLACK);
-
-    len = 23 + kstrlen(KERNEL_VERSION); 
-    pad = (screen_width - len) / 2;
-    if (pad < 0) pad = 0;
-
-    kprintf("\n");
-    for (j = 0; j < pad; j++) kprintf(" ");
-    kprintf("G a t O S   K e r n e l  %s\n\n", KERNEL_VERSION);
-    
-    // Print Metadata
-    console_set_color(CONSOLE_COLOR_YELLOW, CONSOLE_COLOR_BLACK);
-    
-    const char* metadata[] = {
+    static const char* metadata[] = {
         "Created by: u/ApparentlyPlus",
         "Name inspired by: SkylOS, a project by u/BillyZeim"
     };
 
-    for (i = 0; i < 2; i++) {
-        len = kstrlen(metadata[i]);
-        pad = (screen_width - len) / 2;
+    static const char* version_prefix = "G a t O S   K e r n e l  ";
+
+    const int gap = 3;
+
+    uint16_t sw = console_get_width();
+    int lr = (int)(sizeof(ll) / sizeof(ll[0]));
+    int wr = (int)(sizeof(ww) / sizeof(ww[0]));
+    int mr = (int)(sizeof(metadata) / sizeof(metadata[0]));
+    int lc = 0, wc = 0;
+    int rows, lt, wt, bc;
+    int i, j, pad, w;
+
+    for (i = 0; i < lr; i++) {
+        UTF8_COLS(ll[i], w);
+        if (w > lc) lc = w;
+    }
+    for (i = 0; i < wr; i++) {
+        UTF8_COLS(ww[i], w);
+        if (w > wc) wc = w;
+    }
+
+    bc = lc + gap + wc;
+
+    rows = (lr > wr) ? lr : wr;
+    lt = (rows - lr) / 2;
+    wt = (rows - wr) / 2;
+
+    kprintf("\n");
+
+    if ((int)sw >= bc) {
+        pad = ((int)sw - bc) / 2;
         if (pad < 0) pad = 0;
-        
+
+        for (i = 0; i < rows; i++) {
+            for (j = 0; j < pad; j++) kprintf(" ");
+
+            console_set_color(CONSOLE_COLOR_CYAN, CONSOLE_COLOR_BLACK);
+            if (i >= lt && i < lt + lr) {
+                kprintf("%s", ll[i - lt]);
+                UTF8_COLS(ll[i - lt], w);
+            } else {
+                w = 0;
+            }
+
+            if (i >= wt && i < wt + wr) {
+                for (j = w; j < lc + gap; j++) kprintf(" ");
+                console_set_color(CONSOLE_COLOR_CYAN, CONSOLE_COLOR_BLACK);
+                kprintf("%s", ww[i - wt]);
+            }
+            kprintf("\n");
+        }
+    } else {
+        console_set_color(CONSOLE_COLOR_CYAN, CONSOLE_COLOR_BLACK);
+        pad = ((int)sw - wc) / 2;
+        if (pad < 0) pad = 0;
+        for (i = 0; i < wr; i++) {
+            for (j = 0; j < pad; j++) kprintf(" ");
+            kprintf("%s\n", ww[i]);
+        }
+    }
+
+    console_set_color(CONSOLE_COLOR_MAGENTA, CONSOLE_COLOR_BLACK);
+    UTF8_COLS(version_prefix, w);
+    UTF8_COLS(KERNEL_VERSION, j);
+    pad = ((int)sw - (w + j)) / 2;
+    if (pad < 0) pad = 0;
+
+    kprintf("\n");
+    for (j = 0; j < pad; j++) kprintf(" ");
+    kprintf("%s%s\n\n", version_prefix, KERNEL_VERSION);
+
+    console_set_color(CONSOLE_COLOR_YELLOW, CONSOLE_COLOR_BLACK);
+    for (i = 0; i < mr; i++) {
+        UTF8_COLS(metadata[i], w);
+        pad = ((int)sw - w) / 2;
+        if (pad < 0) pad = 0;
         for (j = 0; j < pad; j++) kprintf(" ");
         kprintf("%s\n", metadata[i]);
     }
 
     kprintf("\n");
 
-    // Print Separator
     console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
-    
-    // Print underscores across the full width of the screen
-    for (j = 0; j < screen_width; j++) kprintf("_");
-    
+    for (j = 0; j < (int)sw; j++) kprintf("_");
+
     kprintf("\n\n");
 }
 

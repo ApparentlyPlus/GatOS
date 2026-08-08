@@ -4,6 +4,7 @@ import os
 import re
 import sys
 import shutil
+import signal
 import argparse
 import subprocess
 from pathlib import Path
@@ -68,9 +69,9 @@ GRUB_MKRESCUE_CMD = GRUB_DIR / f"grub-mkrescue{EXE_EXT}"
 
 if OS_NAME == "win":
     QEMU_EXEC = PLATFORM_TOOLCHAIN_DIR / "qemu" / f"qemu-system-x86_64{EXE_EXT}"
-    XORRISO_EXEC = None
+    XORRISO_EXEC = PLATFORM_TOOLCHAIN_DIR / "xorriso" / f"xorriso{EXE_EXT}"
     GRUB_MODULE_DIR = GRUB_DIR / "x86_64-efi"
-    GRUB_FONT_PATH = None
+    GRUB_FONT_PATH = GRUB_DIR / "unicode.pf2"
 elif OS_NAME == "linux":
     QEMU_EXEC = PLATFORM_TOOLCHAIN_DIR / "qemu" / "QEMU-x86_64.AppImage"
     XORRISO_EXEC = PLATFORM_TOOLCHAIN_DIR / "xorriso" / "xorriso"
@@ -102,7 +103,8 @@ KERNEL_INTERRUPT_PATH = {
     "kernel/memory/pmm.c",             # pmm_alloc, pmm_free (demand paging)
     "klibc/avl.c",                     # called by vmm.c for VMA tree operations
 }
-CPPFLAGS = [f"-I{HEADER_DIR}", "-D__ASSEMBLER__"]
+
+CPPFLAGS = [f"-I{HEADER_DIR}", f"-Wa,-I{HEADER_DIR}", "-D__ASSEMBLER__"]
 LDFLAGS = ["-n", "-nostdlib", "--gc-sections", f"-T{ROOT_DIR / 'targets/x86_64/linker.ld'}", "--no-relax", "-g"]
 
 # Optimization Levels
@@ -135,24 +137,53 @@ BUILD_PROFILES = {
 def run_cmd(cmd: List[str | Path], cwd: Optional[Path] = None, env: Optional[Dict] = None, check: bool = True, timeout: int = None) -> bool:
     cmd_str = [str(c) for c in cmd]
     print(f"{BLUE}>>> {' '.join(cmd_str)}{f' (in {cwd})' if cwd else ''}{NC}")
-    
+
     run_env = os.environ.copy()
     if env: run_env.update(env)
-    
+
     try:
-        subprocess.run(cmd_str, cwd=cwd, env=run_env, check=check, text=True, timeout=timeout)
-        return True
-    except subprocess.TimeoutExpired:
-        # Caller handles specific logic, but we print a generic warning here
-        sys.stderr.write(f"\n{YELLOW}[WARN] Process timed out after {timeout}s (This is expected for timeout tests).{NC}\n")
-        return False
-    except subprocess.CalledProcessError as e:
-        sys.stderr.write(f"{RED}[ERROR] Command failed with exit code {e.returncode}{NC}\n")
-        if check: sys.exit(e.returncode)
-        return False
-    except FileNotFoundError as e:
+        proc = subprocess.Popen(cmd_str, cwd=cwd, env=run_env, text=True, start_new_session=True)
+    except FileNotFoundError:
         sys.stderr.write(f"{RED}[FATAL] Executable not found: {cmd_str[0]}{NC}\n")
         sys.exit(1)
+
+    try:
+        ret = proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        if OS_NAME == "win":
+            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                           capture_output=True, check=False)
+        else:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        proc.wait()
+        _reap_appimage_fuse_mounts(cmd_str)
+        sys.stderr.write(f"\n{YELLOW}[WARN] Process timed out after {timeout}s (This is expected for timeout tests).{NC}\n")
+        return False
+
+    _reap_appimage_fuse_mounts(cmd_str)
+
+    if ret != 0:
+        sys.stderr.write(f"{RED}[ERROR] Command failed with exit code {ret}{NC}\n")
+        if check: sys.exit(ret)
+        return False
+    return True
+
+def _reap_appimage_fuse_mounts(cmd_str: List[str]):
+    if OS_NAME != "linux": return
+    if not any("AppImage" in c for c in cmd_str): return
+    try:
+        result = subprocess.run(["pgrep", "-f", "dwarfs .*QEMU-x86_64.AppImage"],
+                                 capture_output=True, text=True, check=False)
+        for pid_str in result.stdout.split():
+            try:
+                os.kill(int(pid_str), signal.SIGKILL)
+            except (ValueError, ProcessLookupError, PermissionError):
+                pass
+    except FileNotFoundError:
+        pass
 
 def get_kernel_version() -> str:
     pattern = re.compile(r'KERNEL_VERSION\s*=\s*"([^"]*)"')
@@ -254,49 +285,28 @@ def link_kernel(obj_files: List[Path]):
         
     run_cmd([STRIP, str(KERNEL_BIN)])
 
-def make_uefi_grub():
-    UEFI_DIR.mkdir(parents=True, exist_ok=True)
-    run_cmd([GRUB_MKSTANDALONE, f"--directory={GRUB_MODULE_DIR}", "--format=x86_64-efi", f"--output={UEFI_GRUB}", "--locales=", "--fonts=", f"boot/grub/grub.cfg={GRUB_CFG}"])
-
 def make_iso(output_iso: Path):
     (ISO_DIR / "boot").mkdir(parents=True, exist_ok=True)
     shutil.copy2(KERNEL_BIN, ISO_DIR / "boot/kernel.bin")
     print(f"{YELLOW}[INFO] Creating hybrid ISO: {output_iso}{NC}")
 
-    if OS_NAME in ["linux", "macos"]:
-        if not GRUB_FONT_PATH.exists():
-            sys.stderr.write(f"{RED}[FATAL] Unicode font missing at {GRUB_FONT_PATH}{NC}\n")
-            sys.exit(1)
-            
-        cmd = [
-            "./grub-mkrescue",
-            f"--xorriso={XORRISO_EXEC}",
-            "--fonts=unicode",
-            "--themes=",
-            "-o", str(output_iso),
-            str(ISO_DIR)
-        ]
-        # Runs inside GRUB_DIR to satisfy internal relative paths on macOS/Linux
-        run_cmd(cmd, cwd=GRUB_DIR)
-        
-    else:
-        # Windows Logic (Absolute paths, C++ wrapper)
-        if not GRUB_MKRESCUE_CMD.exists():
-            sys.stderr.write(f"{RED}[FATAL] grub-mkrescue wrapper not found at: {GRUB_MKRESCUE_CMD}{NC}\n")
-            sys.exit(1)
-        
-        cmd = [
-            str(GRUB_MKRESCUE_CMD.resolve()), 
-            "-d", str(GRUB_DIR.resolve()), 
-            "-o", str(output_iso.resolve()), 
-            str(ISO_DIR.resolve())
-        ]
-        run_cmd(cmd, cwd=GRUB_DIR, check=True)
+    if not GRUB_FONT_PATH.exists():
+        sys.stderr.write(f"{RED}[FATAL] Unicode font missing at {GRUB_FONT_PATH}{NC}\n")
+        sys.exit(1)
+
+    cmd = [
+        str(GRUB_MKRESCUE_CMD),
+        f"--xorriso={XORRISO_EXEC}",
+        "--fonts=unicode",
+        "--themes=",
+        "-o", str(output_iso),
+        str(ISO_DIR)
+    ]
+    run_cmd(cmd, cwd=GRUB_DIR)
 
 def build_iso(c_src: List[Path], asm_src: List[Path], obj_files: List[Path], iso_name: str, profile: str):
     if compile_sources(c_src, asm_src, profile):
         link_kernel(obj_files)
-        make_uefi_grub()
         make_iso(DIST_DIR / iso_name)
 
 def clean():
@@ -313,8 +323,7 @@ def verify_environment() -> bool:
     print(f"{YELLOW}[INFO] Verifying environment...{NC}")
     fix_unix_permissions()
     missing = []
-    tools = {"QEMU": QEMU_EXEC, "GCC": CC, "LD": LD, "STRIP": STRIP, "GRUB Standalone": GRUB_MKSTANDALONE, "GRUB Rescue": GRUB_MKRESCUE_CMD}
-    if OS_NAME in ["linux", "macos"]: tools["Xorriso"] = XORRISO_EXEC
+    tools = {"QEMU": QEMU_EXEC, "GCC": CC, "LD": LD, "STRIP": STRIP, "GRUB Rescue": GRUB_MKRESCUE_CMD, "Xorriso": XORRISO_EXEC}
     for name, path in tools.items():
         if path and not path.exists(): missing.append(f"{name} ({path})")
     if missing:
