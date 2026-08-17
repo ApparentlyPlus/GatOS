@@ -14,6 +14,8 @@
 #include <kernel/drivers/serial.h>
 #include <kernel/sys/scheduler.h>
 #include <arch/x86_64/cpu/cpu.h>
+#include <arch/x86_64/cpu/msr.h>
+#include <kernel/sys/panic.h>
 #include <arch/x86_64/cpu/io.h>
 #include <kernel/memory/vmm.h>
 #include <kernel/sys/timers.h>
@@ -21,6 +23,7 @@
 #include <kernel/sys/apic.h>
 #include <kernel/debug.h>
 #include <klibc/string.h>
+#include <klibc/stdio.h>
 
 // Only needed once there's a scheduler timer tick or keyboard IRQ to route
 // (GATA_NEEDS_INTERRUPT_SUBSYS in kernel/caps.h, which already implies a
@@ -53,6 +56,17 @@ void pit_set_oneshot(uint16_t ticks) {
     outb(0x43, 0x30); 
     outb(0x40, (uint8_t)(ticks & 0xFF));
     outb(0x40, (uint8_t)((ticks >> 8) & 0xFF));
+}
+
+/*
+ * pit_latch - Latches and reads channel 0's current count. The latch command
+ * freezes the count so the two byte reads see one consistent value.
+ */
+static uint16_t pit_latch(void) {
+    outb(0x43, 0x00);
+    uint8_t low = inb(0x40);
+    uint8_t high = inb(0x40);
+    return (uint16_t)(((uint16_t)high << 8) | low);
 }
 
 /*
@@ -165,68 +179,205 @@ static cpu_context_t* timer_handler(cpu_context_t* ctx) {
 }
 
 /*
- * timer_calibrate_all - Calibrates LAPIC and TSC against HPET or PIT
+ * tsc_hz_declared - The TSC frequency the hardware reports, or 0 if it does not
+ */
+static uint64_t tsc_hz_declared(void) {
+    uint32_t a, b, c, d;
+
+    cpuid(0, 0, &a, &b, &c, &d);
+    uint32_t max_leaf = a;
+    bool is_amd = (b == 0x68747541); // "Auth"
+
+    if (!is_amd && max_leaf >= 0x15) {
+        cpuid(0x15, 0, &a, &b, &c, &d);
+        if (a != 0 && b != 0 && c != 0) return ((uint64_t)c * b) / a;
+    }
+    if (!is_amd && max_leaf >= 0x16) {
+        cpuid(0x16, 0, &a, &b, &c, &d);
+        if ((a & 0xFFFF) != 0) return (uint64_t)(a & 0xFFFF) * 1000000ULL;
+    }
+    if (is_amd) {
+        cpuid(0x80000000, 0, &a, &b, &c, &d);
+        if (a >= 0x80000007) {
+            cpuid(0x80000007, 0, &a, &b, &c, &d);
+            if (d & (1u << 8)) { // invariant TSC
+                uint64_t p0 = read_msr(MSR_PSTATE_0);
+                uint64_t fid = p0 & 0xFF;
+                uint64_t did = (p0 >> 8) & 0x3F;
+                if (did != 0 && fid != 0) return (fid * 200000000ULL) / did;
+            }
+        }
+    }
+    return 0;
+}
+
+/*
+ * hpet_counter_advances - True if the main counter is actually running
+ */
+static bool hpet_counter_advances(void) {
+    if (!hpet) return false;
+
+    if (!(hpet->capabilities_low & (1u << 13))) {
+        LOGF("[TIMER] HPET main counter is 32-bit, not using it for calibration.\n");
+        return false;
+    }
+    if (hpet_period == 0 || hpet_period > 100000000UL) {
+        LOGF("[TIMER] HPET period %u fs is out of spec, not using it.\n", hpet_period);
+        return false;
+    }
+
+    uint64_t first = hpet_read_counter();
+    uint64_t deadline = tsc_read() + 100000;
+    while (tsc_read() < deadline) {
+        if (hpet_read_counter() != first) return true;
+    }
+    LOGF("[TIMER] HPET main counter is not advancing; not using it.\n");
+    return false;
+}
+
+/*
+ * calibrate_once - One window against the given reference
+ */
+static bool calibrate_once(bool use_hpet, uint64_t* out_tsc, uint64_t* out_lapic) {
+    lapic_write(LAPIC_TDCR, 0x03);       // Divisor 16
+    lapic_write(LAPIC_TICR, 0xFFFFFFFF); // Max count
+    uint64_t abort_at = tsc_read() + (uint64_t)CALIBRATE_MS * 100 * CALIBRATE_MIN_TSC;
+    bool complete = false;
+
+    uint64_t lapic_start, tsc_start;
+
+    if (use_hpet) {
+        uint64_t target = ((uint64_t)CALIBRATE_MS * 1000000000000ULL) / hpet_period;
+        uint64_t start = hpet_read_counter();
+
+        lapic_start = lapic_read(LAPIC_TCCR);
+        tsc_start = tsc_read();
+
+        while (tsc_read() < abort_at) {
+            if (hpet_read_counter() - start >= target) { complete = true; break; }
+        }
+    } else {
+        pit_set_oneshot(0xFFFF);
+        uint64_t settle = tsc_read() + 10000;
+        while (tsc_read() < settle) { }
+
+        uint16_t start_val = pit_latch();
+        uint16_t target = (uint16_t)((PIT_FREQUENCY / 1000) * CALIBRATE_MS);
+
+        lapic_start = lapic_read(LAPIC_TCCR);
+        tsc_start = tsc_read();
+
+        while (tsc_read() < abort_at) {
+            uint16_t elapsed = (uint16_t)(start_val - pit_latch());
+            if (elapsed >= target) { complete = true; break; }
+        }
+    }
+
+    uint64_t lapic_end = lapic_read(LAPIC_TCCR);
+    uint64_t tsc_end = tsc_read();
+
+    if (!complete) {
+        LOGF("[TIMER] %s window never completed.\n", use_hpet ? "HPET" : "PIT");
+        return false;
+    }
+
+    uint64_t dtsc = tsc_end - tsc_start;
+    if (dtsc < CALIBRATE_MIN_TSC) {
+        LOGF("[TIMER] %s window closed after only %lu TSC ticks; rejecting.\n",
+             use_hpet ? "HPET" : "PIT", dtsc);
+        return false;
+    }
+
+    *out_tsc = dtsc;
+    *out_lapic = lapic_start - lapic_end;
+    return true;
+}
+
+/*
+ * median3 - The middle of three, so one bad sample cannot carry the result.
+ */
+static uint64_t median3(uint64_t x, uint64_t y, uint64_t z) {
+    if (x > y) { uint64_t t = x; x = y; y = t; }
+    if (y > z) { uint64_t t = y; y = z; z = t; }
+    if (x > y) { uint64_t t = x; x = y; y = t; }
+    return y;
+}
+
+/*
+ * timer_calibrate_all - Establishes tsc_tpm and the LAPIC tick rate.
  */
 static void timer_calibrate_all(void) {
     LOGF("[TIMER] Calibrating high-precision timers...\n");
 
-    const uint32_t CALIBRATE_MS = 10;
-    uint64_t lapic_start, lapic_end;
-    uint64_t tsc_start, tsc_end;
+    bool use_hpet = hpet_is_available() && hpet_counter_advances();
+    const char* src = use_hpet ? "HPET" : "PIT";
 
-    // Prepare LAPIC timer for calibration (Divisor 16)
-    lapic_write(LAPIC_TDCR, 0x03); // Divisor 16
-    lapic_write(LAPIC_TICR, 0xFFFFFFFF); // Max count
-
-    if (hpet_is_available()) {
-        uint64_t hpet_target = (CALIBRATE_MS * 1000000000000ULL) / hpet_period;
-        uint64_t hpet_start = hpet_read_counter();
-        
-        lapic_start = lapic_read(LAPIC_TCCR);
-        tsc_start = tsc_read();
-
-        // Wait for the HPET target to elapse
-        while (hpet_read_counter() - hpet_start < hpet_target) {
-            __asm__ volatile("pause");
+    uint64_t tsc_s[3], lapic_s[3];
+    int good = 0;
+    for (int i = 0; i < 3; i++) {
+        uint64_t dt, dl;
+        if (calibrate_once(use_hpet, &dt, &dl)) {
+            tsc_s[good] = dt;
+            lapic_s[good] = dl;
+            good++;
         }
-
-        lapic_end = lapic_read(LAPIC_TCCR);
-        tsc_end = tsc_read();
-    } else {
-        // Fallback to PIT
-        pit_set_oneshot(0xFFFF); 
-        uint32_t pit_target = (PIT_FREQUENCY / 1000) * CALIBRATE_MS;
-        
-        outb(0x43, 0x00);
-        uint8_t low = inb(0x40);
-        uint8_t high = inb(0x40);
-        uint16_t start_val = (high << 8) | low;
-
-        lapic_start = lapic_read(LAPIC_TCCR);
-        tsc_start = tsc_read();
-
-        // Wait for the PIT target to elapse
-        // this must be the worst code I've ever written, 
-        // but the PIT is just so bad that it requires this level of hackery
-        while (1) {
-            outb(0x43, 0x00);
-            low = inb(0x40);
-            high = inb(0x40);
-            uint16_t cur_val = (high << 8) | low;
-            if (start_val - cur_val >= pit_target) break;
-        }
-
-        lapic_end = lapic_read(LAPIC_TCCR);
-        tsc_end = tsc_read();
     }
 
-    uint64_t lapic_ticks_per_ms = (lapic_start - lapic_end) / CALIBRATE_MS;
-    tsc_tpm = (tsc_end - tsc_start) / CALIBRATE_MS;
+    if (good == 0 && use_hpet) {
+        LOGF("[TIMER] HPET produced no usable sample; falling back to the PIT.\n");
+        use_hpet = false;
+        src = "PIT";
+        for (int i = 0; i < 3; i++) {
+            uint64_t dt, dl;
+            if (calibrate_once(false, &dt, &dl)) {
+                tsc_s[good] = dt;
+                lapic_s[good] = dl;
+                good++;
+            }
+        }
+    }
 
-    lapic_set_tpm(lapic_ticks_per_ms);
+    if (good == 0) {
+        panic("timer: no reference clock produced a usable calibration window");
+    }
 
-    LOGF("[TIMER] LAPIC: %lu ticks/ms, TSC: %lu ticks/ms\n", 
-         lapic_ticks_per_ms, tsc_tpm);
+    uint64_t dtsc = (good == 3) ? median3(tsc_s[0], tsc_s[1], tsc_s[2]) : tsc_s[0];
+    uint64_t dlapic = (good == 3) ? median3(lapic_s[0], lapic_s[1], lapic_s[2]) : lapic_s[0];
+
+    uint64_t hz = (dtsc / CALIBRATE_MS) * 1000ULL;
+    if (hz < TSC_HZ_MIN || hz > TSC_HZ_MAX) {
+        LOGF("[TIMER] Calibrated TSC of %lu Hz is not a real frequency.\n", hz);
+        panic("timer: TSC calibration produced an impossible frequency");
+    }
+
+    tsc_tpm = dtsc / CALIBRATE_MS;
+    lapic_set_tpm(dlapic / CALIBRATE_MS);
+
+    LOGF("[TIMER] %s: %d/3 samples, TSC %lu ticks/ms (%lu MHz), LAPIC %lu ticks/ms\n",
+         src, good, tsc_tpm, hz / 1000000ULL, dlapic / CALIBRATE_MS);
+
+    uint64_t declared = tsc_hz_declared();
+    if (declared >= TSC_HZ_MIN && declared <= TSC_HZ_MAX) {
+        uint64_t lo = hz < declared ? hz : declared;
+        uint64_t hi = hz < declared ? declared : hz;
+        LOGF("[TIMER] Hardware reports %lu MHz; measured %lu MHz.\n",
+             declared / 1000000ULL, hz / 1000000ULL);
+        if ((hi - lo) * 10 > hi) {
+            LOGF("[TIMER] WARNING: measured and reported TSC differ by more than 10%%.\n");
+            kprintf("[TIMER] WARNING: TSC calibration disagrees with the hardware "
+                    "(%lu MHz measured, %lu MHz reported). Timings are suspect.\n",
+                    hz / 1000000ULL, declared / 1000000ULL);
+        }
+    } else {
+        LOGF("[TIMER] Hardware reports no TSC frequency; measurement stands alone.\n");
+    }
+}
+
+/*
+ * timer_tsc_hz - The calibrated TSC frequency
+ */
+uint64_t timer_tsc_hz(void) {
+    return tsc_tpm * 1000ULL;
 }
 
 #pragma endregion
