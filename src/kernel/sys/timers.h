@@ -20,6 +20,10 @@
 
 #define FEMTOSECONDS_PER_SECOND 1000000000000000ULL
 #define FEMTOSECONDS_PER_NANO   1000000ULL
+#define TSC_HZ_MIN          100000000ULL
+#define TSC_HZ_MAX          10000000000ULL
+#define CALIBRATE_MS        10
+#define CALIBRATE_MIN_TSC   1000000ULL
 
 // Timer Structures
 
@@ -56,6 +60,7 @@ void lapic_timer_stop(void);
 // TSC Timer API
 
 uint64_t tsc_read(void);
+uint64_t timer_tsc_hz(void);
 void tsc_deadline_arm(uint64_t target_tsc);
 
 // HPET API

@@ -55,8 +55,8 @@ The whole toolchain is comprised of 3 components:
 | Component | Description | Status |
 |-----------|-------------|--------|
 | **GatOS** | The current project. A modular kernel forming the core of PawStack, exposing APIs and syscalls for core OS functionality. | **Feature Complete** |
-| **[Gata](https://github.com/ApparentlyPlus/Gata)** | A custom high-level programming language for writing operating systems. It *feels* like a modern language, but is built with features that make low-level development simpler and more approachable. | **Usable, Stabilizing** |
-| **[Appa](https://github.com/ApparentlyPlus/Appa)** | The compiler for Gata. It takes in Gata source code and transpiles it into C code that calls GatOS's APIs, constructing the kernel based on the code's logic by leveraging the modularity of GatOS's design. | **Usable** |
+| **[Gata](https://github.com/ApparentlyPlus/Gata)** | A custom high-level programming language for writing operating systems. It *feels* like a modern language, but is built with features that make low-level development simpler and more approachable. | **Feature Complete** |
+| **[Appa](https://github.com/ApparentlyPlus/Appa)** | The compiler for Gata. It takes in Gata source code and transpiles it into C code that calls GatOS's APIs, constructing the kernel based on the code's logic by leveraging the modularity of GatOS's design. | **Feature Complete** |
 
 > [!TIP]
 > Gata and Appa now live in their own repositories. Gata ships a standard library ([`libgata`](https://github.com/ApparentlyPlus/Gata/tree/main/libgata)) with collections, strings, math, sync and time primitives, a VS Code extension, and a book-length language guide. Appa is now a production transpiler with a full frontend, IR, and C backend. My vision has come a long way!

@@ -33,6 +33,9 @@
 #define MSR_AMD_ENERGY_UNIT     0xC0010299
 #define MSR_AMD_PKG_ENERGY      0xC001029B
 
+// AMD P-state 0
+#define MSR_PSTATE_0            0xC0010064
+
 // EFER bits
 #define EFER_SCE  (1 << 0)
 #define EFER_LME  (1 << 8)
