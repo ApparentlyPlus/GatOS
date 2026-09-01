@@ -17,19 +17,38 @@ GatOS is a cleanly designed, modular kernel serving as the foundational layer fo
 
 It manages memory, schedules threads, runs your code in userspace, drives the display and supports USB devices. [What's Inside the Kernel](#whats-inside-the-kernel) has the full house tour.
 
-And getting it running really is just 2 commands. Check [Getting Started](#getting-started) if you want to run it without reading the rest.
+Running the kernel on its own really is just 2 commands, and [Running the Kernel by Itself](#running-the-kernel-by-itself) has them. But that is the path for poking at the kernel directly. If what you want is to *write* an OS, you never need to build this repository at all, and the four steps below are the shorter road.
 
 > [!NOTE]
 > This is a student project, written solo as an undergraduate thesis, so expect the occasional rough edge and the odd bug. That said, I believe it is as close to production ready as it can be for its scope, so feel free to deploy it and play around. 
+
+## Start Here
+
+If you are here to *write* an operating system rather than to read about how one gets built, this is the whole path. Four steps, about five minutes:
+
+1. **Install [VS Code](https://code.visualstudio.com/).**
+2. **Install the Gata extension.** Grab the `.vsix` from the [Gata releases](https://github.com/ApparentlyPlus/Gata/releases/latest). In VS Code, open the Extensions tab (`Ctrl + Shift + X`), click the three dots at the top right of the tab and pick **Install from VSIX**. Dragging the file onto that tab works too.
+3. **Install `appa`.** Grab the binary for your platform from the [Appa releases](https://github.com/ApparentlyPlus/Appa/releases/latest), then run `appa install`, which pulls down the toolchain, the standard library and the environment files.
+4. **Code away.**
+
+    ```bash
+    appa new myos && cd myos
+    appa run
+    ```
+
+That's it. You now have an operating system.
+
+You never have to clone this repository to do any of that. `appa` fetches the kernel and configures a build of it around your program. Everything below is the how and the why, for when you want to know what it is doing down there.
 
 The first section of this README focuses on providing some insight as to the vision of this project. If you'd rather skip the philosophy, the technical part starts at [What's Inside the Kernel](#whats-inside-the-kernel).
 
 ## Table of Contents
 
+- [Start Here](#start-here)
 - [Project Overview & Background](#project-overview--background)
 - [What's Inside the Kernel](#whats-inside-the-kernel)
 - [What's *not* Inside the Kernel](#whats-not-inside-the-kernel)
-- [Getting Started](#getting-started)
+- [Running the Kernel by Itself](#running-the-kernel-by-itself)
 - [Building the Toolchain from Source](#building-the-toolchain-from-source)
 - [Testing](#testing)
 - [Development](#development)
@@ -214,9 +233,11 @@ Equally important that you hear it from me now rather than discover it three hou
 **For filesystems and networking: These are subsystems that, if implemented in GatOS, can be easily wired up to libgata for high level support, I just didn't have the time. I am but a student, after all.*
 
 
-## Getting Started
+## Running the Kernel by Itself
 
-Building and running GatOS is designed to be exceedingly simple. If you have **Python 3.13+**, you can go from zero to running the kernel in two steps:
+This section is for working on the kernel directly: reading it, hacking on it, watching it boot with nothing of yours on top. If you came here to build your own OS, you want [Start Here](#start-here) instead; `appa` does all of this for you and you never touch this repository.
+
+With that said: building and running GatOS is designed to be exceedingly simple. If you have **Python 3.13+**, you can go from zero to running the kernel in two steps:
 
 ```bash
 # 1. Install and configure the portable toolchain
@@ -459,7 +480,7 @@ The restrictive nature is partly due to academic requirements and partly because
 
 ## So... what now?
 
-This project isn't really all that exciting on its own, because GatOS is not meant to be a standalone kernel. Where things get exciting is with [The Gata Programming Language](https://github.com/ApparentlyPlus/Gata) and [Appa](https://github.com/ApparentlyPlus/Appa), the transpiler for Gata, which lowers your code to target a custom GatOS build! 
+As [Start Here](#start-here) says up top, this project isn't really all that exciting on its own, because GatOS is not meant to be a standalone kernel. Where things get exciting is with [The Gata Programming Language](https://github.com/ApparentlyPlus/Gata) and [Appa](https://github.com/ApparentlyPlus/Appa), the transpiler for Gata, which lowers your code to target a custom GatOS build! 
 
 Why don't you setup appa and try writing your first Gata program? You are 10 lines of Gata code away from your very own first, custom, real, awesome operating system!
 
