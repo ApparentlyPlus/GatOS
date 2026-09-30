@@ -10,7 +10,7 @@
  * - Control transfer support for device enumeration and configuration
  * - Hub enumeration and downstream port management
  * - Integration with input subsystem for USB keyboards
- * - Robust error handling and timeouts for hardware interactions
+ * - Error handling and timeouts for hardware interactions
  * - DMA memory management with kernel address mapping
  * - Spinlock synchronization for concurrent access to shared data structures
  * 
