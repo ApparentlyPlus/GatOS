@@ -56,6 +56,7 @@ The first section of this README focuses on providing some insight as to the vis
 - [Contributing](#contributing)
 - [License](#license)
 - [Acknowledgments](#acknowledgments)
+- [Third-Party Code and Licenses](#third-party-code-and-licenses)
 - [So... what now?](#so-what-now)
 
 
@@ -465,7 +466,7 @@ Once the thesis is complete, I might consider opening it up for contributions, b
 
 This project is licensed under a strict custom license that does not allow for replication of the code without explicit consent. I am unsure how this project will be used in the future, so the licensing is restrictive for now.
 
-See the [LICENSE](LICENSE) file for details.
+See the [LICENSE](LICENSE) file for details. It covers the code I wrote. Third-party code keeps its own license, see [Third-Party Code and Licenses](#third-party-code-and-licenses).
 
 The restrictive nature is partly due to academic requirements and partly because I haven't decided what I want to do with this project long-term. This may change after thesis completion.
 
@@ -477,6 +478,31 @@ The restrictive nature is partly due to academic requirements and partly because
 - [Simple-OS](https://github.com/httpe/simple-os) - An already self-hosted modern kernel with libc ported, plenty useful for peeking inside implementations
 - [OS-Series](https://github.com/davidcallanan/os-series/) - Helped me boostrap the entire project
 - [OSDev-Notes](https://github.com/dreamportdev/Osdev-Notes/tree/master) - A book like no other, perfect for understanding every single detail of OS development
+
+## Third-Party Code and Licenses
+
+The [license](#license) above covers the code I wrote. Everything below keeps its own license, and the notices that come with it are preserved in the source files.
+
+### In this repository
+
+| Component | Where | Upstream | License |
+|---|---|---|---|
+| printf, sprintf, snprintf | `src/klibc/stdio.*`, `src/ulibc/stdio.*` | [mpaland/printf](https://github.com/mpaland/printf) by Marco Paland | MIT |
+| libm (`sin`, `exp`, `pow` and friends) | `src/ulibc/math.*` | [fdlibm](https://www.netlib.org/fdlibm/) by Sun Microsystems, adapted as [fdlibm_freestanding](https://github.com/ApparentlyPlus/fdlibm_freestanding) | Sun's permissive fdlibm notices, kept at the top of `src/ulibc/math.c` |
+| Windows `grub-mkrescue` port and GRUB patch notes | `docs/toolchain/` | [GNU GRUB](https://www.gnu.org/software/grub/) | GPL-3.0-or-later |
+
+
+### Prebuilt toolchain
+
+The toolchain that `appa install` and `setup.py` download is assembled from several upstream projects. Each keeps its own license. The upstream sources are linked below, and the scripts, patches and notes I used to build or modify them are in [`docs/toolchain/`](./docs/toolchain/).
+
+| Component | Where it comes from | License |
+|---|---|---|
+| GCC and GNU Binutils (`x86_64-elf`) | [lordmilko/i686-elf-tools](https://github.com/lordmilko/i686-elf-tools) on Linux and Windows. Built with [osxcross](https://github.com/tpoechtrager/osxcross) on macOS | GPL-3.0-or-later (GCC also has the Runtime Library Exception) |
+| [GRUB](https://www.gnu.org/software/grub/) 2.14 | [ftp.gnu.org/gnu/grub](https://ftp.gnu.org/gnu/grub/), with the patches in `docs/toolchain/` | GPL-3.0-or-later |
+| [QEMU](https://www.qemu.org/) | [lucasmz1/Qemu-AppImage](https://github.com/lucasmz1/Qemu-AppImage) on Linux, [qemu.org](https://www.qemu.org/download/#windows) builds on Windows, built from source on macOS | GPL-2.0, with some parts under other licenses |
+| [xorriso](https://www.gnu.org/software/xorriso/) 1.5.2 | [ftp.gnu.org/gnu/xorriso](https://ftp.gnu.org/gnu/xorriso/) on Linux and macOS, [PeyTy/xorriso-exe-for-windows](https://github.com/PeyTy/xorriso-exe-for-windows) on Windows | GPL-3.0-or-later |
+| [mtools](https://github.com/hamishcoleman/mtools) | Built from source | GPL-3.0-or-later |
 
 ## So... what now?
 

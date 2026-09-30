@@ -56,6 +56,19 @@ Contains **cross-compilation** notes and fetch instructions (building/getting Wi
 * **`grub-mkrescue.cpp`**: A custom C++ wrapper used to replace the standard `grub-mkrescue` utility, which is absent for windows.
 * Includes notes for obtaining `gcc`, `grub`, `mtools`, `qemu`, and `xorriso` for Windows.
 
+### Licenses and upstream sources
+
+The toolchain is assembled from these upstream projects. Each keeps its own license, and the scripts, patches and notes I used to build or modify them are in this directory.
+
+| Component | Where it comes from | License |
+|---|---|---|
+| GCC and GNU Binutils (`x86_64-elf`) | [lordmilko/i686-elf-tools](https://github.com/lordmilko/i686-elf-tools) on Linux and Windows. Built here with [osxcross](https://github.com/tpoechtrager/osxcross) and the [macOS 14.5 SDK](https://github.com/joseluisq/macosx-sdks) on macOS | GPL-3.0-or-later (GCC also has the Runtime Library Exception) |
+| GRUB 2.14 | [ftp.gnu.org/gnu/grub](https://ftp.gnu.org/gnu/grub/) (`grub-2.14-for-windows` on Windows, with the EFI modules rebuilt). Built from source on Linux and macOS, with the patches in `Linux/linux-build-grub.txt` and `macOS/macos-build-grub.txt` | GPL-3.0-or-later |
+| `grub-mkrescue` for Windows | `Windows/grub-mkrescue.cpp`, a port of GRUB's `util/grub-mkrescue.c` | GPL-3.0-or-later |
+| QEMU | [lucasmz1/Qemu-AppImage](https://github.com/lucasmz1/Qemu-AppImage) on Linux, [qemu.org](https://www.qemu.org/download/#windows) on Windows, built from the Homebrew dependency tree on macOS | GPL-2.0, with some parts under other licenses (see upstream) |
+| xorriso 1.5.2 | [ftp.gnu.org/gnu/xorriso](https://ftp.gnu.org/gnu/xorriso/) on Linux and macOS, [PeyTy/xorriso-exe-for-windows](https://github.com/PeyTy/xorriso-exe-for-windows) on Windows | GPL-3.0-or-later |
+| mtools | [hamishcoleman/mtools](https://github.com/hamishcoleman/mtools) | GPL-3.0-or-later |
+
 ### Usage
 
 There is no master makefile. To use these:

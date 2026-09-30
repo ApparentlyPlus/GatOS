@@ -6,6 +6,9 @@
  * Disable devices, Flush buffer, Set config byte, Self-test controller,
  * Check for dual channel, Interface tests, Enable devices
  *
+ * Reference: the OSDev wiki "8042 PS/2 Controller" page and the Linux kernel's
+ * i8042 driver (drivers/input/serio/i8042.c, GPL-2.0).
+ *
  * Author: u/ApparentlyPlus
  */
 

@@ -1,6 +1,8 @@
 /*
  * math.h - Header file for mathematical functions based on fdlibm
  *
+ * See math.c for the fdlibm copyright notices.
+ *
  * Author: u/ApparentlyPlus
  */
 
