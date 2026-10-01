@@ -194,7 +194,7 @@ Initializing `physmap` to zero ensures that all fields start in a clean, predict
 
 To implement the physmap, we first need to reserve a contiguous block of virtual memory to store all the page tables that will map physical RAM, as discussed.
 
-We do this with a function called `reserve_required_tablespace`, which takes our multiboot parser as a parameter. This allows us to query the total RAM, determine how many page tables are needed, and reserve the corresponding virtual space by moving `KEND`. Let's break down the implementation piece by piece.
+We do this with a function called `reserve_tables`, which takes our multiboot parser as a parameter. This allows us to query the total RAM, determine how many page tables are needed, and reserve the corresponding virtual space by moving `KEND`. Let's break down the implementation piece by piece.
 
 
 ### Aligning Values
@@ -211,7 +211,7 @@ This helper function rounds a value `val` up to the nearest multiple of `align`.
 ### Calculating RAM and Pages
 
 ```c
-uint64_t total_RAM = align_up(multiboot_get_total_RAM(multiboot, MEASUREMENT_UNIT_BYTES), PAGE_SIZE);
+uint64_t total_RAM = align_up(multiboot_total_ram(multiboot, MEASUREMENT_UNIT_BYTES), PAGE_SIZE);
 uint64_t total_pages = total_RAM / PAGE_SIZE;
 ```
 
@@ -244,10 +244,9 @@ Next, we calculate how many page tables of each level are needed to map all of R
 ```c
 uint64_t table_bytes = (total_PTs + total_PDs + total_PDPTs + total_PML4s) * 4 * MEASUREMENT_UNIT_KB;
 
-// The kernel range is mapped from this same pool, so the boot tables stay
-// scratch, meaning it needs its own PDPT and PD plus one PT per 2MiB. That size
-// depends on KEND, which the pool itself moves, so settle it in two passes
-// and keep one PT of slack.
+// The kernel range comes from this same pool (so the boot tables stay scratch) and needs its
+// own PDPT, PD and one PT per 2MiB. The size depends on KEND, which the pool moves, so two
+// passes, plus one PT of slack.
 uint64_t kernel_PTs = CEIL_DIV(KEND + table_bytes + 2 * PAGE_SIZE, PAGE_2MB);
 kernel_PTs = CEIL_DIV(KEND + table_bytes + (2 + kernel_PTs) * PAGE_SIZE, PAGE_2MB) + 1;
 table_bytes += (2 + kernel_PTs) * PAGE_SIZE;
@@ -284,7 +283,7 @@ We also walk the multiboot memory map to verify that the reserved table range do
 for (size_t i = 0; i < (*multiboot).memory_map_length; i++) {
     uintptr_t region_start, region_end;
     uint32_t region_type;
-    if (multiboot_get_memory_region(multiboot, i, &region_start, &region_end, &region_type) != 0)
+    if (multiboot_mem_region(multiboot, i, &region_start, &region_end, &region_type) != 0)
         continue;
 
     // If the tablespace end falls within this region, it must be available RAM
@@ -298,7 +297,7 @@ for (size_t i = 0; i < (*multiboot).memory_map_length; i++) {
 
 ```c
 uint64_t fb_phys = 0, fb_size = 0;
-multiboot_framebuffer_t* fb = multiboot_get_framebuffer(multiboot);
+multiboot_framebuffer_t* fb = multiboot_framebuffer(multiboot);
 if (fb) { fb_phys = fb->addr; fb_size = (uint64_t)fb->height * fb->pitch; }
 ```
 
@@ -334,7 +333,7 @@ Finally, we increase `KEND` by the total size of the reserved tables, effectivel
 
 After moving `KEND` to account for the reserved page table space, we call `cleanup_kpt(0x0, get_kend(false))`. We covered this function's implementation in full in the previous chapter: it zeroes out every page table entry outside the kernel's higher-half range, including the identity map at `PML4[0]` that the assembler boot code originally set up. By the time it returns, the only valid virtual region is the kernel itself together with the newly reserved tablespace, exactly what we want before handing things off to `build_physmap`.
 
-The only difference here is that we make sure to move that call *after* `reserve_required_tablespace`, so that the required tablespace has been incorporated into the kernel region. Then, we can nuke everything else. Remember, `get_kend` returns the *current* kernel end, meaning it returns a runtime adjusted value, not the linker symbol.
+The only difference here is that we make sure to move that call *after* `reserve_tables`, so that the required tablespace has been incorporated into the kernel region. Then, we can nuke everything else. Remember, `get_kend` returns the *current* kernel end, meaning it returns a runtime adjusted value, not the linker symbol.
 
 ## Building the Physmap
 
@@ -604,7 +603,7 @@ void kernel_main(void* mb_info) {
 
     QEMU_LOG("Multiboot structure parsed and copied to higher half", TOTAL_DBG);
 
-    reserve_required_tablespace(&multiboot);
+    reserve_tables(&multiboot);
     QEMU_LOG("Reserved the required space for page tables in the kernel region", TOTAL_DBG);
 
     cleanup_kpt(0x0, get_kend(false));
@@ -615,6 +614,6 @@ void kernel_main(void* mb_info) {
 }
 ```
 
-This version of `kernel_main` ties together all previous steps: the multiboot structure is parsed and relocated into the higher half before we strip the identity map, `reserve_required_tablespace` claims the virtual space for the new page tables, `cleanup_kpt` removes everything we no longer need, and `build_physmap` constructs the final address space layout.
+This version of `kernel_main` ties together all previous steps: the multiboot structure is parsed and relocated into the higher half before we strip the identity map, `reserve_tables` claims the virtual space for the new page tables, `cleanup_kpt` removes everything we no longer need, and `build_physmap` constructs the final address space layout.
 
 Next chapter? Interrupts, Panics, and Spinlocks. Stay tuned!

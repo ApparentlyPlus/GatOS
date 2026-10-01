@@ -1,6 +1,6 @@
 /*
  * uproc.h - Header for userspace forward declarations
- * 
+ *
  * Author: u/ApparentlyPlus
  */
 

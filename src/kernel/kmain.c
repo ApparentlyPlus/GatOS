@@ -1,10 +1,5 @@
 /*
- * main.c - Entry point for the GatOS 64-bit kernel
- *
- * This file defines the `kernel_main` function, which is the first function
- * called once the kernel takes control after boot. The entire staged init
- * sequence lives in kernel_bootstrap (kernel/bootstrap.c); this file hosts
- * only what runs after it: the userspace launch and the interactive loop.
+ * kmain.c - Entry point for the GatOS 64-bit kernel
  *
  * Author: u/ApparentlyPlus
  */
@@ -20,9 +15,6 @@ extern void uapps(void);
 
 static char* KERNEL_VERSION = "v2.2.0";
 
-/*
- * kernel_main - Main entry point for the GatOS kernel
- */
 void kernel_main(void* mb_info) {
 
 	// If this is a test build, run the test suite instead

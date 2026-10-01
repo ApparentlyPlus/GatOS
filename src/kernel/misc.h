@@ -1,9 +1,6 @@
 /*
  * misc.h - Miscellaneous kernel utilities
  *
- * Contains function declarations for kernel banner printing, 
- * position verification, and integer conversion utilities.
- *
  * Author: u/ApparentlyPlus
  */
 

@@ -1,9 +1,7 @@
 /*
  * spinlock.c - Spinlock implementation
  *
- * Implements low-level mutual exclusion using atomic test-and-set.
- * Includes interrupt-saving logic to prevent deadlocks between
- * thread context and interrupt context.
+ * Saves and disables interrupts while held, so thread and IRQ context can't deadlock.
  *
  * Author: u/ApparentlyPlus
  */
@@ -13,9 +11,6 @@
 #include <kernel/sys/apic.h>
 #include <kernel/debug.h>
 
-/*
- * spinlock_init - Initialize a spinlock to an unlocked state
- */
 void spinlock_init(spinlock_t* lock, const char* name) {
     lock->locked = 0;
     lock->cpu_id = 0xFFFFFFFF; // No CPU holds it

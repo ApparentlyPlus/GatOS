@@ -1,9 +1,6 @@
 /*
  * input.c - Input Hub Implementation
- * 
- * This file implements the system input hub that handles keyboard events 
- * and routes them to the appropriate TTY.
- * 
+ *
  * Author: u/ApparentlyPlus
  */
 
@@ -12,16 +9,12 @@
 #include <kernel/drivers/dashboard.h>
 #include <kernel/debug.h>
 
-/*
- * input_init - Initializes the system input hub
- */
 void input_init(void) {
     LOGF("[INPUT] Hub initialized.\n");
 }
 
 /*
- * input_handle_key - Entry point for keyboard events. Handles system 
- * hotkeys and routes input to the active TTY.
+ * input_handle_key - Keyboard event entry point, handles hotkeys and routes the rest to the active TTY
  */
 void input_handle_key(key_event_t event) {
     // Only handle key press events, ignore releases for now
@@ -51,7 +44,7 @@ void input_handle_key(key_event_t event) {
 
     // If we have an active TTY, route the key event to it
     if (active_tty) {
-        char c = keyboard_keycode_to_ascii(event);
+        char c = keycode_to_ascii(event);
         if (c) {
             tty_input(active_tty, c);
         } else if (event.keycode == KEY_BACKSPACE) {

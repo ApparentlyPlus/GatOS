@@ -1,9 +1,6 @@
 /*
  * syscalls.h - Userspace system call interface
  *
- * This file provides inline assembly wrappers for invoking
- * kernel system calls from Ring 3.
- * 
  * Author: u/ApparentlyPlus
  */
 

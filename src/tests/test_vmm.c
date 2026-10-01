@@ -1,13 +1,6 @@
 /*
  * test_vmm.c - Virtual Memory Manager Validation Suite
  *
- * Tests every public VMM function: kernel_get, create, destroy, switch,
- * get_current, alloc, alloc_at, free, resize, protect, map/unmap page+range,
- * get_physical, check_flags, check_buffer, find_mapped_object,
- * verify_integrity, get_alloc_base/end/size, vmm_stats, vmm_dump.
- *
- * Machine-adaptive: the OOM test queries the actual VMM address range.
- * 
  * Author: Claude Code
  */
 
@@ -30,9 +23,9 @@ typedef struct { ttype_t type; vmm_t* vmm; void* addr; size_t sz; bool on; } vmt
 
 #define MT 2048
 static vmtr_t tr[MT];
-static int    tidx         = 0;
-static int    ntests  = 0;
-static int    npass = 0;
+static int tidx = 0;
+static int ntests = 0;
+static int npass = 0;
 
 #pragma region Tracker
 
@@ -648,11 +641,11 @@ static void run_test(const char* name, bool (*fn)(void)) {
     bool pass = fn();
     if (tidx > 0) { LOGF("[WARN] leak (cleaning) ... "); tr_free(); }
     if (pass) { npass++; LOGF("[PASS]\n"); }
-    else       { LOGF("[FAIL]\n"); }
+    else { LOGF("[FAIL]\n"); }
 }
 
 void test_vmm(void) {
-    ntests  = 0;
+    ntests = 0;
     npass = 0;
 
     LOGF("\n--- BEGIN VMM TEST ---\n");

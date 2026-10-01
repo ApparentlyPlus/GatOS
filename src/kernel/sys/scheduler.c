@@ -1,9 +1,6 @@
 /*
  * scheduler.c - Round-Robin Scheduler implementation
  *
- * This file implements the core scheduling logic, including thread switching,
- * idle task management, and sleep/wakeup mechanisms.
- *
  * Author: u/ApparentlyPlus
  */
 
@@ -28,10 +25,10 @@ static thread_t* rq_tail = NULL;
 
 // CPU utilisation counters (incremented in IRQ context, no locking needed)
 static volatile uint64_t ticks_total = 0;
-static volatile uint64_t ticks_idle  = 0;
+static volatile uint64_t ticks_idle = 0;
 
 static avl_tree_t sleep_tree;
-static thread_t*  dead_head = NULL;
+static thread_t* dead_head = NULL;
 
 static thread_t* idle = NULL;
 static process_t* idle_proc = NULL;
@@ -52,9 +49,9 @@ static int sleep_cmp(const avl_node_t* a, const avl_node_t* b) {
     const thread_t* ta = AVL_ENTRY(a, thread_t, sleep_node);
     const thread_t* tb = AVL_ENTRY(b, thread_t, sleep_node);
     if (ta->wake_at < tb->wake_at) return -1;
-    if (ta->wake_at > tb->wake_at) return  1;
+    if (ta->wake_at > tb->wake_at) return 1;
     if (ta->tid < tb->tid) return -1;
-    if (ta->tid > tb->tid) return  1;
+    if (ta->tid > tb->tid) return 1;
     return 0;
 }
 
@@ -89,8 +86,7 @@ static void sched_add_dead(thread_t* thread);
 static void sched_add_sleep(thread_t* thread);
 
 /*
- * idle_thread_entry - MONITOR/MWAIT idle loop (falls back to HLT).
- * Watches rq_head so any sched_add() store wakes MWAIT immediately.
+ * idle_thread_entry - MONITOR/MWAIT idle loop, HLT fallback. Watches rq_head so any sched_add() wakes it
  */
 static void idle_thread_entry(void* arg) {
     (void)arg;
@@ -400,14 +396,11 @@ cpu_context_t* sched_schedule(cpu_context_t* ctx) {
 
     write_msr(MSR_FS_BASE, cur->fs_base);
 
-    /* 
-    Author's Note: 
-    
-    Return a pointer to the embedded context struct.
-    ISR.S will do "mov rsp, rax" to use it as a staging area 
-    for the pop/iretq sequence, and iretq then restores the real 
-    RSP from context.iret_rsp
-    */
+    /*
+     * Author's Note:
+     * Return the embedded context struct. ISR.S does mov rsp, rax and uses it as a staging area
+     * for the pop/iretq sequence, iretq then restores the real RSP from context.iret_rsp
+     */
 
     cpu_context_t *next_ctx = &cur->context;
     uint16_t cs = (uint16_t)next_ctx->iret_cs;

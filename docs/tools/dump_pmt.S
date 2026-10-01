@@ -7,9 +7,7 @@
 .section .text
 .code32
 
-# -----------------------------------------------------------------------------
-# Serial port output functions
-# -----------------------------------------------------------------------------
+# serial output
 # Write character in AL to serial port
 serial_write_char:
 	push dx
@@ -99,10 +97,7 @@ serial_write_hex16:
 	pop eax
 	ret
 
-# -----------------------------------------------------------------------------
-# Dump all present entries in PML4, PDPT, PD, PT
-# Dumps physical address and flags
-# -----------------------------------------------------------------------------
+# dump every present entry in PML4, PDPT, PD, PT (physical address and flags)
 dbg_dump_pmt_asm:
     push eax
     push ebx

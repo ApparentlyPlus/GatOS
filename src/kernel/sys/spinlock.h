@@ -1,10 +1,6 @@
 /*
  * spinlock.h - Spinlock Primitives
  *
- * Provides mutual exclusion for kernel data structures. Handles interrupt
- * safety by disabling interrupts on the local core during lock acquisition
- * and restoring the previous state upon release.
- *
  * Author: u/ApparentlyPlus
  */
 

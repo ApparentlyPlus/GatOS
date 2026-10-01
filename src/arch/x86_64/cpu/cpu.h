@@ -1,9 +1,7 @@
 /*
  * cpu.h - CPU Feature and Topology Information
  *
- * Provides detailed CPU information for GatOS, including vendor, brand,
- * feature detection, and core count. Designed for x86/x86_64 processors.
- * This is still primitive and will be expanded in future releases.
+ * Still primitive, will be expanded.
  *
  * Author: u/ApparentlyPlus
  */

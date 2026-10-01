@@ -1,9 +1,6 @@
 /*
  * test.c - Entry point for the GatOS 64-bit kernel test build
  *
- * This file defines the `kernel_test` function, which is the first function
- * called once the kernel takes control after boot, assuming a test build.
- *
  * Author: u/ApparentlyPlus, Claude Code
  */
 
@@ -63,7 +60,7 @@ void kernel_test(void* mb_info, char* KERNEL_VERSION) {
     }
 
 	// Memory management setup
-	reserve_required_tablespace(&multiboot);
+	reserve_tables(&multiboot);
 	cleanup_kpt(0x0, get_kend(false));
 	build_physmap();
 
@@ -83,7 +80,7 @@ void kernel_test(void* mb_info, char* KERNEL_VERSION) {
 	for (size_t i = 0; i < multiboot.memory_map_length; i++) {
 		uintptr_t region_start, region_end;
 		uint32_t region_type;
-		if (multiboot_get_memory_region(&multiboot, i, &region_start, &region_end, &region_type) != 0)
+		if (multiboot_mem_region(&multiboot, i, &region_start, &region_end, &region_type) != 0)
 			continue;
 		if (region_type != MULTIBOOT_MEMORY_AVAILABLE)
 			continue;

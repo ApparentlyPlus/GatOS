@@ -1,10 +1,8 @@
 /*
  * i8042.c - Intel 8042 PS/2 Controller Driver Implementation
  *
- * This implementation follows the standard initialization sequence: 
- * 
- * Disable devices, Flush buffer, Set config byte, Self-test controller,
- * Check for dual channel, Interface tests, Enable devices
+ * Standard init sequence: disable devices, flush buffer, set config byte, self-test, check
+ * for dual channel, interface tests, enable devices.
  *
  * Reference: the OSDev wiki "8042 PS/2 Controller" page and the Linux kernel's
  * i8042 driver (drivers/input/serio/i8042.c, GPL-2.0).

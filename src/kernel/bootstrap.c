@@ -1,9 +1,6 @@
 /*
  * bootstrap.c - Staged kernel initialization
  *
- * Implements kernel_bootstrap, the full init sequence formerly inlined in
- * kernel_main. Keeping it here leaves kmain.c as a thin caller.
- *
  * Author: u/ApparentlyPlus
  */
 
@@ -44,10 +41,8 @@
 static uint8_t multiboot_buffer[8 * 1024];
 
 /*
- * kernel_bootstrap - Bring the kernel from multiboot handoff to fully
- * initialized with interrupts enabled. Returns false on a fatal early
- * failure (before panic is usable). verbose gates the banner/kprintf
- * output; version is what the banner displays.
+ * kernel_bootstrap - Multiboot handoff to fully initialized, interrupts on
+ * Returns false on a fatal early failure (panic isn't usable yet)
  */
 bool kernel_bootstrap(void* mb_info, multiboot_parser_t* mb, bool verbose, const char* version) {
 
@@ -72,7 +67,7 @@ bool kernel_bootstrap(void* mb_info, multiboot_parser_t* mb, bool verbose, const
 	QEMU_LOG("Multiboot structure parsed and copied to higher half", TOTAL_DBG);
 
 	// Early paging and physmap
-	reserve_required_tablespace(mb);
+	reserve_tables(mb);
 	QEMU_LOG("Reserved the required space for page tables in the kernel region", TOTAL_DBG);
 
 	cleanup_kpt(0x0, get_kend(false));
@@ -101,7 +96,7 @@ bool kernel_bootstrap(void* mb_info, multiboot_parser_t* mb, bool verbose, const
 	for (size_t i = 0; i < mb->memory_map_length; i++) {
 		uintptr_t region_start, region_end;
 		uint32_t region_type;
-		if (multiboot_get_memory_region(mb, i, &region_start, &region_end, &region_type) != 0)
+		if (multiboot_mem_region(mb, i, &region_start, &region_end, &region_type) != 0)
 			continue;
 		if (region_type != MULTIBOOT_MEMORY_AVAILABLE){
 			vmm_add_mmio(region_end - region_start);
@@ -195,9 +190,9 @@ bool kernel_bootstrap(void* mb_info, multiboot_parser_t* mb, bool verbose, const
 		kprintf("[KERNEL] Heap and Slab allocators initialized.\n");
 		kprintf("[KERNEL] Syscall Interface (MSRs) enabled.\n");
 		kprintf("[KERNEL] Framebuffer resolution %dx%dx%d initialized.\n",
-	           multiboot_get_framebuffer(mb)->width,
-	           multiboot_get_framebuffer(mb)->height,
-	           multiboot_get_framebuffer(mb)->bpp);
+	           multiboot_framebuffer(mb)->width,
+	           multiboot_framebuffer(mb)->height,
+	           multiboot_framebuffer(mb)->bpp);
 		kprintf("[KERNEL] Dynamic TTY subsystem online.\n");
 		kprintf("[KERNEL] Use ALT+Tab to cycle between available consoles.\n");
 	}

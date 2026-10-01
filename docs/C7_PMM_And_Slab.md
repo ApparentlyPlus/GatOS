@@ -589,7 +589,7 @@ After registering exclusions, we walk the multiboot memory map and mark each ava
 for (size_t i = 0; i < multiboot.memory_map_length; i++) {
     uintptr_t region_start, region_end;
     uint32_t region_type;
-    if (multiboot_get_memory_region(&multiboot, i, &region_start, &region_end, &region_type) != 0)
+    if (multiboot_mem_region(&multiboot, i, &region_start, &region_end, &region_type) != 0)
         continue;
     if (region_type != MULTIBOOT_MEMORY_AVAILABLE){
         // Handle non RAM...
@@ -617,17 +617,17 @@ static pmm_status_t pmm_mark_free_range(uint64_t start, uint64_t end) {
         }
     }
 
-    partition_range_into_blocks(start, end);
+    split_range(start, end);
     return PMM_OK;
 }
 ```
 
 Before marking any range free, we check whether it overlaps any exclusion zone. If it does, we split the range at the exclusion boundary and recursively mark the non-excluded pieces free. If the range fully contains an exclusion zone, the two recursive calls together cover everything except the excluded portion. If the range is fully contained within an exclusion zone, neither recursive call fires, and we return having marked nothing free.
 
-The final call to `partition_range_into_blocks` handles a range that has passed all exclusion checks:
+The final call to `split_range` handles a range that has passed all exclusion checks:
 
 ```c
-static void partition_range_into_blocks(uint64_t range_start, uint64_t range_end) {
+static void split_range(uint64_t range_start, uint64_t range_end) {
     uint64_t cur = range_start;
 
     while (cur < range_end) {
@@ -672,7 +672,7 @@ pmm_exclude_range(get_kstart(false), get_kend(false));
 for (size_t i = 0; i < multiboot.memory_map_length; i++) {
     uintptr_t region_start, region_end;
     uint32_t region_type;
-    if (multiboot_get_memory_region(&multiboot, i, &region_start, &region_end, &region_type) != 0)
+    if (multiboot_mem_region(&multiboot, i, &region_start, &region_end, &region_type) != 0)
         continue;
     if (region_type != MULTIBOOT_MEMORY_AVAILABLE){
         vmm_add_mmio(region_end - region_start);

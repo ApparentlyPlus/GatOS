@@ -1,9 +1,6 @@
 /*
  * pci.c - PCI/PCIe Subsystem Implementation
  *
- * This file implements legacy I/O config space access, device enumeration, 
- * BAR decoding, and MSI support for PCI devices.
- * 
  * Author: u/ApparentlyPlus
  */
 
@@ -118,9 +115,9 @@ void pci_init(void) {
 }
 
 /*
- * pci_get_xhci_controllers - Finds all xHCI USB controllers (takes a moment)
+ * pci_find_xhci - Finds all xHCI USB controllers (takes a moment)
  */
-int pci_get_xhci_controllers(pci_dev_t *out_arr, int max_out) {
+int pci_find_xhci(pci_dev_t *out_arr, int max_out) {
     int found = 0;
     for (int b = 0; b < 256; b++) {
         for (int d = 0; d < 32; d++) {
@@ -175,9 +172,6 @@ void pci_enable(pci_dev_t *d) {
     pci_write16(d, PCI_COMMAND, cmd);
 }
 
-/*
- * pci_cfg_msi - Configures MSI for a PCI device
- */
 bool pci_cfg_msi(pci_dev_t *d, uint8_t vec, uint32_t lapic_id) {
     if (!d->msi_cap) return false;
     uint8_t c = d->msi_cap;

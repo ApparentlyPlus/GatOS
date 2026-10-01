@@ -1,11 +1,9 @@
 /*
  * uproc.c - Userspace thread implementations
  *
- * This entire translation unit is routed into the userspace sections
- * (.user_text / .user_rodata / .user_data / .user_bss) by the linker script
- * via the *uproc* filename pattern, exactly as ulibc is. No section attributes
- * are needed here, just plain C.
- * 
+ * The whole file is routed to the user sections (.user_text etc) by the linker via the
+ * *uproc* pattern, same as ulibc. Plain C, no section attributes.
+ *
  * Author: u/ApparentlyPlus
  */
 
@@ -23,10 +21,10 @@ void donut(void) {
     syscall_tty_ctrl(TTY_CTRL_CURSOR, 0);
 
     uint64_t dims = syscall_tty_ctrl(TTY_CTRL_GET_DIMS, 0);
-    int screen_width  = (int)(dims & 0xFFFFFFFF);
+    int screen_width = (int)(dims & 0xFFFFFFFF);
     int screen_height = (int)(dims >> 32);
 
-    if (screen_width  <= 0) screen_width  = 80;
+    if (screen_width <= 0) screen_width = 80;
     if (screen_height <= 0) screen_height = 24;
 
     int center_x = screen_width / 2;
@@ -56,7 +54,7 @@ void donut(void) {
 
     for (;;) {
         memset(b, 32, buffer_size);
-        memset(z, 0,  buffer_size * sizeof(float));
+        memset(z, 0, buffer_size * sizeof(float));
 
         float sinA = sin(A), cosA = cos(A);
         float sinB = sin(B), cosB = cos(B);
@@ -93,7 +91,7 @@ void donut(void) {
                     if (D > z[o]) {
                         z[o] = D;
                         int N = (int)(8.0f * (n_outer - sini * cosj_ca - cosi * cosj_sinB));
-                        if (N < 0)  N = 0;
+                        if (N < 0) N = 0;
                         if (N > 11) N = 11;
                         b[o] = shading[N];
                     }
@@ -129,7 +127,7 @@ void demo_threadA(void* arg) {
 }
 
 /*
- * demo_threadB - Iterates, then exercises mmap/munmap to demonstrate an intentional page fault on access after unmap
+ * demo_threadB - mmap/munmap, then touch the page on purpose to take a page fault
  */
 void demo_threadB(void* arg) {
     (void)arg;

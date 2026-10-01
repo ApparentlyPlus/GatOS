@@ -1,13 +1,6 @@
 /*
  * test_heap.c - Kernel Heap Manager Validation Suite (White-Box)
  *
- * Tests every public heap function: heap_kernel_init, heap_kernel_get,
- * kmalloc, kfree, krealloc, kcalloc, heap_check,
- * heap_alloc_sz, heap_stats, heap_align_size, heap_validate_blk.
- *
- * Machine-adaptive: large allocation stress targets 25% of available
- * heap space rather than a hardcoded byte count.
- * 
  * Author: Claude Code
  */
 
@@ -84,9 +77,9 @@ typedef struct {
 
 #define MAX_TRACK 1024
 static htrace_t track[MAX_TRACK];
-static int  tidx         = 0;
-static int  ntests  = 0;
-static int  npass = 0;
+static int tidx = 0;
+static int ntests = 0;
+static int npass = 0;
 #pragma endregion
 
 #pragma region Tracker
@@ -169,7 +162,7 @@ static bool t_alloc_meta(void) {
     heap_test_hdr_t* h = hdr(p);
     TEST_ASSERT(h->magic == BLOCK_MAGIC_USED);
     TEST_ASSERT(h->size >= 64);
-    TEST_ASSERT(h->red_zone_pre  == BLOCK_RED_ZONE);
+    TEST_ASSERT(h->red_zone_pre == BLOCK_RED_ZONE);
     TEST_ASSERT(h->red_zone_post == BLOCK_RED_ZONE);
     tr_free(); return true;
 }
@@ -180,7 +173,7 @@ static bool t_alloc_ftr(void) {
     heap_test_hdr_t* h = hdr(p);
     heap_test_ftr_t* f = ftr(h);
     TEST_ASSERT(f->magic == BLOCK_MAGIC_USED);
-    TEST_ASSERT(f->red_zone_pre  == BLOCK_RED_ZONE);
+    TEST_ASSERT(f->red_zone_pre == BLOCK_RED_ZONE);
     TEST_ASSERT(f->red_zone_post == BLOCK_RED_ZONE);
     tr_free(); return true;
 }
@@ -298,7 +291,7 @@ static bool t_realloc_hole(void) {
     kfree(B); track[1].active = false;
     void* A2 = krealloc(A, 100);
     if (A2 == A) track[0].active = false;
-    else         tr_add(A2);
+    else tr_add(A2);
     TEST_ASSERT(A2 != NULL);
     TEST_ASSERT(hdr(A2)->size >= 100);
     uint8_t* b = (uint8_t*)A2;
@@ -565,15 +558,15 @@ static bool t_stress_churn(void) {
 static void run_test(const char* name, bool (*fn)(void)) {
     ntests++;
     LOGF("[TEST] %-40s ", name);
-    heap_kernel_get(); /* ensure init */
+    heap_kernel_get(); /* force init */
     bool pass = fn();
     if (tidx > 0) { LOGF("[WARN] leak (cleaning) ... "); tr_free(); }
     if (pass) { npass++; LOGF("[PASS]\n"); }
-    else       { LOGF("[FAIL]\n"); }
+    else { LOGF("[FAIL]\n"); }
 }
 
 void test_heap(void) {
-    ntests  = 0;
+    ntests = 0;
     npass = 0;
 
     LOGF("\n--- BEGIN HEAP MANAGER TEST ---\n");

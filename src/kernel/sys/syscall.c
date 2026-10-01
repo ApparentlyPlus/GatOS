@@ -1,9 +1,6 @@
 /*
  * syscall.c - Syscall initialization and dispatching
  *
- * Configures the MSRs for the syscall/sysret instructions and
- * dispatches syscalls from userspace.
- *
  * Author: u/ApparentlyPlus
  */
 
@@ -55,8 +52,7 @@ void syscall_init(void) {
 }
 
 /*
- * syscall_dispatcher - Called from syscall_entry.S with a pointer to
- * the full cpu_context_t built on the per-thread kernel stack
+ * syscall_dispatcher - Called from syscall_entry.S with the cpu_context_t from the thread's kernel stack
  */
 void syscall_dispatcher(cpu_context_t* regs) {
     thread_t* current = sched_current();
@@ -84,8 +80,7 @@ void syscall_dispatcher(cpu_context_t* regs) {
             char kbuf[4096];
             size_t done = 0;
 
-            // We copy in chunks of 4KB to avoid excessive stack usage 
-            // and to ensure we don't exceed the kernel's stack limits
+            // Copy in 4KB chunks so we don't blow the kernel stack
             while (done < len) {
                 size_t block = len - done;
                 if (block > sizeof(kbuf)) block = sizeof(kbuf);

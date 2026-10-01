@@ -1,9 +1,6 @@
 /*
  * gdt.h - Global Descriptor Table and TSS definitions
  *
- * This file defines the structures and constants for the x86_64 GDT
- * and Task State Segment (TSS), necessary for Ring 3 transitions.
- *
  * Author: u/ApparentlyPlus
  */
 

@@ -1,14 +1,8 @@
 /*
  * heap.h - Kernel Heap Manager
  *
- * Provides a comprehensive heap allocation system for both kernel and userspace.
- * Uses boundary tag coalescing for efficient memory management and maintains
- * extensive metadata for debugging and validation.
- *
- * The heap automatically expands when needed by allocating virtual memory from
- * the VMM. It maintains a sorted free list organized by size for efficient
- * best-fit allocation. Blocks include magic numbers and red zones for corruption
- * detection.
+ * Grows by allocating from the VMM. Free list sorted by size (best fit), boundary tag
+ * coalescing, magic numbers and red zones for corruption detection.
  *
  * Author: u/ApparentlyPlus
  */
@@ -70,33 +64,13 @@ size_t heap_align_size(size_t size);
 bool heap_validate_blk(blk_hdr_t* header);
 
 /*
-
-Notes on improving Heap in the future:
-
-1. To catch use-after-free bugs, wed'd need to:
-
-- Poison freed memory - Fill the user data area with a recognizable pattern (like 0xDD) on free
-- Check for poison pattern - Verify the pattern is intact when the block is reallocated
-- Use guard pages - Unmap freed pages to cause a page fault on access (expensive but catches bugs immediately)
-- Track allocation/free backtraces - Store where allocations came from to help debug double-frees
-
-2. We should really reconsider our heap panic philosophy:
-
-Panic when:
-* Heap metadata is corrupted (you can't trust anything anymore)
-* Double-free detected (indicates serious bug)
-* Use-after-free confirmed (memory safety violation)
-* Free list or arena chain is broken (heap is unrecoverable)
-* Critical allocation fails with URGENT flag set
-
-Return NULL/error when:
-* Out of memory in normal allocation (caller should handle)
-* Invalid user input (NULL pointers, zero sizes)
-* Heap limits reached gracefully
-
-The heap allocator is a trust boundary:
-
-- If its internal structures are corrupted, the entire kernel is compromised. 
-- Panicking early and loudly is much better than silently propagating corruption 
-  that manifests as a mysterious crash miles away from the actual bug.
-*/
+ * Notes on improving the heap in the future:
+ *
+ * - Use-after-free detection: poison freed memory and check it on realloc, guard pages for
+ *   freed pages, alloc/free backtraces for double frees.
+ * - Panic when the heap itself is broken (corrupted metadata, double free, broken free list
+ *   or arena chain, urgent alloc failing). Return NULL on plain OOM, bad input or hitting the
+ *   heap limits. The heap is a trust boundary: if its structures are corrupt the whole kernel
+ *   is suspect, so fail early and loud instead of letting it show up as a mystery crash
+ *   somewhere else.
+ */

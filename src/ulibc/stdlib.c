@@ -1,10 +1,8 @@
 /*
  * stdlib.c - Subset of the C standard library for GatOS
  *
- * Boundary-tag allocator with arena per mmap design.
- * Mirrors kernel heap.c but uses syscall_mmap/syscall_munmap instead of the VMM
- * and embeds the arena header at the start of each mmap'd region.
- * 
+ * Boundary-tag allocator, one arena per mmap. Mirrors the kernel heap.c.
+ *
  * Author: Claude Code
  */
 
@@ -41,8 +39,8 @@ typedef struct bfooter bfooter_t;
 struct block {
     uint32_t magic;
     uint32_t rz_pre;
-    size_t   size;
-    size_t   total_size;
+    size_t size;
+    size_t total_size;
     arena_t *arena;
     block_t *next_free;
     block_t *prev_free;
@@ -109,9 +107,9 @@ static inline bool block_valid(block_t *b) {
     if (b->rz_pre != BLOCK_RED_ZONE || b->rz_post != BLOCK_RED_ZONE)
         return false;
     bfooter_t *f = get_footer(b);
-    if (f->magic != b->magic)                                    return false;
+    if (f->magic != b->magic) return false;
     if (f->rz_pre != BLOCK_RED_ZONE || f->rz_post != BLOCK_RED_ZONE) return false;
-    if (f->header != b)                                          return false;
+    if (f->header != b) return false;
     return true;
 }
 
@@ -137,7 +135,7 @@ static void fl_remove(block_t *b) {
     }
 
     if (b->prev_free) b->prev_free->next_free = b->next_free;
-    else              uheap.bins[bin_index(b->size)] = b->next_free;
+    else uheap.bins[bin_index(b->size)] = b->next_free;
     if (b->next_free) b->next_free->prev_free = b->prev_free;
     b->next_free = b->prev_free = NULL;
 }
@@ -187,7 +185,7 @@ static block_t *coalesce(block_t *b) {
         size_t oh = sizeof(block_t) + sizeof(bfooter_t);
         if (b->arena) b->arena->total_free += oh;
         uheap.total_free += oh;
-        b->size       += nxt->total_size;
+        b->size += nxt->total_size;
         b->total_size += nxt->total_size;
         bfooter_t *f = get_footer(b);
         f->header = b; f->magic = BLOCK_MAGIC_FREE;
@@ -203,7 +201,7 @@ static block_t *coalesce(block_t *b) {
         size_t oh = sizeof(block_t) + sizeof(bfooter_t);
         if (prv->arena) prv->arena->total_free += oh;
         uheap.total_free += oh;
-        prv->size       += b->total_size;
+        prv->size += b->total_size;
         prv->total_size += b->total_size;
         bfooter_t *f = get_footer(prv);
         f->header = prv; f->magic = BLOCK_MAGIC_FREE;
@@ -340,7 +338,7 @@ static void arena_destroy(arena_t *arena) {
     uheap.arena_count--;
 
     if (arena->prev) arena->prev->next = arena->next;
-    else             uheap.arenas = arena->next;
+    else uheap.arenas = arena->next;
     if (arena->next) arena->next->prev = arena->prev;
 
     arena->magic = 0;
@@ -375,8 +373,7 @@ static void heap_init(void) {
 #pragma region Core alloc/free
 
 /*
- * find_free_block - Search the segregated free list bins for a block 
- * that fits the requested size.
+ * find_free_block - Scan the free list bins for a fit
  */
 static block_t *find_free_block(size_t size) {
     for (uint32_t bin = bin_index(size); bin < UHEAP_BIN_COUNT; bin++) {

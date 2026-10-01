@@ -8,7 +8,7 @@
 
 void avl_init(avl_tree_t* tree, avl_cmp_fn cmp) {
     tree->root = NULL;
-    tree->cmp  = cmp;
+    tree->cmp = cmp;
 }
 
 #pragma region Internal AVL Helpers
@@ -27,14 +27,13 @@ static inline int bal(avl_node_t* n) {
 }
 
 /*
- * Redirect the child pointer in parent (or tree->root) that currently
- * points to old_child so it points to new_child instead.
+ * Point the parent's child pointer (or tree->root) that held old_child at new_child instead.
  */
 static void relink(avl_tree_t* tree, avl_node_t* parent, avl_node_t* old_child, avl_node_t* new_child) {
     if (!parent)
         tree->root = new_child;
     else if (parent->left == old_child)
-        parent->left  = new_child;
+        parent->left = new_child;
     else
         parent->right = new_child;
     if (new_child)
@@ -45,8 +44,8 @@ static avl_node_t* rot_right(avl_tree_t* tree, avl_node_t* y) {
     avl_node_t* x = y->left;
     avl_node_t* T = x->right;
     relink(tree, y->parent, y, x);
-    x->right = y;  y->parent = x;
-    y->left  = T;  if (T) T->parent = y;
+    x->right = y; y->parent = x;
+    y->left = T; if (T) T->parent = y;
     upd_height(y);
     upd_height(x);
     return x;
@@ -56,8 +55,8 @@ static avl_node_t* rot_left(avl_tree_t* tree, avl_node_t* x) {
     avl_node_t* y = x->right;
     avl_node_t* T = y->left;
     relink(tree, x->parent, x, y);
-    y->left  = x;  x->parent = y;
-    x->right = T;  if (T) T->parent = x;
+    y->left = x; x->parent = y;
+    x->right = T; if (T) T->parent = x;
     upd_height(x);
     upd_height(y);
     return y;
@@ -103,8 +102,8 @@ void avl_insert(avl_tree_t* tree, avl_node_t* node) {
         cur = (tree->cmp(node, cur) < 0) ? cur->left : cur->right;
     }
     node->parent = par;
-    if (tree->cmp(node, par) < 0) par->left  = node;
-    else                           par->right = node;
+    if (tree->cmp(node, par) < 0) par->left = node;
+    else par->right = node;
     fix_up(tree, par);
 }
 
@@ -127,10 +126,10 @@ void avl_remove(avl_tree_t* tree, avl_node_t* node) {
 
         /* Place succ where node was */
         relink(tree, node->parent, node, succ);
-        succ->left  = node->left;
+        succ->left = node->left;
         succ->right = node->right;
         succ->height = node->height;  /* fix_up will correct this */
-        if (succ->left)  succ->left->parent  = succ;
+        if (succ->left) succ->left->parent = succ;
         if (succ->right) succ->right->parent = succ;
     }
     fix_up(tree, fix);
@@ -140,9 +139,9 @@ avl_node_t* avl_find(avl_tree_t* tree, avl_node_t* key) {
     avl_node_t* n = tree->root;
     while (n) {
         int c = tree->cmp(key, n);
-        if      (c < 0) n = n->left;
+        if (c < 0) n = n->left;
         else if (c > 0) n = n->right;
-        else            return n;
+        else return n;
     }
     return NULL;
 }
@@ -151,9 +150,9 @@ avl_node_t* avl_floor(avl_tree_t* tree, avl_node_t* key) {
     avl_node_t* n = tree->root, *res = NULL;
     while (n) {
         int c = tree->cmp(key, n);
-        if      (c < 0)            n = n->left;
+        if (c < 0) n = n->left;
         else if (c > 0) { res = n; n = n->right; }
-        else            return n;
+        else return n;
     }
     return res;
 }
@@ -162,7 +161,7 @@ avl_node_t* avl_ceil(avl_tree_t* tree, avl_node_t* key) {
     avl_node_t* n = tree->root, *res = NULL;
     while (n) {
         int c = tree->cmp(key, n);
-        if      (c > 0) n = n->right;
+        if (c > 0) n = n->right;
         else if (c < 0) { res = n; n = n->left; }
         else return n;
     }

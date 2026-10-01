@@ -1,16 +1,11 @@
 /*
  * console.c - Framebuffer console implementation
  *
- * This is the lowest level of the output stack, solely responsible for 
- * rendering characters to the framebuffer. It provides a simple API for drawing
- * characters, managing the cursor, setting colors and controlling a sticky header area.
- * 
- * TTY and higher-level console abstractions are built on top of this.
- * 
- * For panic specifically, the console can be used directly through the con_crash_*
- * API without relying on the rest of the console/TTY subsystem, which may be in an 
+ * Lowest level of the output stack, TTY and friends sit on top of it.
+ *
+ * The con_crash_* API works without the rest of the console/TTY, which may be in an
  * inconsistent state during a panic.
- * 
+ *
  * Author: u/ApparentlyPlus
  */
 
@@ -79,9 +74,7 @@ static inline uint32_t crash_pack(uint32_t cp, uint8_t fg, uint8_t bg) {
 }
 
 /*
- * con_crash_shadow_init - Give the crash console its scroll shadow.
- * console_init runs before the PMM exists, so this is called separately once
- * memory is available.
+ * con_crash_shadow_init - Gives the crash console its scroll shadow. Separate because console_init runs before the PMM exists
  */
 void con_crash_shadow_init(void) {
     if (crash_shadow || !cols || !rows) return;
@@ -263,8 +256,7 @@ static void draw_glyph_run(console_t* con, size_t y, size_t x0, size_t count) {
 }
 
 /*
- * flush_display - Flushes dirty character cells to the framebuffer
- * Assumption: No SMP
+ * flush_display - Push dirty cells to the framebuffer (assumes no SMP)
  */
 static void flush_display(console_t* con) {
     if (!fb) return;
@@ -318,7 +310,7 @@ static void flush_display(console_t* con) {
     }
     if (run_n) draw_glyph_run(con, run_y, run_x, run_n);
 
-    // After flushing, ensure the cursor is drawn on top of any recently changed cells
+    // After flushing, draw the cursor on top of any recently changed cells
     if (con->on) render_cursor(con, true);
 }
 
@@ -353,7 +345,7 @@ static void scroll(console_t* con) {
     }
 
     // Here we are in deferred mode, so the framebuffer is not touched until flush_display.
-    // However, we still need to ensure that the backbuffer is consistent with the framebuffer.
+    // But the backbuffer still has to match the framebuffer.
     if (active && con->defer_render && con->dirty) {
         console_char_t blank = (console_char_t){ ' ', con->fg, con->bg };
         for (size_t y = first; y < con->height; y++) {
@@ -393,7 +385,7 @@ static void emit_cp(console_t* con, uint32_t cp) {
     extern tty_t* volatile active_tty;
     bool active = (active_tty && active_tty->console == con);
 
-    if (cp == '\n')      { con->cx = 0; con->cy++; }
+    if (cp == '\n') { con->cx = 0; con->cy++; }
     else if (cp == '\r') { con->cx = 0; }
     else if (cp == '\b') {
         if (con->cx > 0) con->cx--;
@@ -494,9 +486,9 @@ static void _con_process_byte(console_t* con, uint8_t byte) {
         else { con->ansi_st = 0; emit_cp(con, '\x1b'); emit_cp(con, byte); }
         return;
     } else if (con->ansi_st == 2) {
-        if      (byte == 'H') { con->cx = 0; con->cy = con->header_rows; con->ansi_st = 0; }
+        if (byte == 'H') { con->cx = 0; con->cy = con->header_rows; con->ansi_st = 0; }
         else if (byte == '2') { con->ansi_st = 3; }
-        else                  { con->ansi_st = 0; }
+        else { con->ansi_st = 0; }
         return;
     } else if (con->ansi_st == 3) {
         if (byte == 'J') {
@@ -547,7 +539,7 @@ utf8_restart:
 
     con->u8cp = (con->u8cp << 6) | (byte & 0x3Fu);
     if (--con->u8n == 0) {
-        uint32_t cp  = con->u8cp;
+        uint32_t cp = con->u8cp;
         uint32_t min = (con->u8lead < 0xE0u) ? 0x80u
                      : (con->u8lead < 0xF0u) ? 0x800u : 0x10000u;
         if (cp < min || cp > 0x10FFFFu || (cp >= 0xD800u && cp <= 0xDFFFu)) cp = 0xFFFD;
@@ -637,7 +629,7 @@ void con_set_color(console_t* con, uint8_t foreground, uint8_t background) {
  */
 void con_enable_cursor(console_t* con, bool enabled) {
     bool flags = spinlock_acquire(&con->lock);
-    if (con->on && !enabled)  render_cursor(con, false);
+    if (con->on && !enabled) render_cursor(con, false);
     else if (!con->on && enabled) render_cursor(con, true);
     con->on = enabled;
     spinlock_release(&con->lock, flags);
@@ -689,9 +681,6 @@ void con_header_write(console_t* con, size_t row, const char* text, uint8_t fg, 
 
 #pragma region Crash Console
 
-/*
- * con_crash_width - Returns the width of the crash console in characters
- */
 size_t con_crash_width(void){ 
     return cols; 
 }
@@ -717,8 +706,7 @@ static inline void crash_set_cell(uint32_t x, uint32_t y, uint32_t cp) {
 }
 
 /*
- * crash_draw_glyph - Draw one codepoint cell to the framebuffer (write-only).
- * Works at any resolution, independent of the shadow's coverage.
+ * crash_draw_glyph - Draw one codepoint cell, write-only, works at any resolution
  */
 static void crash_draw_glyph(uint16_t gidx, uint8_t fg, uint8_t bg, uint32_t x, uint32_t y) {
     if (x >= (uint32_t)cols || y >= (uint32_t)rows) return;
@@ -754,9 +742,6 @@ static void crash_draw_glyph(uint16_t gidx, uint8_t fg, uint8_t bg, uint32_t x, 
     }
 }
 
-/*
- * crash_scroll - Scroll the crash view by one text row
- */
 static void crash_scroll(void) {
     uint32_t r = (uint32_t)rows;
     uint32_t c = (uint32_t)cols;
@@ -790,12 +775,10 @@ static void crash_scroll(void) {
 }
 
 /*
- * crash_emit - Renders one Unicode codepoint directly to the framebuffer.
- * Drawing never depends on the shadow, so output is correct at any
- * resolution.
+ * crash_emit - Render one codepoint straight to the framebuffer, never touches the shadow
  */
 static void crash_emit(uint32_t cp) {
-    if      (cp == '\n') { ccx = 0; ccy++; }
+    if (cp == '\n') { ccx = 0; ccy++; }
     else if (cp == '\r') { ccx = 0; }
     else if (cp == '\t') { ccx = (ccx + 4) & ~3u; }
     else if (cp == '\b') {
@@ -870,11 +853,11 @@ void con_crash_printf(const char* fmt, ...) {
  */
 void console_init(multiboot_parser_t* parser) {
     font_init();
-    multiboot_framebuffer_t* mbfb = multiboot_get_framebuffer(parser);
+    multiboot_framebuffer_t* mbfb = multiboot_framebuffer(parser);
     if (!mbfb) return;
     fb_phys = mbfb->addr;
-    fb_w = mbfb->width;  fb_h = mbfb->height;
-    fb_pitch = mbfb->pitch;  fb_bpp = mbfb->bpp;
+    fb_w = mbfb->width; fb_h = mbfb->height;
+    fb_pitch = mbfb->pitch; fb_bpp = mbfb->bpp;
     fb_sz = fb_h * fb_pitch;
     fb = (uint8_t*)PHYSMAP_P2V(fb_phys);
     fh = font_get_current()->header->charsize;
@@ -919,5 +902,5 @@ void console_clear(uint8_t background) {
         con_clear(active_tty->console, background);
 }
 
-size_t console_get_width()  { return cols; }
+size_t console_get_width() { return cols; }
 size_t console_get_height() { return rows; }

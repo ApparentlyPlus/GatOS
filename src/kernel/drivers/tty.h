@@ -1,11 +1,6 @@
 /*
  * tty.h - Teletypewriter (TTY) Abstraction Layer
  *
- * This module provides a high-level abstraction for terminal-like devices.
- * It handles line discipline (canonical mode) and provides a thread-safe
- * interface for reading and writing characters. TTYs are managed dynamically
- * in a global doubly-linked list.
- *
  * Author: u/ApparentlyPlus
  */
 

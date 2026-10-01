@@ -1,9 +1,6 @@
 /*
  * usb.h - USB Protocol Types
  *
- * Standard USB 2.0/3.x descriptor structures, request codes, and
- * HID class definitions used by the xHCI driver and HID keyboard layer.
- *
  * Author: u/ApparentlyPlus
  */
 

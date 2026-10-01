@@ -1,13 +1,6 @@
 /*
  * test_pmm.c - Physical Memory Manager Validation Suite
  *
- * Tests every public PMM function: pmm_is_initialized, pmm_managed_base/end/size,
- * pmm_min_block_size, pmm_alloc, pmm_free, pmm_mark_reserved,
- * pmm_populate, pmm_get_stats, pmm_dump_stats, pmm_verify_integrity.
- *
- * Machine-adaptive: exhaustion and ladder tests use pmm_managed_size() and
- * pmm_min_block_size() instead of hardcoded sizes.
- * 
  * Author: Claude Code
  */
 
@@ -24,9 +17,9 @@
 typedef struct { uint64_t addr; size_t size; bool on; } pmtr_t;
 
 static pmtr_t tr[MAX_TRACK];
-static int    tidx         = 0;
-static int    ntests  = 0;
-static int    npass = 0;
+static int tidx = 0;
+static int ntests = 0;
+static int npass = 0;
 
 #pragma region Tracker
 
@@ -160,7 +153,7 @@ static bool t_mem_pattern(void) {
 
 static bool t_free_before_base(void) {
     uint64_t base = pmm_managed_base();
-    size_t   min  = (size_t)pmm_min_block_size();
+    size_t min = (size_t)pmm_min_block_size();
     if (base > min)
         TEST_ASSERT_STATUS(pmm_free(base - min, min), PMM_ERR_OUT_OF_RANGE);
     return true;
@@ -176,7 +169,7 @@ static bool t_free_after_end(void) {
 
 static bool t_buddy_split_merge(void) {
     tr_reset();
-    size_t min  = (size_t)pmm_min_block_size();
+    size_t min = (size_t)pmm_min_block_size();
     size_t huge = min * 4;
     uint64_t base;
     if (pmm_alloc(huge, &base) != PMM_OK) return true;
@@ -415,11 +408,11 @@ static void run_test(const char* name, bool (*fn)(void)) {
     bool pass = fn();
     if (tidx > 0) { LOGF("[WARN] leak (cleaning) ... "); tr_free(); }
     if (pass) { npass++; LOGF("[PASS]\n"); }
-    else       { LOGF("[FAIL]\n"); }
+    else { LOGF("[FAIL]\n"); }
 }
 
 void test_pmm(void) {
-    ntests  = 0;
+    ntests = 0;
     npass = 0;
 
     LOGF("\n--- BEGIN PMM TEST ---\n");

@@ -1,10 +1,6 @@
-/* 
- * slab.c - Slab Allocator Implementation 
- * 
- * This implementation provides efficient allocation for small, fixed-size objects. 
- * Each cache manages a list of slabs (PMM pages) divided into equal-sized objects. 
- * Free objects are tracked using an embedded free-list within the objects themselves. 
- * 
+/*
+ * slab.c - Slab Allocator Implementation
+ *
  * Author: u/ApparentlyPlus
  */
 
@@ -49,7 +45,7 @@ typedef struct slab {
     struct slab* prev;
     slab_cache_t* cache;
     uint64_t slab_phys;
-    uint8_t  list_id;   // tracks which list this slab is on
+    uint8_t list_id; // tracks which list this slab is on
 } slab_t;
 
 // free object header embedded inside the object when it's free
@@ -95,7 +91,7 @@ static slab_stats_t stats;
 static spinlock_t slab_list_lock;
 
 // Forward declarations
-static slab_cache_t* slab_cache_find_internal(const char* name);
+static slab_cache_t* cache_find_locked(const char* name);
 
 #pragma region Validation Helpers
 
@@ -123,9 +119,6 @@ static inline bool slab_validate(slab_t* slab) {
     return true;
 }
 
-/*
- * cache_validate - Validate cache structure
- */
 static inline bool cache_validate(slab_cache_t* cache) {
     if (!cache) return false;
 
@@ -191,9 +184,6 @@ static uint64_t ratio_to_tenths(uint64_t num, uint64_t den) {
 
 #pragma region Internal Functions
 
-/*
- * slab_remove_from_list - remove 'slab' from a doubly-linked list
- */
 static void slab_remove_from_list(slab_t** list_head, slab_t* slab) {
     if (!slab) return;
 
@@ -237,9 +227,6 @@ static void slab_move_to_list(slab_t** from_list, slab_t** to_list, slab_t* slab
     slab_add_to_list(to_list, slab, to_id);
 }
 
-/*
- * slab_allocate_page - Allocate a new slab (one PMM page) and initialize it
- */
 static slab_t* slab_allocate_page(slab_cache_t* cache) {
     if (!cache_validate(cache)) return NULL;
 
@@ -308,9 +295,6 @@ static slab_t* slab_allocate_page(slab_cache_t* cache) {
     return slab;
 }
 
-/*
- * slab_free_page - Free a slab (page) back to PMM
- */
 static void slab_free_page(slab_t* slab) {
     if (!slab_validate(slab)) return;
 
@@ -381,9 +365,6 @@ static void slab_free_cache_struct(slab_cache_t* cache) {
 
 #pragma region Initialization and Shutdown
 
-/*
- * slab_init - Initialize the slab allocator
- */
 slab_status_t slab_init(void) {
     spinlock_init(&slab_list_lock, "slab_list");
     bool flags = spinlock_acquire(&slab_list_lock);
@@ -447,9 +428,6 @@ bool slab_is_initialized(void) { return slab_inited; }
 
 #pragma region Cache Management
 
-/*
- * slab_cache_create - Create a new cache for fixed-size allocations
- */
 slab_cache_t* slab_cache_create(const char* name, size_t obj_size,
                                 size_t align) {
     bool list_flags = spinlock_acquire(&slab_list_lock);
@@ -481,7 +459,7 @@ slab_cache_t* slab_cache_create(const char* name, size_t obj_size,
         return NULL;
     }
 
-    if (slab_cache_find_internal(name)) {
+    if (cache_find_locked(name)) {
         LOGF("[SLAB] Cache '%s' already exists\n", name);
         spinlock_release(&slab_list_lock, list_flags);
         return NULL;
@@ -527,9 +505,6 @@ slab_cache_t* slab_cache_create(const char* name, size_t obj_size,
     return cache;
 }
 
-/*
- * slab_cache_destroy - tear down a cache and free its slabs
- */
 void slab_cache_destroy(slab_cache_t* cache) {
     if (!cache_validate(cache)) return;
 
@@ -569,9 +544,9 @@ void slab_cache_destroy(slab_cache_t* cache) {
 }
 
 /*
- * slab_cache_find_internal - find a cache by name (assumes lock is held)
+ * cache_find_locked - find a cache by name (assumes lock is held)
  */
-static slab_cache_t* slab_cache_find_internal(const char* name) {
+static slab_cache_t* cache_find_locked(const char* name) {
     slab_cache_t* cache = caches;
     while (cache) {
         if (!cache_validate(cache)) return NULL;
@@ -583,14 +558,11 @@ static slab_cache_t* slab_cache_find_internal(const char* name) {
     return NULL;
 }
 
-/*
- * slab_cache_find - find a cache by name
- */
 slab_cache_t* slab_cache_find(const char* name) {
     if (!slab_inited || !name) return NULL;
 
     bool flags = spinlock_acquire(&slab_list_lock);
-    slab_cache_t* cache = slab_cache_find_internal(name);
+    slab_cache_t* cache = cache_find_locked(name);
     spinlock_release(&slab_list_lock, flags);
 
     return cache;
@@ -773,9 +745,6 @@ slab_status_t slab_free(slab_cache_t* cache, void* obj) {
 
 #pragma region Statistics and Debugging
 
-/*
- * slab_cache_stats - copy cache stats out
- */
 void slab_cache_stats(slab_cache_t* cache, cache_stats_t* out_stats) {
     if (!cache_validate(cache) || !out_stats) return;
     bool flags = spinlock_acquire(&cache->lock);
@@ -855,9 +824,6 @@ void slab_cache_dump(slab_cache_t* cache) {
     spinlock_release(&cache->lock, flags);
 }
 
-/*
- * slab_dump_all_caches - dump stats for all caches
- */
 void slab_dump_all_caches(void) {
     bool flags = spinlock_acquire(&slab_list_lock);
     if (!slab_inited) {
@@ -1054,9 +1020,6 @@ size_t slab_cache_obj_size(slab_cache_t* cache) {
     return cache->user_size;
 }
 
-/*
- * slab_cache_name - return cache name
- */
 const char* slab_cache_name(slab_cache_t* cache) {
     if (!cache_validate(cache)) return NULL;
     return cache->name;

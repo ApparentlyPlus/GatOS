@@ -1,11 +1,6 @@
 /*
  * test_tty.c - TTY Subsystem Validation Suite
  *
- * Tests every public TTY function: create, destroy, input, push_char_raw,
- * read_char, read, write, header_init, header_write, switch, cycle.
- * Covers canonical line discipline, backspace, ring buffer wrap/overflow,
- * ldisc overflow, header state, and mass create/destroy.
- * 
  * Author: Claude Code
  */
 
@@ -18,7 +13,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-static int ntests  = 0;
+static int ntests = 0;
 static int npass = 0;
 
 #pragma region Init / Destroy
@@ -506,11 +501,11 @@ static void run_test(const char* name, bool (*fn)(void)) {
     ntests++;
     LOGF("[TEST] %-40s ", name);
     if (fn()) { npass++; LOGF("[PASS]\n"); }
-    else       { LOGF("[FAIL]\n"); }
+    else { LOGF("[FAIL]\n"); }
 }
 
 void test_tty(void) {
-    ntests  = 0;
+    ntests = 0;
     npass = 0;
     LOGF("\n--- BEGIN TTY SUBSYSTEM TEST ---\n");
 

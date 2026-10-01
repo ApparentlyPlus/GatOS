@@ -1,8 +1,6 @@
 /*
  * process.h - Process and Thread definitions
  *
- * PCB and TCB definitions.
- *
  * Author: u/ApparentlyPlus
  */
 

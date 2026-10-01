@@ -1,8 +1,6 @@
 /*
  * power.c - Kernel Power Management
  *
- * This file implements system reboot, shutdown, and RAPL power measurement.
- *
  * Author: u/ApparentlyPlus
  */
 
@@ -86,7 +84,7 @@ cleanup:
 }
 
 /*
- * reboot - Attempt to reboot the system using multiple methods (ACPI, PS/2 controller, triple fault)
+ * reboot - Tries ACPI, then the PS/2 controller, then a triple fault
  */
 void reboot(void) {
     LOGF("[POWER] Initiating system reboot...\n");
@@ -101,7 +99,7 @@ void reboot(void) {
     outb(0xCF9, 0x06);
     io_wait();
 
-    // ACPI FADT reset register, the most robust method
+    // ACPI FADT reset register, the most reliable method
     // this usually works on real hardware
     acpi_fadt_t* fadt = (acpi_fadt_t*)acpi_find_table("FACP");
     if (fadt && fadt->header.Revision >= 2 && (fadt->flags & (1 << 10))) {
@@ -170,9 +168,6 @@ static uint32_t rapl_prev = 0;
 static uint64_t rapl_prev_ms = 0;
 static bool rapl_primed = false;
 
-/*
- * power_rapl_init - Detect and initialise RAPL energy counters
- */
 void power_rapl_init(void) {
     const char *vendor = cpu_get_info()->vendor;
     bool is_intel = (kstrcmp(vendor, "GenuineIntel") == 0);

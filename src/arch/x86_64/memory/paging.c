@@ -1,9 +1,6 @@
 /*
  * paging.c - Page table management implementation
  *
- * Handles higher-half memory mapping, identity mapping removal,
- * and page table cleanup for kernel memory space.
- *
  * Author: u/ApparentlyPlus
  */
 
@@ -20,12 +17,10 @@
 // True once pat_init has made PAT entry 1 (PWT) write-combining
 static bool patwc = false;
 
-/* 
- * This is a (self proclaimed) genius hack to statically reserve a single 2MB page for framebuffer purposes in the physmap,
- * which is used by the console driver to output everything without relying on the memory systems to be online.
- * 
- * Covers up to 512 * 2MB = 1GB, enough for any display at any resolution
- * Only 4 KB in BSS, nuts
+/*
+ * (self proclaimed) genius hack. I statically reserve a single 2MB page for the framebuffer in
+ * the physmap, so the console works before the memory systems are up. Covers 512 * 2MB = 1GB, 
+ * enough for any display at any resolution. Only 4 KB in BSS, nuts!
  */
 static uint64_t fb_pd[PAGE_ENTRIES] __attribute__((aligned(PAGE_SIZE)));
 
@@ -127,13 +122,10 @@ void cleanup_kpt(uintptr_t start, uintptr_t end) {
 }
 
 /*
- * reserve_required_tablespace - This function utilizes the multiboot2
- * struct to find out the RAM size of the machine, then reserves enough
- * memory for page tables to map all of it to virtual memory.
- * Returns the size needed for the page tables, in bytes.
+ * reserve_tables - Sizes RAM from the multiboot2 struct, returns the bytes of page tables needed to map all of it
  */
-uint64_t reserve_required_tablespace(multiboot_parser_t* multiboot) {
-    uint64_t total_RAM = align_up(multiboot_get_total_RAM(multiboot, MEASUREMENT_UNIT_BYTES), PAGE_SIZE);
+uint64_t reserve_tables(multiboot_parser_t* multiboot) {
+    uint64_t total_RAM = align_up(multiboot_total_ram(multiboot, MEASUREMENT_UNIT_BYTES), PAGE_SIZE);
 
     // Table space sized for RAM only
     uint64_t total_pages = total_RAM / PAGE_SIZE;
@@ -144,10 +136,9 @@ uint64_t reserve_required_tablespace(multiboot_parser_t* multiboot) {
 
     uint64_t table_bytes = (total_PTs + total_PDs + total_PDPTs + total_PML4s) * 4 * MEASUREMENT_UNIT_KB;
 
-    // The kernel range is mapped from this same pool, so the boot tables stay
-    // scratch, meaning it needs its own PDPT and PD plus one PT per 2MiB. That size
-    // depends on KEND, which the pool itself moves, so settle it in two passes
-    // and keep one PT of slack.
+    // The kernel range comes from this same pool (so the boot tables stay scratch) and needs its
+    // own PDPT, PD and one PT per 2MiB. The size depends on KEND, which the pool moves, so two
+    // passes, plus one PT of slack.
     uint64_t kernel_PTs = CEIL_DIV(KEND + table_bytes + 2 * PAGE_SIZE, PAGE_2MB);
     kernel_PTs = CEIL_DIV(KEND + table_bytes + (2 + kernel_PTs) * PAGE_SIZE, PAGE_2MB) + 1;
     table_bytes += (2 + kernel_PTs) * PAGE_SIZE;
@@ -159,11 +150,11 @@ uint64_t reserve_required_tablespace(multiboot_parser_t* multiboot) {
     PANIC_ASSERT(kernel_PTs * PAGE_2MB >= KEND + table_bytes);
     PANIC_ASSERT(kernel_PTs <= PAGE_ENTRIES);
 
-    // We need to ensure that we are still within usable memory
+    // Make sure we're still inside usable memory
 	for (size_t i = 0; i < (*multiboot).memory_map_length; i++) {
 		uintptr_t region_start, region_end;
 		uint32_t region_type;
-		if (multiboot_get_memory_region(multiboot, i, &region_start, &region_end, &region_type) != 0)
+		if (multiboot_mem_region(multiboot, i, &region_start, &region_end, &region_type) != 0)
 			continue;
         
         // If the tablespace end falls within this region, it must be available RAM
@@ -174,7 +165,7 @@ uint64_t reserve_required_tablespace(multiboot_parser_t* multiboot) {
 
     // Store fb info for build_physmap, don't inflate table_bytes
     uint64_t fb_phys = 0, fb_size = 0;
-    multiboot_framebuffer_t* fb = multiboot_get_framebuffer(multiboot);
+    multiboot_framebuffer_t* fb = multiboot_framebuffer(multiboot);
     if (fb) { fb_phys = fb->addr; fb_size = (uint64_t)fb->height * fb->pitch; }
 
     physmap.total_RAM = total_RAM;
@@ -195,9 +186,8 @@ uint64_t reserve_required_tablespace(multiboot_parser_t* multiboot) {
 }
 
 /*
- * pat_init - Reprogram PAT entry 1 (PWT only PTEs) from write through to
- * write combining, so the framebuffer can be mapped WC. Entries 0 (WB) and
- * 3 (PCD|PWT, UC) keep their defaults for RAM and device MMIO.
+ * pat_init - Flip PAT entry 1 (PWT only) from write through to write combining so the framebuffer can be WC.
+ * Entry 0 (WB) and 3 (UC) stay as they are
  */
 static void pat_init(void) {
     uint32_t a, b, c, d;
@@ -212,8 +202,7 @@ static void pat_init(void) {
 }
 
 /*
- * fb_cache_flags - Cache attribute bits for framebuffer mappings.
- * WC (PWT selects PAT entry 1) when available, UC otherwise
+ * fb_cache_flags - WC (PWT selects PAT entry 1) when available, UC otherwise
  */
 static inline uint64_t fb_cache_flags(void) {
     return patwc ? PAGE_PWT : (PAGE_PWT | PAGE_PCD);
@@ -221,12 +210,7 @@ static inline uint64_t fb_cache_flags(void) {
 
 
 /*
- * build_physmap - This function creates a mapping of all physical RAM into a reserved
- * region of the virtual address space (the physmap). This allows
- * the kernel to access any physical memory through a simple offset calculation.
- *
- * The mapping is created at PHYSMAP_VIRTUAL_BASE (0xFFFF800000000000), providing
- * a window where virtual address = physical_address + PHYSMAP_VIRTUAL_BASE.
+ * build_physmap - Map all RAM at PHYSMAP_VIRTUAL_BASE (0xFFFF800000000000), so virt = phys + base
  */
 void build_physmap() {
     if (physmap.total_RAM == 0) {

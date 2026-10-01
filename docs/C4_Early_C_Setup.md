@@ -631,7 +631,7 @@ void kernel_main(void* mb_info) {
     [...] // Initialization
 
     // Dump the memory map
-    multiboot_dump_memory_map(&multiboot);
+    multiboot_dump_mmap(&multiboot);
 }
 ```
 

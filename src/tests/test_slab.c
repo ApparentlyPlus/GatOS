@@ -1,9 +1,6 @@
 /*
  * test_slab.c - Slab Allocator Validation Suite
  *
- * Tests every public slab API function. Machine-adaptive where applicable.
- * All caches created here use unique names to avoid collisions with kernel caches.
- * 
  * Author: Claude Code
  */
 
@@ -17,13 +14,13 @@
 
 #pragma region Harness
 
-static int ntests  = 0;
+static int ntests = 0;
 static int npass = 0;
 
 /* Caches registered during a test (for cleanup) */
 #define MAX_TR_CACHES 16
 static slab_cache_t* tr_caches[MAX_TR_CACHES];
-static int           tr_n = 0;
+static int tr_n = 0;
 
 static void tr_reg(slab_cache_t* c) {
     if (c && tr_n < MAX_TR_CACHES)
@@ -44,7 +41,7 @@ static void run_test(const char* name, bool (*fn)(void)) {
     bool pass = fn();
     if (tr_n > 0) { LOGF("[WARN] leak (cleaning) ... "); tr_free(); }
     if (pass) { npass++; LOGF("[PASS]\n"); }
-    else       { LOGF("[FAIL]\n"); }
+    else { LOGF("[FAIL]\n"); }
 }
 #pragma endregion
 
@@ -61,9 +58,9 @@ static slab_cache_t* mk_cache(const char* prefix, size_t obj_size, size_t align)
     name[n++] = '_';
     int seq = ++cache_seq;
     if (seq >= 100) { name[n++] = '0' + seq / 100; seq %= 100; }
-    if (seq >= 10)  { name[n++] = '0' + seq / 10;  seq %= 10;  }
+    if (seq >= 10) { name[n++] = '0' + seq / 10; seq %= 10; }
     name[n++] = '0' + seq;
-    name[n]   = '\0';
+    name[n] = '\0';
     slab_cache_t* c = slab_cache_create(name, obj_size, align);
     tr_reg(c);
     return c;
@@ -570,7 +567,7 @@ static bool t_recreate(void) {
 #pragma region Runner
 
 void test_slab(void) {
-    ntests  = 0;
+    ntests = 0;
     npass = 0;
 
     LOGF("--- BEGIN SLAB ALLOCATOR TEST ---\n");

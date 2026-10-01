@@ -1,11 +1,9 @@
 /*
  * umain.c - Userspace application launch
  *
- * Linked into kernel high-half (.text). uapps() is called by kernel_main and
- * sets up the demo process. The thread entry points live in uproc.c
- * and are routed to .user_text by the linker; their symbols resolve to
- * userspace VMAs, which is exactly what thread_create expects.
- * 
+ * Linked into the kernel high half (.text). uapps() sets up the demo process, the thread
+ * entry points live in uproc.c.
+ *
  * Author: u/ApparentlyPlus
  */
 

@@ -27,13 +27,26 @@ void halt_system(void)
 static const char* exc_name(uint64_t vec)
 {
     static const char* names[] = {
-        "Divide-by-Zero",       "Debug",               "NMI",
-        "Breakpoint",           "Overflow",             "Bound Range",
-        "Invalid Opcode",       "Device Not Available", "Double Fault",
-        "Coprocessor Segment",  "Invalid TSS",          "Segment Not Present",
-        "Stack-Segment Fault",  "General Protection",   "Page Fault",
-        "Reserved",             "x87 FPU Error",        "Alignment Check",
-        "Machine Check",        "SIMD Exception",
+        "Divide-by-Zero",
+        "Debug",
+        "NMI",
+        "Breakpoint",
+        "Overflow",
+        "Bound Range",
+        "Invalid Opcode",
+        "Device Not Available",
+        "Double Fault",
+        "Coprocessor Segment",
+        "Invalid TSS",
+        "Segment Not Present",
+        "Stack-Segment Fault",
+        "General Protection",
+        "Page Fault",
+        "Reserved",
+        "x87 FPU Error",
+        "Alignment Check",
+        "Machine Check",
+        "SIMD Exception",
     };
     if (vec < sizeof(names) / sizeof(names[0])) return names[vec];
     if (vec < 32) return "Reserved Exception";
@@ -64,7 +77,7 @@ void panic_c(const char* message, cpu_context_t* context)
     int i;
     int pad;
 
-    // Disable interrupts to prevent further state corruption and ensure the panic log is not interleaved with other output
+    // Interrupts off so nothing else corrupts state or interleaves with the panic log
     intr_off();
     panic_log(message, context);
 
@@ -110,21 +123,21 @@ void panic_c(const char* message, cpu_context_t* context)
 
         con_crash_printf("\nInstruction Pointer:\n");
         con_crash_printf("  RIP: 0x%016lx\n", context->iret_rip);
-        con_crash_printf("  CS:  0x%04lx\n",  context->iret_cs);
+        con_crash_printf("  CS:  0x%04lx\n", context->iret_cs);
         con_crash_printf("  RSP: 0x%016lx\n", context->iret_rsp);
-        con_crash_printf("  SS:  0x%04lx\n",  context->iret_ss);
+        con_crash_printf("  SS:  0x%04lx\n", context->iret_ss);
 
 
         uint64_t fl = context->iret_flags;
         con_crash_printf("\nCPU Flags (RFLAGS): 0x%016lx\n", fl);
         con_crash_printf("  Flags:%s%s%s%s%s%s%s%s%s\n",
-            (fl & (1 <<  0)) ? " CF" : "",
-            (fl & (1 <<  2)) ? " PF" : "",
-            (fl & (1 <<  4)) ? " AF" : "",
-            (fl & (1 <<  6)) ? " ZF" : "",
-            (fl & (1 <<  7)) ? " SF" : "",
-            (fl & (1 <<  8)) ? " TF" : "",
-            (fl & (1 <<  9)) ? " IF" : "",
+            (fl & (1 << 0)) ? " CF" : "",
+            (fl & (1 << 2)) ? " PF" : "",
+            (fl & (1 << 4)) ? " AF" : "",
+            (fl & (1 << 6)) ? " ZF" : "",
+            (fl & (1 << 7)) ? " SF" : "",
+            (fl & (1 << 8)) ? " TF" : "",
+            (fl & (1 << 9)) ? " IF" : "",
             (fl & (1 << 10)) ? " DF" : "",
             (fl & (1 << 11)) ? " OF" : "");
     } else {

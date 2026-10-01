@@ -1,14 +1,12 @@
 /*
  * test_timers.c - Timer Subsystem Validation Suite
  *
- * All timing thresholds are machine-derived at runtime. A calibration pass
- * measures TSC frequency and per-call sleep overshoot, then uses those values
- * to build tight but portable upper bounds for every timing assertion.
+ * Timing thresholds are derived at runtime from a calibration pass.
  *
- * Output format is fixed for CI parsing:
- *   "[TEST] <name>  [PASS|FAIL]"
- *   "Timer Test Results: N/N"
- * 
+ * Output is fixed for CI parsing:
+ * "[TEST] <name>  [PASS|FAIL]"
+ * "Timer Test Results: N/N"
+ *
  * Author: Claude Code
  */
 
@@ -22,15 +20,15 @@
 #include <stdint.h>
 #include <stddef.h>
 
-static int ntests  = 0;
+static int ntests = 0;
 static int npass = 0;
 
 #pragma region Calibration
 
-static uint64_t tsc_khz        = 0; /* TSC ticks per millisecond          */
+static uint64_t tsc_khz = 0; /* TSC ticks per millisecond          */
 static uint64_t ms_ovhd = 0; /* worst-case extra ms per sleep_ms() */
 static uint64_t us_ovhd = 0; /* worst-case extra us per sleep_us() */
-static bool     calibrated     = false;
+static bool calibrated = false;
 
 #define CAL_ITERS 10
 
@@ -41,9 +39,9 @@ static void calibrate(void) {
     /* TSC frequency via uptime (use 20ms window for stable reading) */
     {
         uint64_t ns0 = get_uptime_ns();
-        uint64_t t0  = tsc_read();
+        uint64_t t0 = tsc_read();
         sleep_ms(20);
-        uint64_t t1  = tsc_read();
+        uint64_t t1 = tsc_read();
         uint64_t ns1 = get_uptime_ns();
         uint64_t elapsed_ns = ns1 - ns0;
         if (elapsed_ns > 0)
@@ -77,9 +75,9 @@ static void calibrate(void) {
         us_ovhd = max * 3 + 2000; /* 3× margin + 2ms floor */
     }
 
-    LOGF("[CAL] TSC freq    : %lu kHz\n",  tsc_khz);
-    LOGF("[CAL] ms overhead : %lu ms\n",   ms_ovhd);
-    LOGF("[CAL] us overhead : %lu us\n",   us_ovhd);
+    LOGF("[CAL] TSC freq    : %lu kHz\n", tsc_khz);
+    LOGF("[CAL] ms overhead : %lu ms\n", ms_ovhd);
+    LOGF("[CAL] us overhead : %lu us\n", us_ovhd);
     calibrated = true;
 }
 #pragma endregion
@@ -126,10 +124,10 @@ static bool t_hpet_uptime(void) {
     if (!hpet_is_available()) { LOGF("[SKIP]\n"); return true; }
     calibrate();
     uint64_t up0 = get_uptime_ms();
-    uint64_t h0  = hpet_read_counter();
+    uint64_t h0 = hpet_read_counter();
     sleep_ms(10);
     uint64_t up1 = get_uptime_ms();
-    uint64_t h1  = hpet_read_counter();
+    uint64_t h1 = hpet_read_counter();
     TEST_ASSERT(h1 > h0);
     /* Uptime must have advanced at least 8ms */
     TEST_ASSERT((up1 - up0) >= 8);
@@ -211,7 +209,7 @@ static bool t_up_adv(void) {
 static bool t_up_coh(void) {
     /* ns and ms must agree within 10ms */
     uint64_t via_ns = get_uptime_ns() / 1000000ULL;
-    uint64_t direct  = get_uptime_ms();
+    uint64_t direct = get_uptime_ms();
     uint64_t diff = (via_ns > direct) ? (via_ns - direct) : (direct - via_ns);
     TEST_ASSERT(diff < 10);
     return true;
@@ -494,11 +492,11 @@ static void run_test(const char* name, bool (*fn)(void)) {
     ntests++;
     LOGF("[TEST] %-40s ", name);
     if (fn()) { npass++; LOGF("[PASS]\n"); }
-    else       { LOGF("[FAIL]\n"); }
+    else { LOGF("[FAIL]\n"); }
 }
 
 void test_timers(void) {
-    ntests  = 0;
+    ntests = 0;
     npass = 0;
 
     LOGF("\n--- BEGIN TIMER SUBSYSTEM TEST ---\n");

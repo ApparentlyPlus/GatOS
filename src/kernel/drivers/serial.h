@@ -1,8 +1,6 @@
 /*
  * serial.h - Serial port driver header
  *
- * Defines interfaces for initializing and writing to PC serial ports (COM1-COM4).
- * 
  * Author: u/ApparentlyPlus
  */
 

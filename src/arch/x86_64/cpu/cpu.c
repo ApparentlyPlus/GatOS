@@ -1,10 +1,6 @@
 /*
  * cpu.c - CPU Feature and Topology Detection
  *
- * Gathers detailed CPU information (vendor, brand, features, core count)
- * using the CPUID instruction and related MSRs. Results are cached in
- * a global cpu_info_t structure accessible to the rest of GatOS.
- *
  * Author: u/ApparentlyPlus
  */
 
@@ -24,9 +20,6 @@ void cpuid(uint32_t eax, uint32_t ecx, uint32_t* a, uint32_t* b, uint32_t* c, ui
     __asm__ volatile("cpuid" : "=a"(*a), "=b"(*b), "=c"(*c), "=d"(*d) : "a"(eax), "c"(ecx));
 }
 
-/*
- * read_msr - Read a Model-Specific Register (MSR)
- */
 uint64_t read_msr(uint32_t msr)
 {
     uint32_t lo, hi;
@@ -34,9 +27,6 @@ uint64_t read_msr(uint32_t msr)
     return ((uint64_t)hi << 32) | lo;
 }
 
-/*
- * write_msr - Write a Model-Specific Register (MSR)
- */
 void write_msr(uint32_t msr, uint64_t value)
 {
     uint32_t lo = (uint32_t)value;
@@ -125,19 +115,19 @@ void cpu_init(void)
     cpuinfo.stepping = (a & 0xF);
 
     // feats
-    if (d & (1 << 6))  cpuinfo.features |= CF_PAE;
+    if (d & (1 << 6)) cpuinfo.features |= CF_PAE;
     if (d & (1 << 25)) cpuinfo.features |= CF_SSE;
     if (d & (1 << 26)) cpuinfo.features |= CF_SSE2;
-    if (c & (1 << 0))  cpuinfo.features |= CF_SSE3;
-    if (c & (1 << 9))  cpuinfo.features |= CF_SSSE3;
+    if (c & (1 << 0)) cpuinfo.features |= CF_SSE3;
+    if (c & (1 << 9)) cpuinfo.features |= CF_SSSE3;
     if (c & (1 << 19)) cpuinfo.features |= CF_SSE4_1;
     if (c & (1 << 20)) cpuinfo.features |= CF_SSE4_2;
     if (c & (1 << 28)) cpuinfo.features |= CF_AVX;
-    if (c & (1 << 5))  cpuinfo.features |= CF_VMX;
+    if (c & (1 << 5)) cpuinfo.features |= CF_VMX;
 
     if (max_basic >= 7) {
         cpuid(7, 0, &a, &b, &c, &d);
-        if (b & (1 << 7))  cpuinfo.features |= CF_SMEP;
+        if (b & (1 << 7)) cpuinfo.features |= CF_SMEP;
         if (b & (1 << 20)) cpuinfo.features |= CF_SMAP;
     }
 
@@ -149,7 +139,7 @@ void cpu_init(void)
         cpuid(0x80000001, 0, &a, &b, &c, &d);
         if (d & (1 << 20)) cpuinfo.features |= CF_NX;
         if (d & (1 << 29)) cpuinfo.features |= CF_64BIT;
-        if (c & (1 << 2))  cpuinfo.features |= CF_SVM;
+        if (c & (1 << 2)) cpuinfo.features |= CF_SVM;
     }
 
     if (max_ext >= 0x80000004) {
@@ -227,7 +217,7 @@ void cpu_idle_init(void) {
     else if ((d >> 20) & 0xF) mwait_cstate_hint = 0x40;
     else if ((d >> 16) & 0xF) mwait_cstate_hint = 0x30;
     else if ((d >> 12) & 0xF) mwait_cstate_hint = 0x20;
-    else if ((d >>  8) & 0xF) mwait_cstate_hint = 0x10;
+    else if ((d >> 8) & 0xF) mwait_cstate_hint = 0x10;
     else mwait_cstate_hint = 0x00;
 
     LOGF("[CPU] MONITOR/MWAIT: deepest C-state hint=0x%02x IBE=%u\n",
@@ -256,9 +246,7 @@ uint32_t cpu_mwait_ext(void) {
 }
 
 /*
- * cpu_idle - Sleep until the next interrupt in the deepest C-state
- * available, falling back to HLT. Monitors a dummy address nothing
- * writes, so only an interrupt wakes the core.
+ * cpu_idle - Deepest available C-state, HLT fallback. Monitors a dummy address so only an interrupt wakes the core
  */
 void cpu_idle(void) {
     if (mwait_ok) {
@@ -269,17 +257,11 @@ void cpu_idle(void) {
     }
 }
 
-/*
- * cpu_get_info - Get a pointer to the cached cpu_info_t structure
- */
 const cpu_info_t* cpu_get_info(void)
 {
     return &cpuinfo;
 }
 
-/*
- * cpu_has_feature - Check if a specific CPU feature is supported
- */
 bool cpu_has_feature(cpu_feature_t feature)
 {
     return (cpuinfo.features & feature) != 0;
@@ -311,9 +293,9 @@ bool cpu_enable_feature(cpu_feature_t feature)
             cr0 = read_cr0();
             cr4 = read_cr4();
             cr0 &= ~(1 << 2); // Clear EM (Emulation)
-            cr0 |=  (1 << 1); // Set MP (Monitor Coprocessor)
-            cr4 |=  (1 << 9); // Set OSFXSR
-            cr4 |=  (1 << 10); // Set OSXMMEXCPT
+            cr0 |= (1 << 1); // Set MP (Monitor Coprocessor)
+            cr4 |= (1 << 9); // Set OSFXSR
+            cr4 |= (1 << 10); // Set OSXMMEXCPT
             write_cr0(cr0);
             write_cr4(cr4);
             return true;
@@ -364,9 +346,6 @@ bool cpu_enable_feature(cpu_feature_t feature)
     }
 }
 
-/*
- * cpu_is_feature_enabled - Checks if a CPU feature is enabled
- */
 bool cpu_is_feature_enabled(cpu_feature_t feature)
 {
     uint64_t cr0, cr4, xcr0, efer;
@@ -427,9 +406,6 @@ uint64_t tsc_read(void) {
     return ((uint64_t)hi << 32) | lo;
 }
 
-/*
- * tsc_deadline_arm - Arms the TSC deadline timer
- */
 void tsc_deadline_arm(uint64_t target_tsc) {
     write_msr(0x6E0, target_tsc);
 }

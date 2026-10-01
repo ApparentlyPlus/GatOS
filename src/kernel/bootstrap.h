@@ -1,9 +1,7 @@
 /*
  * bootstrap.h - Staged kernel initialization
  *
- * Single entry point that brings the kernel from raw multiboot handoff to
- * fully initialized (interrupts on). kernel_main stays a thin caller that
- * only hosts what runs after boot (userspace launch, interactive loop).
+ * One entry point: raw multiboot handoff to fully initialized, interrupts on.
  *
  * Author: u/ApparentlyPlus
  */

@@ -60,17 +60,11 @@ int serial_is_ready(void) {
     return inb(COM1_PORT + 5) & 0x20;
 }
 
-/*
- * serial_write_char - Outputs single character to serial port
- */
 void serial_write_char(char c) {
     while (!serial_is_ready()); // Wait until THR is empty
     outb(COM1_PORT, (uint8_t)c);
 }
 
-/*
- * serial_write - Outputs null-terminated string to serial
- */
 void serial_write(const char* str) {
     while (*str) {
         if (*str == '\n') {
@@ -80,9 +74,6 @@ void serial_write(const char* str) {
     }
 }
 
-/*
- * serial_write_len - Outputs fixed-length string to serial
- */
 void serial_write_len(const char* str, size_t len) {
     for (size_t i = 0; i < len; i++) {
         if (str[i] == '\n') {
@@ -103,33 +94,21 @@ static void serial_write_hex_digit(uint8_t val) {
         serial_write_char('A' + (val - 10));
 }
 
-/*
- * serial_write_hex8 - Outputs 8-bit value in hexadecimal
- */
 void serial_write_hex8(uint8_t value) {
     serial_write_hex_digit(value >> 4);
     serial_write_hex_digit(value & 0xF);
 }
 
-/*
- * serial_write_hex16 - Outputs 16-bit value in hexadecimal
- */
 void serial_write_hex16(uint16_t value) {
     for (int i = 12; i >= 0; i -= 4)
         serial_write_hex_digit((value >> i) & 0xF);
 }
 
-/*
- * serial_write_hex32 - Outputs 32-bit value in hexadecimal
- */
 void serial_write_hex32(uint32_t value) {
     for (int i = 28; i >= 0; i -= 4)
         serial_write_hex_digit((value >> i) & 0xF);
 }
 
-/*
- * serial_write_hex64 - Outputs 64-bit value in hexadecimal
- */
 void serial_write_hex64(uint64_t value) {
     for (int i = 60; i >= 0; i -= 4)
         serial_write_hex_digit((value >> i) & 0xF);

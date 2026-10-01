@@ -1,10 +1,6 @@
 /*
  * test_spinlock.c - Spinlock Validation Suite
  *
- * Tests every public spinlock function: init, acquire, try_acquire, release,
- * is_locked. Covers IRQ state saving/restoring, independence of multiple locks,
- * sequential reuse, try-fail semantics, and high-frequency churn stability.
- * 
  * Author: Claude Code
  */
 
@@ -15,7 +11,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-static int ntests  = 0;
+static int ntests = 0;
 static int npass = 0;
 
 /* Read RFLAGS.IF */
@@ -321,7 +317,7 @@ static bool t_churn_8x5k(void) {
         seed = seed * 1664525u + 1013904223u;
         int idx = (int)((seed >> 16) % CL);
         if (!held[idx]) { flags[idx] = spinlock_acquire(&locks[idx]); held[idx] = true; }
-        else            { spinlock_release(&locks[idx], flags[idx]);   held[idx] = false; }
+        else { spinlock_release(&locks[idx], flags[idx]); held[idx] = false; }
     }
     for (int i = 0; i < CL; i++) if (held[i]) spinlock_release(&locks[i], flags[i]);
     for (int i = 0; i < CL; i++) {
@@ -373,11 +369,11 @@ static void run_test(const char* name, bool (*fn)(void)) {
     ntests++;
     LOGF("[TEST] %-40s ", name);
     if (fn()) { npass++; LOGF("[PASS]\n"); }
-    else       { LOGF("[FAIL]\n"); }
+    else { LOGF("[FAIL]\n"); }
 }
 
 void test_spinlock(void) {
-    ntests  = 0;
+    ntests = 0;
     npass = 0;
 
     LOGF("\n--- BEGIN SPINLOCK TEST ---\n");

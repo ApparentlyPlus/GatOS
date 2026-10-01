@@ -1,10 +1,6 @@
 /*
  * input.h - System Input Hub Interface
  *
- * This module provides a centralized entry point for all hardware input
- * events. It handles system-wide hotkeys and routes input to the
- * active terminal.
- *
  * Author: u/ApparentlyPlus
  */
 

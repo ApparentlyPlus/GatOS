@@ -1,9 +1,6 @@
 /*
  * interrupts.c - Functions for managing CPU interrupts
  *
- * This file implements the Interrupt Descriptor Table (IDT) initialization,
- * interrupt dispatching, and handler registration.
- *
  * Author: u/ApparentlyPlus
  */
 
@@ -59,9 +56,6 @@ void irq_unregister(uint8_t vector)
 
 #pragma region IDT Setup
 
-/*
- * set_idt_entry - Populate a single IDT entry
- */
 void set_idt_entry(uint8_t vector, void* handler, uint8_t dpl, uint8_t ist_index)
 {
     uint64_t handler_addr = (uint64_t)handler;
@@ -77,9 +71,6 @@ void set_idt_entry(uint8_t vector, void* handler, uint8_t dpl, uint8_t ist_index
     entry->reserved = 0;
 }
 
-/*
- * load_idt - Load the IDT pointer into the CPU (LIDT)
- */
 void load_idt(void* idt_addr)
 {
     struct {
@@ -181,24 +172,24 @@ cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
         const char* panic_msg = "Unknown Exception";
         
         switch (vec) {
-            case INT_DIVIDE_ERROR:         panic_msg = "Divide by zero"; break;
-            case INT_DEBUG:                panic_msg = "Debug trap"; break;
-            case INT_NMI:                  panic_msg = "Non-maskable interrupt"; break;
-            case INT_BREAKPOINT:           panic_msg = "Breakpoint"; break;
-            case INT_OVERFLOW:             panic_msg = "Overflow"; break;
-            case INT_BOUND_RANGE:          panic_msg = "Bound range exceeded"; break;
-            case INT_INVALID_OPCODE:       panic_msg = "Invalid opcode"; break;
+            case INT_DIVIDE_ERROR: panic_msg = "Divide by zero"; break;
+            case INT_DEBUG: panic_msg = "Debug trap"; break;
+            case INT_NMI: panic_msg = "Non-maskable interrupt"; break;
+            case INT_BREAKPOINT: panic_msg = "Breakpoint"; break;
+            case INT_OVERFLOW: panic_msg = "Overflow"; break;
+            case INT_BOUND_RANGE: panic_msg = "Bound range exceeded"; break;
+            case INT_INVALID_OPCODE: panic_msg = "Invalid opcode"; break;
             case INT_DEVICE_NOT_AVAILABLE: panic_msg = "Device not available (FPU)"; break;
-            case INT_DOUBLE_FAULT:         panic_msg = "Double Fault (Critical)"; break;
-            case INT_INVALID_TSS:          panic_msg = "Invalid TSS"; break;
-            case INT_SEGMENT_NOT_PRESENT:  panic_msg = "Segment not present"; break;
-            case INT_STACK_SEGMENT_FAULT:  panic_msg = "Stack segment fault"; break;
-            case INT_GENERAL_PROTECTION:   panic_msg = "General protection fault"; break;
-            case INT_PAGE_FAULT:           panic_msg = "Page Fault"; break;
-            case INT_X87_FPU_ERROR:        panic_msg = "x87 FPU error"; break;
-            case INT_ALIGNMENT_CHECK:      panic_msg = "Alignment check"; break;
-            case INT_MACHINE_CHECK:        panic_msg = "Machine check"; break;
-            case INT_SIMD_ERROR:           panic_msg = "SIMD exception"; break;
+            case INT_DOUBLE_FAULT: panic_msg = "Double Fault (Critical)"; break;
+            case INT_INVALID_TSS: panic_msg = "Invalid TSS"; break;
+            case INT_SEGMENT_NOT_PRESENT: panic_msg = "Segment not present"; break;
+            case INT_STACK_SEGMENT_FAULT: panic_msg = "Stack segment fault"; break;
+            case INT_GENERAL_PROTECTION: panic_msg = "General protection fault"; break;
+            case INT_PAGE_FAULT: panic_msg = "Page Fault"; break;
+            case INT_X87_FPU_ERROR: panic_msg = "x87 FPU error"; break;
+            case INT_ALIGNMENT_CHECK: panic_msg = "Alignment check"; break;
+            case INT_MACHINE_CHECK: panic_msg = "Machine check"; break;
+            case INT_SIMD_ERROR: panic_msg = "SIMD exception"; break;
         }
 
         // demand paging
@@ -287,10 +278,10 @@ cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
             LOGF("CR2 (Fault Address): 0x%lx\n", cr2);
             LOGF("Error Code: 0x%lx (P:%d W:%d U:%d R:%d I:%d)\n",
                 context->error_code,
-                (context->error_code & 1)  ? 1 : 0,
-                (context->error_code & 2)  ? 1 : 0,
-                (context->error_code & 4)  ? 1 : 0,
-                (context->error_code & 8)  ? 1 : 0,
+                (context->error_code & 1) ? 1 : 0,
+                (context->error_code & 2) ? 1 : 0,
+                (context->error_code & 4) ? 1 : 0,
+                (context->error_code & 8) ? 1 : 0,
                 (context->error_code & 16) ? 1 : 0);
         }
 

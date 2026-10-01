@@ -1,9 +1,6 @@
 /*
  * i8042.h - Intel 8042 PS/2 Controller Driver
  *
- * This driver manages the PS/2 controller, which typically handles the
- * keyboard and mouse on legacy systems.
- *
  * Author: u/ApparentlyPlus
  */
 

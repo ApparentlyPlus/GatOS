@@ -1,9 +1,6 @@
 /*
  * paging.h - Page table management definitions
  *
- * Defines constants and macros for x86_64 paging structures,
- * including virtual-to-physical address translation utilities.
- *
  * Author: u/ApparentlyPlus
  */
 
@@ -98,7 +95,7 @@ static inline void invlpg(void* addr) {
 uint64_t get_physmap_start(void);
 uint64_t get_physmap_end(void);
 
-uint64_t reserve_required_tablespace(multiboot_parser_t* multiboot);
+uint64_t reserve_tables(multiboot_parser_t* multiboot);
 
 uint64_t* getPML4();
 
@@ -126,29 +123,5 @@ static physmap_t physmap = {0};
 #endif
 
 /*
-
-Notes on improving Paging in the future:
-
-1. Memory Barriers for TLB Flushes
-
-flush_tlb() should include memory barriers for SMP safety:
-
-cvoid flush_tlb(void) {
-    __asm__ volatile("mfence" ::: "memory");  // Serialize
-    uint64_t cr3;
-    __asm__ volatile("mov %%cr3, %0" : "=r"(cr3) :: "memory");
-    __asm__ volatile("mov %0, %%cr3" :: "r"(cr3) : "memory");
-    __asm__ volatile("mfence" ::: "memory");  // Serialize
-}
-
-2. Consider PAT Support
-
-For MMIO regions, Page Attribute Table entries would give us finer control:
-
-#define PAGE_PAT          (1ULL << 7)
-#define PAGE_PAT_UC       0  // Uncacheable
-#define PAGE_PAT_WC       1  // Write-combining (good for framebuffers)
-#define PAGE_PAT_WT       4  // Write-through
-#define PAGE_PAT_WB       6  // Write-back
-
-*/
+ * TODO: flush_tlb() should have an mfence around the cr3 reload for SMP safety.
+ */

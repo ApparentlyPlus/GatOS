@@ -1,9 +1,5 @@
 /*
- * apic.c - Local and I/O APIC Implementation (Production Grade)
- *
- * This module provides an implementation of the APIC interrupt controller.
- * It handles the transition from legacy PIC to APIC, parses the ACPI MADT for 
- * hardware topology, and manages both Local and I/O APIC configurations.
+ * apic.c - Local and I/O APIC Implementation
  *
  * Author: u/ApparentlyPlus
  */
@@ -63,17 +59,11 @@ void disable_pic(void) {
 
 #pragma region LAPIC
 
-/*
- * lapic_write - Write a value to a LAPIC register
- */
 void lapic_write(uint32_t reg, uint32_t value) {
     if (lapic_base == 0) return;
     *(volatile uint32_t*)(lapic_base + reg) = value;
 }
 
-/*
- * lapic_read - Read a value from a LAPIC register
- */
 uint32_t lapic_read(uint32_t reg) {
     if (lapic_base == 0) return 0;
     return *(volatile uint32_t*)(lapic_base + reg);
@@ -164,9 +154,6 @@ void lapic_set_tpm(uint64_t tpm) {
     ticks_per_ms = tpm;
 }
 
-/*
- * lapic_timer_oneshot - Arms the LAPIC timer in one-shot mode
- */
 void lapic_timer_oneshot(uint32_t us, uint8_t vector) {
     if (ticks_per_ms == 0) return;
     uint32_t ticks = (uint32_t)(((uint64_t)us * ticks_per_ms) / 1000);
@@ -176,9 +163,6 @@ void lapic_timer_oneshot(uint32_t us, uint8_t vector) {
     lapic_write(LAPIC_TICR, ticks);
 }
 
-/*
- * lapic_timer_periodic - Arms the LAPIC timer in periodic mode
- */
 void lapic_timer_periodic(uint32_t us, uint8_t vector) {
     if (ticks_per_ms == 0) return;
     uint32_t ticks = (uint32_t)(((uint64_t)us * ticks_per_ms) / 1000);
@@ -196,9 +180,6 @@ void lapic_timer_stop(void) {
     lapic_write(LAPIC_TICR, 0);
 }
 
-/*
- * lapic_tsc_arm - Arms the LAPIC timer in TSC Deadline mode
- */
 void lapic_tsc_arm(uint64_t tsc_deadline, uint8_t vector) {
     lapic_write(LAPIC_LVT_TIMER, (uint32_t)vector | LVT_TIMER_TSC_DEADLINE);
     __asm__ volatile("lfence" ::: "memory");
@@ -227,9 +208,6 @@ void ioapic_write(uint32_t reg, uint32_t value) {
     *(volatile uint32_t*)(ioapic_base + IOAPIC_IOWIN) = value;
 }
 
-/*
- * ioapic_set_entry - Set a redirection table entry
- */
 void ioapic_set_entry(uint8_t index, uint64_t data) {
     ioapic_write(IOAPIC_REDTBL + 2 * index, (uint32_t)(data & 0xFFFFFFFF));
     ioapic_write(IOAPIC_REDTBL + 2 * index + 1, (uint32_t)(data >> 32));
@@ -255,7 +233,7 @@ void ioapic_redirect(uint8_t irq, uint8_t vector, uint32_t dest_core, uint16_t f
     uint8_t trigger = (flags >> 2) & 0x03;
 
     if (polarity == 0x03) entry |= (1 << 13);
-    if (trigger == 0x03)  entry |= (1 << 15);
+    if (trigger == 0x03) entry |= (1 << 15);
 
     entry |= ((uint64_t)dest_core << 56);
     

@@ -1,8 +1,6 @@
 /*
  * debug.c - Implementation of debugging utilities for GatOS kernel
  *
- * Implements all debugging related functions declared in debug.h
- *
  * Author: u/ApparentlyPlus
  */
 

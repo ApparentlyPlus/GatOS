@@ -1,8 +1,6 @@
 /*
  * debug.h - Debugging utilities for GatOS kernel
  *
- * Declares all debugging related functions.
- * 
  * Author: u/ApparentlyPlus
  */
 

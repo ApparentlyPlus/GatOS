@@ -1,10 +1,8 @@
 /*
  * vmm.h - Virtual Memory Manager
  *
- * Manages virtual address spaces. Each instance owns a page table and a sorted tree
- * of vm_objects (virtual memory regions). NULL = kernel VMM in all public APIs.
- *
- * Init order: PMM → slab → VMM (depends on both).
+ * Each instance owns a page table and a sorted tree of vm_objects. NULL = kernel VMM in
+ * all public APIs. Init order: PMM → slab → VMM.
  *
  * Author: u/ApparentlyPlus
  */
@@ -110,31 +108,9 @@ void vmm_dump_pte_chain(uint64_t pt_root, void* virt);
 bool vmm_verify_integrity(vmm_t* vmm_pub);
 
 /*
-
-Notes on improving the VMM in the future:
-
-1. Range Operations Could Be Optimized
-
-vmm_map_range maps page by page. For large contiguous ranges, we could potentially use 
-larger page sizes (2MB/1GB pages).
-
-2. Add Copy on Write Support
-
-For fork() later, we'll want CoW:
-
-#define VM_FLAG_COW (1 << 6)
-
-In page fault handler:
-
-if (fault_address has VM_FLAG_COW) {
-    Allocate new page
-    Copy content
-    Remap with write permissions
-}
-
-3. Add vmm_resize()
-
-Heap will need to grow, so good to have a function to handle that
-
-
-*/
+ * Notes on improving the VMM in the future:
+ *
+ * - vmm_map_range goes page by page. Large contiguous ranges could use 2MB/1GB pages.
+ * - Copy on write for fork(): a VM_FLAG_COW flag, and the page fault handler allocates,
+ *   copies and remaps writable.
+ */

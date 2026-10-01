@@ -1,32 +1,11 @@
 /*
- * interrupts.S - x86_64 Interrupt setup
+ * ISR.S - x86_64 Interrupt setup
  *
- * Implementation based on: https://github.com/dreamportdev/Osdev-Notes/blob/master/02_Architecture/05_InterruptHandling.md
+ * Based on: https://github.com/dreamportdev/Osdev-Notes/blob/master/02_Architecture/05_InterruptHandling.md
  *
- * I'm citing the relevant idea here:
- * 
- * Since an interrupt handler uses the same general purpose registers as the code that was interrupted, 
- * we'll need to save and then restore the values of those registers, otherwise we may crash the interrupted program.
- * There are a number of ways we could go about something like this, we're going to use some assembly (not too much!) 
- * as it gives us the fine control over the cpu we need. There are other ways, like the infamous __attribute__((interrupt)), 
- * but these have their own issues and limitations. This small bit of assembly code will allow us to add other things as we go.
- * 
- * There are a number of places where the state of the general purpose registers could be stored, we're going to use the stack 
- * as it's extremely simple to implement. In protected mode there are the pusha/popa instructions for this, but they're not present 
- * in long mode, so we have to do this ourselves.
- * 
- * There is also one other thing: when an interrupt is served the cpu will store some things on the stack, 
- * so that when the handler is done we can return to the previous code. The cpu pushes the following on to the stack (in this order):
- * 
- * ss: The previous stack selector.
- * rsp: The previous stack-top.
- * rflags: The previous value of the flags register, before the cpu modified any flags for serving the interrupt.
- * cs: The previous code selector.
- * rip: The previous instruction pointer.
- * 
- * Optionally, for some vectors the cpu will push a 64-bit error code (see the table below for specifics). 
- * This structure is known as an iret frame, because to return from an interrupt we use the iret instruction, 
- * which pops those five values from the stack.
+ * We save/restore the GPRs ourselves (no pusha/popa in long mode) on the stack. On entry
+ * the cpu has already pushed an iret frame: ss, rsp, rflags, cs, rip, plus an error code
+ * for some vectors.
  *
  * Author: u/ApparentlyPlus
  */
@@ -150,10 +129,9 @@ generic_interrupt_handler:
     iretq
 
 
-/* 
- * We now have to create specific interrupt stubs for each vector,
- * because we need to push the vector number and possibly a dummy error code
- * onto the stack before calling the generic interrupt stub. 
+/*
+ * One stub per vector, each pushes the vector number (plus a dummy error code when the cpu
+ * doesn't push one) before calling the generic stub.
  */
 
 .macro GENERATE_INTERRUPT_HANDLER num

@@ -1,13 +1,6 @@
 /*
  * test_multitasking.c - Scheduler and Process/Thread Validation Suite
  *
- * Tests every public function: process_create/destroy, thread_create,
- * thread_create_bootstrap, thread_destroy, process_get_all,
- * procs_kill_tty, proc_hdr_update, sched_active,
- * sched_current, sched_add, sched_yield.
- * Covers PID/TID uniqueness, context layout, stack alignment, name truncation,
- * global process list, and shared TTY.
- * 
  * Author: Claude Code
  */
 
@@ -25,7 +18,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-static int ntests  = 0;
+static int ntests = 0;
 static int npass = 0;
 
 #pragma region Helpers
@@ -429,11 +422,11 @@ static void run_test(const char* name, bool (*fn)(void)) {
     LOGF("[TEST] %-40s ", name);
     bool pass = fn();
     if (pass) { npass++; LOGF("[PASS]\n"); }
-    else       { LOGF("[FAIL]\n"); }
+    else { LOGF("[FAIL]\n"); }
 }
 
 void test_multitasking(void) {
-    ntests  = 0;
+    ntests = 0;
     npass = 0;
 
     LOGF("\n--- BEGIN MULTITASKING TEST ---\n");

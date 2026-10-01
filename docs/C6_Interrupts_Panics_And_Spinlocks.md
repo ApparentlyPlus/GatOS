@@ -905,7 +905,7 @@ This means we can now derive a virtual address for the framebuffer simply by add
 ```c
 void console_init(multiboot_parser_t* parser) {
     font_init();
-    multiboot_framebuffer_t* mbfb = multiboot_get_framebuffer(parser);
+    multiboot_framebuffer_t* mbfb = multiboot_framebuffer(parser);
     if (!mbfb) return;
     fb_phys = mbfb->addr;
     fb_w = mbfb->width;  fb_h = mbfb->height;
@@ -1197,7 +1197,7 @@ QEMU_LOG("Initialized the IDT", TOTAL_DBG);
 // Multiboot and physmap: covered in previous chapters
 multiboot_parser_t multiboot = {0};
 multiboot_init(&multiboot, mb_info, multiboot_buffer, sizeof(multiboot_buffer));
-reserve_required_tablespace(&multiboot);
+reserve_tables(&multiboot);
 cleanup_kpt(0x0, get_kend(false));
 build_physmap();
 
