@@ -1,6 +1,49 @@
 /*
  * math.c - Implementation of math functions based on fdlibm
  *
+ * Adapted for freestanding, architecture independent use: doubles are accessed through
+ * a uint64_t union instead of fdlibm's high/low word macros, and nothing beyond
+ * <stdint.h> is needed. Standalone copy: https://github.com/ApparentlyPlus/fdlibm_freestanding
+ *
+ * The algorithms, polynomial coefficients and most of the code in this file come from
+ * fdlibm (https://www.netlib.org/fdlibm/). Its original notices follow and must be
+ * preserved.
+ *
+ * Files s_sin, s_cos, k_sin, k_cos, e_log, e_asin, e_acos, s_atan, e_atan2, e_sqrt,
+ * e_fmod, e_sinh, e_cosh, s_tanh, s_asinh, e_acosh, e_atanh, s_log1p, s_floor, s_ceil,
+ * s_fabs, s_copysign, s_scalbn, s_tan, e_rem_pio2 and k_rem_pio2:
+ *
+ * ====================================================
+ * Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
+ *
+ * Developed at SunSoft, a Sun Microsystems, Inc. business.
+ * Permission to use, copy, modify, and distribute this
+ * software is freely granted, provided that this notice
+ * is preserved.
+ * ====================================================
+ *
+ * Files e_exp, e_pow and s_expm1:
+ *
+ * ====================================================
+ * Copyright (C) 2004 by Sun Microsystems, Inc. All rights reserved.
+ *
+ * Permission to use, copy, modify, and distribute this
+ * software is freely granted, provided that this notice
+ * is preserved.
+ * ====================================================
+ *
+ * File k_tan:
+ *
+ * ====================================================
+ * Copyright 2004 Sun Microsystems, Inc.  All Rights Reserved.
+ *
+ * Permission to use, copy, modify, and distribute this
+ * software is freely granted, provided that this notice
+ * is preserved.
+ * ====================================================
+ *
+ * trunc and round are not part of fdlibm.
+ *
  * Author: u/ApparentlyPlus
  */
 

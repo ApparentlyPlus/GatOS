@@ -2,22 +2,18 @@
 
 import sys
 import os
+import re
 import shutil
 import hashlib
 import zipfile
-import platform
-import urllib.request
-import re
 import subprocess
+import urllib.request
 from pathlib import Path
-from time import time
 
-# Configuration
 ROOT_DIR = Path(__file__).parent.resolve()
 TOOLCHAIN_DIR = ROOT_DIR / "toolchain"
 SRC_DIR = ROOT_DIR / "src"
 
-# URLs and Hashes
 CONFIG = {
     "linux": {
         "url": "https://github.com/ApparentlyPlus/GatOS/releases/download/build-toolchain/x86_64-linux.zip",
@@ -36,311 +32,238 @@ CONFIG = {
     }
 }
 
-# ANSI Colors
 if os.name == 'nt':
     os.system("color")
 
-class Colors:
-    CYAN = '\033[96m'
-    MAGENTA = '\033[95m'
-    GREEN = '\033[92m'
-    RED = '\033[91m'
-    YELLOW = '\033[93m'
-    RESET = '\033[0m'
-    BLACK_BG = '\033[40m'
+CYAN = '\033[96m'
+MAGENTA = '\033[95m'
+GREEN = '\033[92m'
+RED = '\033[91m'
+YELLOW = '\033[93m'
+NC = '\033[0m'
 
-# Helper Functions
-
-def get_kernel_version() -> str:
+def get_kernel_version():
     pattern = re.compile(r'KERNEL_VERSION\s*=\s*"([^"]*)"')
-    
-    if not SRC_DIR.exists(): 
-        return "v0.0.0-unknown"
-    
-    for file in SRC_DIR.rglob("*.[chS]"):
-        try:
-            text = file.read_text(errors="ignore")
-            match = pattern.search(text)
-            if match:
-                return match.group(1)
-        except Exception:
-            pass
-            
+    if SRC_DIR.exists():
+        for file in SRC_DIR.rglob("*.[chS]"):
+            try:
+                m = pattern.search(file.read_text(errors="ignore"))
+                if m: return m.group(1)
+            except Exception: pass
     return "v0.0.0-unknown"
 
 def print_banner():
     version = get_kernel_version()
-    
-    # Cyan Text on Black Background
 
-    print(Colors.CYAN)
-    print(f"   █████████           █████       ███████     █████████ ")
-    print(f"  ███░░░░░███         ░░███      ███░░░░░███  ███░░░░░███")
-    print(f" ███     ░░░  ██████  ███████   ███     ░░███░███    ░░░")
-    print(f"░███         ░░░░░███░░░███░   ░███      ░███░░█████████")
-    print(f"░███    █████ ███████  ░███    ░███      ░███ ░░░░░░░░███")
-    print(f"░░███  ░░███ ███░░███  ░███ ███░░███     ███  ███    ░███")
-    print(f" ░░█████████░░████████ ░░█████  ░░░███████░  ░░█████████")
-    print(f"  ░░░░░░░░░  ░░░░░░░░   ░░░░░     ░░░░░░░     ░░░░░░░░░ ")
-    print(Colors.RESET)
+    print(CYAN)
+    print("   █████████           █████       ███████     █████████ ")
+    print("  ███░░░░░███         ░░███      ███░░░░░███  ███░░░░░███")
+    print(" ███     ░░░  ██████  ███████   ███     ░░███░███    ░░░")
+    print("░███         ░░░░░███░░░███░   ░███      ░███░░█████████")
+    print("░███    █████ ███████  ░███    ░███      ░███ ░░░░░░░░███")
+    print("░░███  ░░███ ███░░███  ░███ ███░░███     ███  ███    ░███")
+    print(" ░░█████████░░████████ ░░█████  ░░░███████░  ░░█████████")
+    print("  ░░░░░░░░░  ░░░░░░░░   ░░░░░     ░░░░░░░     ░░░░░░░░░ ")
+    print(NC)
 
-    # Magenta Text on Black Background
-    banner_text = f">   GatOS Kernel {version} - Toolchain Setup Script   <"
-    print(f"{Colors.MAGENTA}{banner_text}{Colors.RESET}")
-    print("_" * len(banner_text) + "\n")
+    banner = f">   GatOS Kernel {version} - Toolchain Setup Script   <"
+    print(f"{MAGENTA}{banner}{NC}")
+    print("_" * len(banner) + "\n")
 
 def get_platform_config():
-    sys_plat = sys.platform
-    if sys_plat.startswith("win"):
+    plat = sys.platform
+    if plat.startswith("win"):
         return CONFIG["win32"], "win"
-    elif sys_plat.startswith("linux"):
+    elif plat.startswith("linux"):
         return CONFIG["linux"], "linux"
-    elif sys_plat == "darwin":
+    elif plat == "darwin":
         return CONFIG["darwin"], "macos"
     else:
-        print(f"{Colors.RED}[FATAL] Unsupported OS: {sys_plat}{Colors.RESET}")
+        print(f"{RED}[FATAL] Unsupported OS: {plat}{NC}")
         sys.exit(1)
 
-def report_progress(block_num, block_size, total_size):
-    downloaded = block_num * block_size
-    if total_size > 0:
-        percent = min(100, int(downloaded * 100 / total_size))
-        bar_length = 40
-        filled_length = int(bar_length * percent // 100)
-        bar = '=' * filled_length + ' ' * (bar_length - filled_length)
-        
-        # Convert bytes to MB
-        downloaded_mb = downloaded / (1024 * 1024)
-        total_mb = total_size / (1024 * 1024)
-        
-        sys.stdout.write(f"\r{Colors.YELLOW}[DOWN] |{bar}| {percent}% ({downloaded_mb:.2f}/{total_mb:.2f} MB){Colors.RESET}")
+# urlretrieve reporthook
+def progress(blocks, block_size, total):
+    done = blocks * block_size
+    if total > 0:
+        pct = min(100, int(done * 100 / total))
+        filled = 40 * pct // 100
+        bar = '=' * filled + ' ' * (40 - filled)
+        sys.stdout.write(f"\r{YELLOW}[DOWN] |{bar}| {pct}% ({done / 2**20:.2f}/{total / 2**20:.2f} MB){NC}")
         sys.stdout.flush()
 
-def calculate_sha256(file_path):
-    sha256_hash = hashlib.sha256()
-    with open(file_path, "rb") as f:
-        # Read and update hash string value in blocks of 4K
-        for byte_block in iter(lambda: f.read(4096), b""):
-            sha256_hash.update(byte_block)
-    return sha256_hash.hexdigest()
+def sha256_of(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
-def extract_toolchain(zip_path, extract_to):
-    print(f"\n{Colors.YELLOW}[INFO] Extracting toolchain...{Colors.RESET}")
+def extract_toolchain(zip_path, dest):
+    print(f"\n{YELLOW}[INFO] Extracting toolchain...{NC}")
     try:
-        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-            zip_ref.extractall(extract_to)
-        print(f"{Colors.GREEN}[DONE] Extraction complete.{Colors.RESET}")
+        with zipfile.ZipFile(zip_path, 'r') as z:
+            z.extractall(dest)
+        print(f"{GREEN}[DONE] Extraction complete.{NC}")
     except zipfile.BadZipFile:
-        print(f"{Colors.RED}[FATAL] The downloaded file is corrupted.{Colors.RESET}")
+        print(f"{RED}[FATAL] The downloaded file is corrupted.{NC}")
         sys.exit(1)
 
 def fix_mac_quarantine(folder):
     if sys.platform != "darwin":
         return
 
-    print(f"{Colors.YELLOW}[INFO] MacOS Detected: Analyzing binaries and fixing Gatekeeper...{Colors.RESET}")
-    
-    target_path = Path(folder)
-    
-    # Mach-O Magic Bytes (covers 32/64 bit LE/BE and Universal binaries)
-    # This identifies executables AND dylibs (dependencies)
-    MACHO_MAGIC = {
+    print(f"{YELLOW}[INFO] MacOS Detected: Analyzing binaries and fixing Gatekeeper...{NC}")
+
+    # Mach-O magics (32/64 bit, LE/BE, universal). Matches executables and dylibs.
+    MACHO = {
         b'\xfe\xed\xfa\xce', b'\xfe\xed\xfa\xcf',
         b'\xce\xfa\xed\xfe', b'\xcf\xfa\xed\xfe',
         b'\xca\xfe\xba\xbe'
     }
 
-    # State for sudo persistence
     use_sudo = False
 
-    def run_secure(cmd_list, file_desc):
+    # Runs cmd, and asks once to switch to sudo if something is permission denied.
+    def sh(cmd, desc):
         nonlocal use_sudo
-        
-        # Prepare command
-        cmd = ["sudo"] + cmd_list if use_sudo else cmd_list
-        
-        # Run command
-        res = subprocess.run(cmd, capture_output=True, text=True)
-        
-        # Check for permission denied
-        if res.returncode != 0 and "Permission denied" in res.stderr:
-            if not use_sudo:
-                print(f"{Colors.YELLOW}[WARN] Permission denied while processing {file_desc}.{Colors.RESET}")
-                choice = input(f"{Colors.CYAN}    > The script needs 'sudo' to fix this. Allow? (y/N): {Colors.RESET}").strip().lower()
-                
-                if choice == 'y':
-                    use_sudo = True
-                    # Retry with sudo
-                    cmd = ["sudo"] + cmd_list
-                    res = subprocess.run(cmd, capture_output=True, text=True)
-                else:
-                    print(f"{Colors.RED}[ERR] Skipping {file_desc} (No permission).{Colors.RESET}")
-                    return res
+        res = subprocess.run((["sudo"] if use_sudo else []) + cmd, capture_output=True, text=True)
+
+        if res.returncode != 0 and "Permission denied" in res.stderr and not use_sudo:
+            print(f"{YELLOW}[WARN] Permission denied while processing {desc}.{NC}")
+            ans = input(f"{CYAN}    > The script needs 'sudo' to fix this. Allow? (y/N): {NC}").strip().lower()
+            if ans == 'y':
+                use_sudo = True
+                res = subprocess.run(["sudo"] + cmd, capture_output=True, text=True)
             else:
-                # Failed even with sudo
-                return res
-        
+                print(f"{RED}[ERR] Skipping {desc} (No permission).{NC}")
         return res
 
     count = 0
-    # Recursive walk
-    for file_path in target_path.rglob("*"):
-        if not file_path.is_file() or file_path.is_symlink():
+    for f in Path(folder).rglob("*"):
+        if not f.is_file() or f.is_symlink():
             continue
 
-        # Check if file is a Mach-O binary or dylib
-        is_binary = False
         try:
-            with open(file_path, "rb") as f:
-                header = f.read(4)
-                if header in MACHO_MAGIC:
-                    is_binary = True
+            with open(f, "rb") as fh:
+                is_macho = fh.read(4) in MACHO
         except PermissionError:
-            # If we can't read it, we likely need sudo to handle it anyway
-            is_binary = True 
+            is_macho = True  # can't read it, so it will need sudo anyway
         except Exception:
             continue
 
-        if is_binary:
-            # Remove Quarantine
-            # We explicitly ignore "No such xattr" errors (return code != 0 but typical stderr)
-            # We ONLY care if it failed due to permissions, which run_secure handles.
-            run_secure(["xattr", "-d", "com.apple.quarantine", str(file_path)], file_path.name)
-            
-            # Ad-hoc Sign
-            # codesign -f -s - <file>
-            res_sign = run_secure(["codesign", "--force", "--sign", "-", str(file_path)], file_path.name)
-            
-            if res_sign.returncode != 0:
-                # Log actual signing errors
-                print(f"{Colors.RED}[FAIL] Signing error on {file_path.name}: {res_sign.stderr.strip()}{Colors.RESET}")
+        if is_macho:
+            # xattr fails with "No such xattr" on clean files, which is fine. Only permission errors matter.
+            sh(["xattr", "-d", "com.apple.quarantine", str(f)], f.name)
+            sign = sh(["codesign", "--force", "--sign", "-", str(f)], f.name)
+
+            if sign.returncode != 0:
+                print(f"{RED}[FAIL] Signing error on {f.name}: {sign.stderr.strip()}{NC}")
             else:
                 count += 1
 
-    print(f"{Colors.GREEN}[DONE] Security patches applied to {count} binaries/libs.{Colors.RESET}")
+    print(f"{GREEN}[DONE] Security patches applied to {count} binaries/libs.{NC}")
 
-def verify_tools_exist(toolchain_root, os_key):
-    exe_ext = ".exe" if os_key == "win" else ""
-    
-    platform_dir = None
-    if os_key == "win": platform_dir = toolchain_root / "x86_64-win"
-    elif os_key == "linux": platform_dir = toolchain_root / "x86_64-linux"
-    elif os_key == "macos": platform_dir = toolchain_root / "x86_64-macos"
+def tools_ok(root, os_key):
+    exe = ".exe" if os_key == "win" else ""
+    plat_dir = root / {"win": "x86_64-win", "linux": "x86_64-linux", "macos": "x86_64-macos"}[os_key]
 
-    if not platform_dir.exists():
+    if not plat_dir.exists():
         return False
 
-    required_tools = [
-        platform_dir / "gcc/bin" / f"x86_64-elf-gcc{exe_ext}",
-        platform_dir / "gcc/bin" / f"x86_64-elf-ld{exe_ext}",
-        platform_dir / "grub" / f"grub-mkstandalone{exe_ext}",
-        platform_dir / "grub" / f"grub-mkrescue{exe_ext}",
+    need = [
+        plat_dir / "gcc/bin" / f"x86_64-elf-gcc{exe}",
+        plat_dir / "gcc/bin" / f"x86_64-elf-ld{exe}",
+        plat_dir / "grub" / f"grub-mkstandalone{exe}",
+        plat_dir / "grub" / f"grub-mkrescue{exe}",
     ]
-
-    # QEMU check
     if os_key == "win":
-        required_tools.append(platform_dir / "qemu" / f"qemu-system-x86_64{exe_ext}")
+        need.append(plat_dir / "qemu" / f"qemu-system-x86_64{exe}")
     elif os_key == "linux":
-        required_tools.append(platform_dir / "qemu" / "QEMU-x86_64.AppImage")
+        need.append(plat_dir / "qemu" / "QEMU-x86_64.AppImage")
     elif os_key == "macos":
-         required_tools.append(platform_dir / "qemu" / "bin" / "qemu-system-x86_64")
+        need.append(plat_dir / "qemu" / "bin" / "qemu-system-x86_64")
 
-    missing = [t for t in required_tools if not t.exists()]
-    
+    missing = [t for t in need if not t.exists()]
     if missing:
-        print(f"{Colors.RED}[ERR] Missing tools:{Colors.RESET}")
+        print(f"{RED}[ERR] Missing tools:{NC}")
         for m in missing:
             print(f" - {m}")
         return False
-    
     return True
-
-# Main Logic
 
 def main():
     if sys.stdout.encoding != 'utf-8':
         sys.stdout.reconfigure(encoding='utf-8')
-        
+
     print_banner()
 
-    #OS Detection
     config, os_key = get_platform_config()
-    print(f"{Colors.GREEN}[INFO] Detected OS: {os_key.upper()}{Colors.RESET}")
+    print(f"{GREEN}[INFO] Detected OS: {os_key.upper()}{NC}")
 
-    # Directory Management
-    should_download = True
-    
+    download = True
+
     if TOOLCHAIN_DIR.exists():
-        # Check if it looks populated
-        if verify_tools_exist(TOOLCHAIN_DIR, os_key):
-            print(f"{Colors.YELLOW}[INFO] Toolchain directory exists and looks valid.{Colors.RESET}")
-            res = input(f"{Colors.CYAN}Do you want to redownload and repair it? (y/N): {Colors.RESET}").lower().strip()
-            if res != 'y':
-                should_download = False
-                print(f"{Colors.GREEN}[DONE] Using existing toolchain.{Colors.RESET}")
+        if tools_ok(TOOLCHAIN_DIR, os_key):
+            print(f"{YELLOW}[INFO] Toolchain directory exists and looks valid.{NC}")
+            ans = input(f"{CYAN}Do you want to redownload and repair it? (y/N): {NC}").lower().strip()
+            if ans != 'y':
+                download = False
+                print(f"{GREEN}[DONE] Using existing toolchain.{NC}")
             else:
-                print(f"{Colors.YELLOW}[INFO] Cleaning existing toolchain...{Colors.RESET}")
+                print(f"{YELLOW}[INFO] Cleaning existing toolchain...{NC}")
                 shutil.rmtree(TOOLCHAIN_DIR)
                 TOOLCHAIN_DIR.mkdir()
         else:
-             print(f"{Colors.YELLOW}[WARN] Toolchain directory exists but seems incomplete.{Colors.RESET}")
-             TOOLCHAIN_DIR.mkdir(parents=True, exist_ok=True)
+            print(f"{YELLOW}[WARN] Toolchain directory exists but seems incomplete.{NC}")
+            TOOLCHAIN_DIR.mkdir(parents=True, exist_ok=True)
     else:
         TOOLCHAIN_DIR.mkdir(parents=True, exist_ok=True)
 
-    if should_download:
-        zip_name = "toolchain_temp.zip"
-        zip_path = TOOLCHAIN_DIR / zip_name
+    if download:
+        zip_path = TOOLCHAIN_DIR / "toolchain_temp.zip"
 
-        # Download
-        print(f"{Colors.YELLOW}[INFO] Downloading toolchain, please hang tight :D{Colors.RESET}")
+        print(f"{YELLOW}[INFO] Downloading toolchain, please hang tight :D{NC}")
         try:
-            urllib.request.urlretrieve(config['url'], zip_path, report_progress)
+            urllib.request.urlretrieve(config['url'], zip_path, progress)
             sys.stdout.write("\n")
         except Exception as e:
-            print(f"\n{Colors.RED}[FATAL] Download failed: {e}{Colors.RESET}")
+            print(f"\n{RED}[FATAL] Download failed: {e}{NC}")
             sys.exit(1)
 
-        # 4. Verify Hash
-        print(f"{Colors.YELLOW}[INFO] Verifying SHA256 hash...{Colors.RESET}")
-        file_hash = calculate_sha256(zip_path)
-        
-        if file_hash != config['hash']:
-            print(f"{Colors.RED}[FATAL] Hash mismatch!{Colors.RESET}")
+        print(f"{YELLOW}[INFO] Verifying SHA256 hash...{NC}")
+        got = sha256_of(zip_path)
+
+        if got != config['hash']:
+            print(f"{RED}[FATAL] Hash mismatch!{NC}")
             print(f"Expected: {config['hash']}")
-            print(f"Got:      {file_hash}")
+            print(f"Got:      {got}")
             print("Possible corrupted download or MITM attack.")
             zip_path.unlink()
             sys.exit(1)
         else:
-             print(f"{Colors.GREEN}[PASS] Checksum verified.{Colors.RESET}")
+            print(f"{GREEN}[PASS] Checksum verified.{NC}")
 
-        # Extract
         extract_toolchain(zip_path, TOOLCHAIN_DIR)
 
-        # Cleanup
-        print(f"{Colors.YELLOW}[INFO] Cleaning up zip file...{Colors.RESET}")
+        print(f"{YELLOW}[INFO] Cleaning up zip file...{NC}")
         if zip_path.exists():
             zip_path.unlink()
 
-        # Post-Install Fixes
         if sys.platform != "win32":
-            # Make binaries executable
             subprocess.run(["chmod", "-R", "+x", str(TOOLCHAIN_DIR)], stderr=subprocess.DEVNULL)
-            # Fix macOS Gatekeeper
             fix_mac_quarantine(TOOLCHAIN_DIR)
 
-    # Final Verification
-    print(f"{Colors.YELLOW}[INFO] validating installation...{Colors.RESET}")
-    if verify_tools_exist(TOOLCHAIN_DIR, os_key):
-        print(f"\n{Colors.GREEN}[SUCCESS] Toolchain setup complete! You can now run 'python run.py'.{Colors.RESET}\n")
+    print(f"{YELLOW}[INFO] validating installation...{NC}")
+    if tools_ok(TOOLCHAIN_DIR, os_key):
+        print(f"\n{GREEN}[SUCCESS] Toolchain setup complete! You can now run 'python run.py'.{NC}\n")
     else:
-        print(f"\n{Colors.RED}[FAIL] Setup completed, but tools are missing. Check logs.{Colors.RESET}\n")
+        print(f"\n{RED}[FAIL] Setup completed, but tools are missing. Check logs.{NC}\n")
         sys.exit(1)
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print(f"\n{Colors.RED}[ABORT] Setup cancelled by user.{Colors.RESET}")
+        print(f"\n{RED}[ABORT] Setup cancelled by user.{NC}")
         sys.exit(1)

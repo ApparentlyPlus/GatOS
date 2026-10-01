@@ -1,3 +1,7 @@
+NOTE: the code below is a patch to GNU GRUB (https://www.gnu.org/software/grub/),
+Copyright (C) Free Software Foundation, Inc. It is distributed under the same terms as
+GRUB, the GNU General Public License version 3 or (at your option) any later version.
+
 To build a relocatable version of grub, certain things need to be patched first.
 
 1. Change grub/grub-core/osdep/unix/config.c to:

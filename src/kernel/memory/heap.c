@@ -1,8 +1,7 @@
 /*
  * heap.c - Multi-Arena Kernel Heap Manager Implementation
  * 
- * This implementation provides a robust heap manager supporting multiple arenas,
- * block coalescing, and comprehensive integrity checking. Each heap maintains
+ * Heap manager with multiple arenas, block coalescing and integrity checking. Each heap maintains
  * separate arenas with free lists sorted by size for efficient allocation.
  * The global kernel heap is automatically initialized on first use.
  * 

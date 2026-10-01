@@ -10,9 +10,13 @@
  * - Control transfer support for device enumeration and configuration
  * - Hub enumeration and downstream port management
  * - Integration with input subsystem for USB keyboards
- * - Robust error handling and timeouts for hardware interactions
+ * - Error handling and timeouts for hardware interactions
  * - DMA memory management with kernel address mapping
  * - Spinlock synchronization for concurrent access to shared data structures
+ * 
+ * Reference: the xHCI specification (rev 1.1) and the Linux kernel's xHCI driver
+ * (drivers/usb/host/, GPL-2.0). The Intel port routing sequence in bios_handoff()
+ * follows usb_enable_intel_xhci_ports() in drivers/usb/host/pci-quirks.c.
  * 
  * Author: u/ApparentlyPlus
  */

@@ -197,7 +197,7 @@ static void tty_block(tty_t* tty) {
 
     bool iflag = intr_save();
     if (tty->head != tty->tail) {
-        // Data arrived between caller's check and here — no need to block.
+        // Data arrived between caller's check and here, no need to block.
         intr_restore(iflag);
         return;
     }

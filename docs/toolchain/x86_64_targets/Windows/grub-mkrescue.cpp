@@ -1,5 +1,12 @@
 // grub-mkrescue.cpp
 //
+// Derived from GNU GRUB (util/grub-mkrescue.c, grub-2.14).
+//   GRUB  --  GRand Unified Bootloader
+//   Copyright (C) 1999,2000,2001,2002,2003,2004,2005,2006,2007,2008,2009,2010  Free Software Foundation, Inc.
+// This file is a port of that program, so it is distributed under the same terms as GRUB:
+// the GNU General Public License, version 3 or (at your option) any later version.
+// It comes without any warranty. See <http://www.gnu.org/licenses/>.
+//
 // A faithful Windows port of upstream `grub-mkrescue` (grub-2.14/util/grub-mkrescue.c).
 //
 // Upstream `grub-mkrescue` is a C program that is deliberately NOT shipped in the
