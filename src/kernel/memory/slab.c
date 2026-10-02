@@ -207,7 +207,7 @@ static void slab_remove_from_list(slab_t** list_head, slab_t* slab) {
 }
 
 /*
- * slab_add_to_list - add slab to head of list (LIFO style); records list_id
+ * slab_add_to_list - add slab to head of list (LIFO style), records list_id
  */
 static void slab_add_to_list(slab_t** list_head, slab_t* slab, uint8_t list_id) {
     if (!slab) return;
@@ -224,7 +224,7 @@ static void slab_add_to_list(slab_t** list_head, slab_t* slab, uint8_t list_id) 
 }
 
 /*
- * slab_move_to_list - convenience wrapper (remove then add); records list_id
+ * slab_move_to_list - convenience wrapper (remove then add), records list_id
  */
 static void slab_move_to_list(slab_t** from_list, slab_t** to_list, slab_t* slab, uint8_t to_id) {
     slab_remove_from_list(from_list, slab);

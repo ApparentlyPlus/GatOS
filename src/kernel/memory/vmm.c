@@ -229,7 +229,7 @@ static bool vma_overlaps(vmm_ctx* vmm, uintptr_t start, size_t length) {
  */
 static inline vmm_ctx* vmm_get_instance(vmm_t* vmm) {
     if (vmm) {
-        // public is embedded inside vmm_ctx; recover the outer struct
+        // public is embedded inside vmm_ctx, so recover the outer struct
         vmm_ctx* internal =
             (vmm_ctx*)((uint8_t*)vmm - offsetof(vmm_ctx, public));
         if (!vmm_validate(internal)) return NULL;
@@ -1047,7 +1047,7 @@ void vmm_destroy(vmm_t* vmm_pub) {
     }
     vmm->vma_tree.root = NULL;
 
-    // Only free lower half (entries 0-255); DO NOT touch kernel mappings (256-511)
+    // Only free the lower half (entries 0-255), DO NOT touch kernel mappings (256-511)
     uint64_t* pml4 = (uint64_t*)PHYSMAP_P2V(vmm->public.pt_root);
 
     for (size_t i = 0; i < 256; ++i) {

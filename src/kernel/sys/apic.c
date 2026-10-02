@@ -133,7 +133,7 @@ void lapic_init(void) {
             MADTRecordHeader* header = (MADTRecordHeader*)start;
             if (header->type == MADT_TYPE_NMI) {
                 MADT_NMI* nmi = (MADT_NMI*)header;
-                // 0xFF targets all processors; otherwise match by local APIC ID
+                // 0xFF targets all processors, otherwise match by local APIC ID
                 if (nmi->acpi_processor_id == 0xFF || nmi->acpi_processor_id == my_id) {
                     uint32_t lvt_reg = (nmi->lint == 0) ? LAPIC_LVT_LINT0 : LAPIC_LVT_LINT1;
                     lapic_write(lvt_reg, (4 << 8));

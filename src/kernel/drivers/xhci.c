@@ -84,7 +84,7 @@ static void *dma_alloc(xhci_hc_t *hc, size_t sz, uint64_t *phys) {
 }
 
 /*
- * ring_init - set up a TRB ring; Link TRB at tail keeps it circular
+ * ring_init - set up a TRB ring, the Link TRB at the tail keeps it circular
  */
 static void ring_init(xhci_hc_t *hc, ring_t *r, uint32_t cnt) {
     r->trbs = dma_alloc(hc, cnt * sizeof(trb_t), &r->phys);
@@ -227,7 +227,7 @@ static trb_t wait_ev(xhci_hc_t *hc, uint8_t type, uint32_t tmo) {
 }
 
 /*
- * bios_handoff - hand off xHCI ownership from BIOS; also reroutes Intel USB2 ports to xHCI
+ * bios_handoff - hand off xHCI ownership from BIOS, also reroutes Intel USB2 ports to xHCI
  */
 static void bios_handoff(xhci_hc_t *hc, pci_dev_t *pci) {
     // Intel Port Routing (Panther Point / Lynx Point quirks)

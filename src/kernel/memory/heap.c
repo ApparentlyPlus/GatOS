@@ -1046,7 +1046,7 @@ void kfree(void* ptr) {
 }
 
 /*
- * krealloc - Kernel realloc; preserves original behavior and API
+ * krealloc - Kernel realloc, same behavior and API as before
  */
 void* krealloc(void* ptr, size_t size) {
     if (!ptr) return kmalloc(size);

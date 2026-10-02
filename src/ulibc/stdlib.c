@@ -399,7 +399,7 @@ static void *heap_alloc(size_t size, bool zero) {
     block_t *b = find_free_block(size);
 
     if (!b) {
-        // No block fits; expand the heap with a new arena
+        // No block fits, expand the heap with a new arena
         size_t needed = size + sizeof(block_t) + sizeof(bfooter_t);
         size_t body = needed > MIN_ARENA_BODY ? needed : MIN_ARENA_BODY;
         if (!arena_create(body)) return NULL;

@@ -18,7 +18,7 @@ static uint8_t ext_glyphs[FONT_EXT_GLYPHS * FONT_MAX_CHARSIZE];
 static int ext_h = 16;
 
 /*
- * grid - Fill a gw x gh sub-cell grid; bit (gy*gw + gx) selects a sub-cell
+ * grid - Fill a gw x gh sub-cell grid, bit (gy*gw + gx) selects a sub-cell
  */
 static void grid(uint8_t* g, int h, int gw, int gh, uint32_t mask) {
     for (int gy = 0; gy < gh; gy++) {
