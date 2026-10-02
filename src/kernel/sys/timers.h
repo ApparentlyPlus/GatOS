@@ -1,10 +1,6 @@
 /*
  * timers.h - Kernel Timer Subsystem
  *
- * This header defines the public interface for the GatOS timer subsystem.
- * It provides abstractions for various hardware timers including the PIT,
- * HPET, Local APIC timer, and the TSC.
- *
  * Author: u/ApparentlyPlus
  */
 

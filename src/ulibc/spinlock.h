@@ -1,9 +1,6 @@
 /*
  * spinlock.h - Userspace spinlock primitives
  *
- * Simple test-and-set spinlock using GCC atomics.
- * Safe on both single-core (preemptive) and SMP.
- *
  * Author: u/ApparentlyPlus
  */
 

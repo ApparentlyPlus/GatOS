@@ -1,10 +1,5 @@
 /*
- * main.c - Entry point for the GatOS 64-bit kernel
- *
- * This file defines the `kernel_main` function, which is the first function
- * called once the kernel takes control after boot. The entire staged init
- * sequence lives in kernel_bootstrap (kernel/bootstrap.c); this file only
- * hosts the interactive demo loop that runs after it.
+ * kmain.c - Entry point for the GatOS 64-bit kernel
  *
  * Author: u/ApparentlyPlus
  */
@@ -20,9 +15,6 @@
 // run.py scrapes this for the ISO name
 static char* KERNEL_VERSION = "v2.0.0";
 
-/*
- * kernel_main - Main entry point for the GatOS kernel
- */
 void kernel_main(void* mb_info) {
 
 	multiboot_parser_t multiboot = {0};
@@ -52,8 +44,7 @@ void kernel_main(void* mb_info) {
 	    }
 	}
 #else
-	// No input built - there's nothing to read, so just idle instead of
-	// hanging forever waiting for a keypress that can never arrive.
+	// No input built, nothing to read, so idle instead of hanging on a keypress that can never come.
 	kprintf("[KERNEL] Kernel initialization complete, idling (no input built).\n");
 	while (1) cpu_idle();
 #endif // GATA_CAP_INPUT

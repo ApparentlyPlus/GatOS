@@ -1,9 +1,6 @@
 /*
  * input.c - Input Hub Implementation
  *
- * This file implements the system input hub that handles keyboard events
- * and routes them to the appropriate TTY.
- *
  * Author: u/ApparentlyPlus
  */
 
@@ -79,9 +76,6 @@ static void nothread_ldisc_input(char c) {
 }
 #endif
 
-/*
- * input_init - Initializes the system input hub
- */
 void input_init(void) {
 #ifndef GATA_CAP_THREADS
     spinlock_init(&input_ring.lock, "input_ring");
@@ -92,8 +86,8 @@ void input_init(void) {
 #ifdef GATA_CAP_THREADS
 
 /*
- * input_handle_key - Entry point for keyboard events. Handles system
- * hotkeys and routes input to the active TTY.
+ * input_handle_key - Without a scheduler/TTY there's no dashboard, Alt+Tab or per-process routing, so the key
+ * goes through the no-threads line discipline: echo, line-buffer, commit to the ring on Enter
  */
 void input_handle_key(key_event_t event) {
     // Only handle key press events, ignore releases for now
@@ -123,7 +117,7 @@ void input_handle_key(key_event_t event) {
 
     // If we have an active TTY, route the key event to it
     if (active_tty) {
-        char c = keyboard_keycode_to_ascii(event);
+        char c = keycode_to_ascii(event);
         if (c) {
             tty_input(active_tty, c);
         } else if (event.keycode == KEY_BACKSPACE) {
@@ -135,15 +129,13 @@ void input_handle_key(key_event_t event) {
 #else
 
 /*
- * input_handle_key - With no scheduler/TTY there's no dashboard, no Alt+Tab
- * TTY cycling, and no per-process routing to do - feed the key through the
- * no-threads line discipline, which echoes and line-buffers before committing
- * to the ring on Enter.
+ * input_handle_key - Without a scheduler/TTY there's no dashboard, Alt+Tab or per-process routing, so the key
+ * goes through the no-threads line discipline: echo, line-buffer, commit to the ring on Enter
  */
 void input_handle_key(key_event_t event) {
     if (!event.pressed) return;
 
-    char c = keyboard_keycode_to_ascii(event);
+    char c = keycode_to_ascii(event);
     if (!c && event.keycode == KEY_BACKSPACE) c = '\b';
     if (!c) return;
 
@@ -151,8 +143,7 @@ void input_handle_key(key_event_t event) {
 }
 
 /*
- * input_getchar - Pops one character from the ring buffer, or -1 if empty.
- * Non-blocking: callers (_getchar's busy-wait) are expected to poll.
+ * input_getchar - Pop one char from the ring, -1 if empty. Non-blocking, _getchar polls
  */
 int input_getchar(void) {
     bool flags = spinlock_acquire(&input_ring.lock);

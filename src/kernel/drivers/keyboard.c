@@ -1,13 +1,6 @@
 /*
  * keyboard.c - Keyboard Driver Implementation
  *
- * Features:
- * - Scancode Set 1 State Machine (Handles 0xE0 prefixes)
- * - Thread-safe circular event buffer
- * - Modifier tracking (Shift, Ctrl, Alt, Gui)
- * - Toggle state management (Caps, Num, Scroll lock)
- * - LED synchronization with i8042
- *
  * Author: u/ApparentlyPlus
  */
 
@@ -22,8 +15,8 @@
 #include <klibc/string.h>
 #include <arch/x86_64/cpu/io.h>
 
-// Dead weight without GATA_CAP_INPUT (kernel/caps.h) - nothing ever
-// registers keyboard_handler as an IRQ handler without it.
+// Dead weight without GATA_CAP_INPUT (caps.h), nothing registers keyboard_handler as an IRQ handler
+// without it.
 #ifdef GATA_CAP_INPUT
 
 #define EVENT_BUFFER_SIZE 256
@@ -65,9 +58,6 @@ static const keycode_t scancode_set1[] = {
 
 #pragma region Internal Helpers
 
-/*
- * update_leds - Sends command to PS/2 device to update physical LEDs
- */
 static void update_leds(void) {
     // Gotta love this hardware interface!
     // we have to send a command to set LED state, 
@@ -184,15 +174,15 @@ cpu_context_t* keyboard_handler(cpu_context_t* ctx) {
     }
 
     switch (key) {
-        case KEY_LEFT_SHIFT:  pressed ? (modifiers |= MOD_LSHIFT) : (modifiers &= ~MOD_LSHIFT); break;
+        case KEY_LEFT_SHIFT: pressed ? (modifiers |= MOD_LSHIFT) : (modifiers &= ~MOD_LSHIFT); break;
         case KEY_RIGHT_SHIFT: pressed ? (modifiers |= MOD_RSHIFT) : (modifiers &= ~MOD_RSHIFT); break;
-        case KEY_LEFT_CTRL:   pressed ? (modifiers |= MOD_LCTRL)  : (modifiers &= ~MOD_LCTRL);  break;
-        case KEY_RIGHT_CTRL:  pressed ? (modifiers |= MOD_RCTRL)  : (modifiers &= ~MOD_RCTRL);  break;
-        case KEY_LEFT_ALT:    pressed ? (modifiers |= MOD_LALT)   : (modifiers &= ~MOD_LALT);   break;
-        case KEY_RIGHT_ALT:   pressed ? (modifiers |= MOD_RALT)   : (modifiers &= ~MOD_RALT);   break;
+        case KEY_LEFT_CTRL: pressed ? (modifiers |= MOD_LCTRL) : (modifiers &= ~MOD_LCTRL); break;
+        case KEY_RIGHT_CTRL: pressed ? (modifiers |= MOD_RCTRL) : (modifiers &= ~MOD_RCTRL); break;
+        case KEY_LEFT_ALT: pressed ? (modifiers |= MOD_LALT) : (modifiers &= ~MOD_LALT); break;
+        case KEY_RIGHT_ALT: pressed ? (modifiers |= MOD_RALT) : (modifiers &= ~MOD_RALT); break;
         
-        case KEY_CAPSLOCK:   if (pressed) { locks ^= LOCK_CAPS;   update_leds(); } break;
-        case KEY_NUMLOCK:    if (pressed) { locks ^= LOCK_NUM;    update_leds(); } break;
+        case KEY_CAPSLOCK: if (pressed) { locks ^= LOCK_CAPS; update_leds(); } break;
+        case KEY_NUMLOCK: if (pressed) { locks ^= LOCK_NUM; update_leds(); } break;
         case KEY_SCROLLLOCK: if (pressed) { locks ^= LOCK_SCROLL; update_leds(); } break;
         
         default: break;

@@ -1,9 +1,6 @@
 /*
  * interrupts.h - Header file for CPU interrupt management
  *
- * This file declares functions to enable and disable CPU interrupts,
- * as well as to check the current interrupt status.
- * 
  * Author: u/ApparentlyPlus
  */
 
@@ -134,9 +131,6 @@ static inline bool intr_save(void) {
     return enabled;
 }
 
-/*
- * intr_restore - Restore interrupt state saved by intr_save()
- */
 static inline void intr_restore(bool enabled) {
     if (enabled) __asm__ volatile("sti" ::: "memory");
 }

@@ -1,33 +1,20 @@
 /*
  * syscall_entry.S - x86_64 System Call Entry Point
  *
- * Builds a complete cpu_context_t on the per thread kernel stack, identical
- * to the frame ISR.S produces for hardware interrupts. This means the
- * scheduler, debugger, and fault handlers all see a single uniform layout
- * regardless of whether the thread entered the kernel via SYSCALL or IRQ.
+ * Builds the same cpu_context_t as ISR.S, so the scheduler and fault handlers see one
+ * layout whether a thread entered via SYSCALL or an IRQ.
  *
- * There are 2 exit paths depending on whether the saved user RIP is canonical:
- *
- * Fast (sysretq), used when the saved RCX (user RIP) is canonical.
- *   Restores RCX=RIP, R11=RFLAGS, loads user RSP from the iret frame,
- *   and returns via sysretq. CS/SS are computed from STAR[63:48]:
- *     CS = 0x13 + 16 = 0x23 (USER_CS, RPL=3)
- *     SS = 0x13 + 8  = 0x1B (USER_DS, RPL=3)
- *
- * Slow (iretq), fallback when RCX is non canonical.
- *   sysretq with a non canonical RCX would GP at CPL=0 with the user's
- *   GS base still active (SWAPGS already executed), which is a privilege
- *   escalation vector. The iret frame on the stack lets us fall back to
- *   iretq safely, which handles non canonical RIP by faulting at CPL=3.
+ * Two exits. Fast: sysretq, when the saved user RIP (RCX) is canonical. Slow: iretq, when
+ * it isn't, because sysretq with a non canonical RCX faults at CPL=0 with the user's GS base
+ * still active (SWAPGS already ran), which is a privilege escalation. iretq faults at CPL=3.
  *
  * Author: u/ApparentlyPlus
  */
 
 #include <kernel/caps.h>
 
-// Nothing ever points MSR_LSTAR at this without a scheduler (syscall_init,
-// the only thing that references syscall_entry, is gated the same way in
-// syscall.c) - see GATA_CAP_THREADS in kernel/caps.h.
+// Nothing points MSR_LSTAR at this without a scheduler (syscall_init, its only referrer, is gated
+// the same way in syscall.c), see GATA_CAP_THREADS in caps.h.
 #ifdef GATA_CAP_THREADS
 
 .intel_syntax noprefix

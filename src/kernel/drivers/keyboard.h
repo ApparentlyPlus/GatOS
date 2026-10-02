@@ -1,9 +1,6 @@
 /*
  * keyboard.h - Keyboard Driver
  *
- * This driver handles scancode translation (Set 1), modifier tracking,
- * toggle state (Caps/Num/Scroll lock), and LED synchronization.
- *
  * Author: u/ApparentlyPlus
  */
 
@@ -96,13 +93,13 @@ static const char layout_us_qwerty_shift[] = {
 };
 
 /*
- * keyboard_keycode_to_ascii - Converts a key event to its ASCII representation
+ * keycode_to_ascii - Converts a key event to its ASCII representation
  */
-static inline char keyboard_keycode_to_ascii(key_event_t event) {
+static inline char keycode_to_ascii(key_event_t event) {
     if (event.keycode > KEY_CAPSLOCK) return 0;
 
     bool shift = (event.modifiers & MOD_SHIFT) != 0;
-    bool caps  = (event.locks & LOCK_CAPS) != 0;
+    bool caps = (event.locks & LOCK_CAPS) != 0;
 
     bool upper = shift;
     if (event.keycode >= KEY_Q && event.keycode <= KEY_P) upper ^= caps;

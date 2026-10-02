@@ -1,10 +1,6 @@
 /*
  * process.c - Process and Thread management implementation
  *
- * This file implements the creation, destruction, and metadata management
- * for threads and processes. It coordinates with the heap manager for 
- * both kernel and userspace allocations.
- *
  * Author: u/ApparentlyPlus
  */
 
@@ -21,8 +17,7 @@
 #include <klibc/string.h>
 #include <klibc/stdio.h>
 
-// This entire file is dead weight without a scheduler to run processes on -
-// see GATA_CAP_THREADS in kernel/caps.h.
+// Dead weight without a scheduler to run processes on, see GATA_CAP_THREADS in caps.h.
 #ifdef GATA_CAP_THREADS
 
 static pid_t next_pid = 1;
@@ -31,8 +26,7 @@ static tid_t next_tid = 1;
 static process_t* proc_list = NULL;
 
 /*
- * userspace_start - Global entry point for all Ring 3 threads
- * It calls the entry function and then exits via SYS_EXIT.
+ * userspace_start - Entry point for every Ring 3 thread, calls the real entry then exits via SYS_EXIT
  */
 userspace void userspace_start(void (*entry)(void*), void* arg) {
     if (entry) {
@@ -49,8 +43,7 @@ userspace void userspace_start(void (*entry)(void*), void* arg) {
 }
 
 /*
- * thread_wrap - Wrapper function that calls the thread's entry point
- * and then gracefully exits the thread if the entry point returns.
+ * thread_wrap - Calls the thread's entry point and exits the thread if it returns
  */
 static void thread_wrap(void (*entry)(void*), void* arg) {
     if (entry) {
@@ -60,9 +53,6 @@ static void thread_wrap(void (*entry)(void*), void* arg) {
     sched_exit();
 }
 
-/*
- * process_init - Initializes the process management subsystem
- */
 void process_init(void) {
     next_pid = 1;
     next_tid = 1;
@@ -110,9 +100,8 @@ process_t* process_create(const char* name, tty_t* existing_tty) {
         return NULL;
     }
 
-    // Map the executable's code, rodata, data, and bss segments into the new process's address space
-    // These are currently identity mapped to simplify loading, but we could easily change this to support 
-    // arbitrary load addresses in the future if desired
+    // Map the executable's code, rodata, data and bss into the new process. Identity mapped for
+    // now to keep loading simple, arbitrary load addresses would be an easy change
 
     uintptr_t t_phys = (uintptr_t)&USER_TEXT_LOAD_ADDR;
     size_t tsz = align_up((uintptr_t)&USER_TEXT_END - (uintptr_t)&USER_TEXT_START, PAGE_SIZE);
@@ -194,16 +183,10 @@ thread_t* thread_create(process_t* process, const char* name, void (*entry)(void
     kstrncpy(thread->name, name, MAX_THREAD_NAME - 1);
 
     /*
-     * Initialize FPU state to a clean architectural default.
-     * The thread struct is already fully zeroed by kmemset above, so all
-     * x87/MMX/XMM registers are zero. We only need to write the two control
-     * words that have non-zero reset values:
-     *
-     *   FCW  (offset  0) = 0x037F - x87: all exceptions masked, 64-bit precision
-     *   MXCSR(offset 24) = 0x1F80 - SSE: all exceptions masked
-     *
-     * This avoids fninit + fxsave, which would capture the calling context's
-     * live XMM registers and potentially leak kernel FPU state into the thread.
+     * Clean FPU state. The thread is already zeroed, so only the two control words with non-zero
+     * reset values need writing: FCW = 0x037F (x87, all exceptions masked, 64-bit precision) and
+     * MXCSR = 0x1F80 (SSE, all exceptions masked). No fninit + fxsave, that would capture the
+     * caller's live XMM registers and leak kernel FPU state into the thread.
      */
     *(uint16_t *)(&thread->fpu[0]) = 0x037F;
     *(uint32_t *)(&thread->fpu[24]) = 0x1F80;
@@ -249,10 +232,8 @@ thread_t* thread_create(process_t* process, const char* name, void (*entry)(void
                 return NULL;
             }
 
-            // Align to 16 bytes and leave 8 bytes for ABI (as if called)
-            // The System V ABI says: "The value (%rsp + 8) is always a multiple of 16
-            // when control is transferred to the function entry point."
-            // Since userspace_start is entered via iretq, we want it to look like a call.
+            // Align to 16 bytes and leave 8 for the "return address": SysV wants (%rsp + 8) to be a
+            // multiple of 16 at function entry, and userspace_start is entered via iretq, not a call
             user_rsp = (uint64_t)thread->ustack + USER_STACK_SIZE - 8;
         } else {
             // Userspace provided a stack, we don't track it
@@ -263,8 +244,8 @@ thread_t* thread_create(process_t* process, const char* name, void (*entry)(void
 
     } else {
         // entry runs via thread_wrap on a fresh kstack
-        thread->context.iret_cs  = KERNEL_CS;
-        thread->context.iret_ss  = KERNEL_DS;
+        thread->context.iret_cs = KERNEL_CS;
+        thread->context.iret_ss = KERNEL_DS;
         thread->context.iret_rip = (uint64_t)thread_wrap;
         thread->context.iret_rsp = stack_top - 8;
 
@@ -364,9 +345,6 @@ void process_destroy(process_t* process) {
     kfree(process);
 }
 
-/*
- * process_get_all - Returns the head of the global process list
- */
 process_t* process_get_all(void) {
     return proc_list;
 }

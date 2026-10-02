@@ -1,10 +1,6 @@
 /*
  * tty.c - Dynamic TTY Management Implementation
  *
- * This module handles the creation, destruction, and switching of 
- * virtual terminals. It manages a doubly-linked list of TTY instances
- * and coordinates input flow through the line discipline.
- * 
  * Author: u/ApparentlyPlus
  */
 
@@ -17,8 +13,7 @@
 #include <kernel/sys/panic.h>
 #include <klibc/string.h>
 
-// This entire file is dead weight without a scheduler - see GATA_CAP_THREADS
-// in kernel/caps.h.
+// Dead weight without a scheduler, see GATA_CAP_THREADS in caps.h.
 #ifdef GATA_CAP_THREADS
 
 // TTY Manager State
@@ -29,9 +24,6 @@ static bool tty_lock_ok = false;
 tty_t* volatile active_tty = NULL;
 tty_t* kernel_tty = NULL;
 
-/*
- * tty_init - Internal helper to initialize a TTY structure
- */
 static void tty_init(tty_t* tty, console_t* console) {
     kmemset(tty->buffer, 0, TTY_BUFFER_SIZE);
     tty->head = 0;
@@ -46,7 +38,7 @@ static void tty_init(tty_t* tty, console_t* console) {
 }
 
 /*
- * ensure_lock - Atomically ensures the global list lock is ready
+ * ensure_lock - Init the global list lock on first use
  */
 static void ensure_lock(void) {
     if (!tty_lock_ok) {
@@ -55,9 +47,6 @@ static void ensure_lock(void) {
     }
 }
 
-/*
- * tty_create - Allocates and registers a new dynamic TTY
- */
 tty_t* tty_create(void) {
     if (heap_kernel_get() == NULL) {
         panic("Attempted to create TTY before heap was ready!");
@@ -102,9 +91,6 @@ tty_t* tty_create(void) {
     return tty;
 }
 
-/*
- * tty_destroy - Frees a TTY and its associated console
- */
 void tty_destroy(tty_t* tty) {
     if (!tty) return;
     
@@ -185,8 +171,7 @@ void tty_cycle(void) {
 }
 
 /*
- * tty_wake - Wake all threads blocked waiting for input on this TTY.
- * Must be called with tty->lock held (interrupts already disabled).
+ * tty_wake - Wake threads blocked on input. Call with tty->lock held (interrupts already off)
  */
 static void tty_wake(tty_t* tty) {
     thread_t* t = tty->wait_head;
@@ -200,9 +185,7 @@ static void tty_wake(tty_t* tty) {
 }
 
 /*
- * tty_block - Block the current thread until data arrives on this TTY.
- * Re-checks the buffer with interrupts disabled to close the TOCTOU window
- * between the caller's empty-check and the actual sleep.
+ * tty_block - Sleep until data arrives. Re-checks the buffer with interrupts off to close the race between the caller's empty check and the sleep
  */
 static void tty_block(tty_t* tty) {
     if (!sched_active()) return;
@@ -211,7 +194,7 @@ static void tty_block(tty_t* tty) {
 
     bool iflag = intr_save();
     if (tty->head != tty->tail) {
-        // Data arrived between caller's check and here — no need to block.
+        // Data arrived between caller's check and here, no need to block.
         intr_restore(iflag);
         return;
     }
@@ -262,8 +245,7 @@ char tty_read_char(tty_t* tty) {
 }
 
 /*
- * tty_read - Block until data is available, then drain as many bytes as
- * possible in a single lock acquisition. Stops early on newline.
+ * tty_read - Blocks until there's data, then drains what it can under one lock. Stops early on newline
  */
 size_t tty_read(tty_t* tty, char* buf, size_t count) {
     if (!tty || !buf || count == 0) return 0;
@@ -302,8 +284,7 @@ void tty_write(tty_t* tty, const char* buf, size_t count) {
 }
 
 /*
- * tty_header_init - Reserves the top N rows of this TTY as a sticky
- * header that is never scrolled or overwritten by normal output
+ * tty_header_init - Reserve the top N rows as a sticky header that never scrolls
  */
 void tty_header_init(tty_t* tty, size_t rows) {
 #ifdef GATA_CAP_FRAMEBUFFER
@@ -326,9 +307,6 @@ void tty_header_write(tty_t* tty, size_t row, const char* text, uint8_t fg, uint
 #endif
 }
 
-/*
- * tty_echo - Echo one input character to wherever this TTY renders
- */
 static void tty_echo(tty_t* tty, char c) {
 #ifdef GATA_CAP_FRAMEBUFFER
     if (tty->console) { con_putc(tty->console, c); return; }

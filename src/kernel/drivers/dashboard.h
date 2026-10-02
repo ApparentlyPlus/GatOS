@@ -16,7 +16,7 @@ bool dash_active(void);
 
 #else
 
-static inline void dash_init(void)   { }
+static inline void dash_init(void) { }
 static inline void dash_toggle(void) { }
 static inline bool dash_active(void) { return false; }
 

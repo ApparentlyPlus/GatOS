@@ -1,9 +1,8 @@
 /*
  * vmm.c - Virtual Memory Manager Implementation
  *
- * This implementation manages multiple virtual address spaces using vmm_t instances.
- * Each instance maintains its own page table and vm_object list. A special kernel VMM
- * can be accessed by passing NULL to most functions. This was hell to write :D
+ * Each vmm_t owns a page table and a vm_object list. Pass NULL to most functions for the
+ * kernel VMM. This was hell to write :D
  *
  * Author: u/ApparentlyPlus
  */
@@ -22,10 +21,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-// This entire file is dead weight without a heap - see GATA_CAP_MEM in
-// kernel/caps.h. vmm_add_mmio is the one exception: it's a stats-only
-// counter called from kmain's memory-map walk regardless of GATA_CAP_MEM,
-// so it gets its own always-available no-op stub below.
+// Dead weight without a heap, see GATA_CAP_MEM in caps.h. vmm_add_mmio is the exception: a stats
+// counter kmain's memory-map walk calls regardless, so it gets an always available stub below.
 #ifdef GATA_CAP_MEM
 
 // Magic numbers for validation and corruption detection
@@ -42,7 +39,7 @@ typedef struct vmo_ext {
     uint32_t red_zone_pre;
     vm_object public;
     uint32_t red_zone_post;
-    size_t   pg_size;
+    size_t pg_size;
     uint64_t phys_base;
     uint64_t phys_length;
     avl_node_t vma_node;
@@ -72,9 +69,6 @@ static inline void zero_page(void *dst) {
 
 #pragma region Validation Helpers
 
-/*
- * vmm_validate - Validate VMM structure integrity
- */
 static inline bool vmm_validate(vmm_ctx* vmm) {
     if (!vmm) return false;
 
@@ -87,9 +81,6 @@ static inline bool vmm_validate(vmm_ctx* vmm) {
     return true;
 }
 
-/*
- * vm_object_validate - Validate vm_object structure integrity
- */
 static inline bool vm_object_validate(vmo_ext* obj) {
     if (!obj) return false;
 
@@ -125,7 +116,7 @@ static int vma_cmp(const avl_node_t* a, const avl_node_t* b) {
     uintptr_t ba = AVL_ENTRY(a, vmo_ext, vma_node)->public.base;
     uintptr_t bb = AVL_ENTRY(b, vmo_ext, vma_node)->public.base;
     if (ba < bb) return -1;
-    if (ba > bb) return  1;
+    if (ba > bb) return 1;
     return 0;
 }
 
@@ -160,9 +151,6 @@ static void vma_remove(vmm_ctx* vmm, vmo_ext* obj) {
     avl_remove(&vmm->vma_tree, &obj->vma_node);
 }
 
-/*
- * vma_find_exact - Find the VMA with exact base address
- */
 static vmo_ext* vma_find_exact(vmm_ctx* vmm, uintptr_t base) {
     vmo_ext key = {0};
     key.public.base = base;
@@ -184,7 +172,7 @@ static vmo_ext* vma_find_containing(vmm_ctx* vmm, uintptr_t addr) {
 }
 
 /*
- * vma_find_gap - Find a gap of at least 'length' bytes in the VMM's address space, aligned to 'virt_align'
+ * vma_find_gap - Find a gap of at least 'length' bytes, aligned to 'virt_align'
  */
 static uintptr_t vma_find_gap(vmm_ctx* vmm, size_t length, size_t virt_align) {
     uintptr_t cand = align_up(vmm->public.alloc_base, virt_align);
@@ -284,9 +272,6 @@ static inline uint64_t vmm_convert_vm_flags(size_t vm_flags, bool is_kernel_vmm)
     return pt_flags;
 }
 
-/*
- * vmm_alloc_page_table - Allocate and zero a page table
- */
 uint64_t vmm_alloc_page_table(void) {
     uint64_t phys = 0;
     if (pmm_alloc(PAGE_SIZE, &phys) != PMM_OK) {
@@ -328,9 +313,6 @@ uint64_t* vmm_ensure_table(uint64_t* parent_table, size_t index, bool create, bo
     return (uint64_t*)PHYSMAP_P2V(new_table_phys);
 }
 
-/*
- * arch_map_page - Map a single page in the page tables (x86_64 version)
- */
 vmm_status_t arch_map_page(uint64_t pt_root, uint64_t phys, void* virt, uint64_t pt_flags, bool is_user_vmm) {
     uint64_t* pml4 = (uint64_t*)PHYSMAP_P2V(pt_root);
 
@@ -382,8 +364,7 @@ static vmm_status_t arch_map_huge_page(uint64_t pt_root, uint64_t phys, void* vi
 }
 
 /*
- * arch_unmap_page - Unmap a single 4KB or 2MB page from the page tables (x86_64 version)
- * Returns the physical base of the unmapped page, or 0 if not mapped.
+ * arch_unmap_page - Unmap one 4KB or 2MB page. Returns its physical base, 0 if it wasn't mapped
  */
 uint64_t arch_unmap_page(uint64_t pt_root, void* virt) {
     uint64_t* pml4 = (uint64_t*)PHYSMAP_P2V(pt_root);
@@ -452,9 +433,6 @@ uint64_t arch_unmap_page(uint64_t pt_root, void* virt) {
     return phys;
 }
 
-/*
- * arch_update_page_flags - Update flags for an existing page mapping
- */
 vmm_status_t arch_update_page_flags(uint64_t pt_root, void* virt, uint64_t new_flags) {
     uint64_t* pml4 = (uint64_t*)PHYSMAP_P2V(pt_root);
 
@@ -576,10 +554,7 @@ void vmm_destroy_page_table(uint64_t table_phys, bool purge, int level) {
     }
 }
 
-/*
- * vmm_copy_kernel_mappings - Copy kernel mappings from kernel VMM to a new page table
- */
-static vmm_status_t vmm_copy_kernel_mappings(uint64_t dest_pt_root) {
+static vmm_status_t vmm_copy_kmaps(uint64_t dest_pt_root) {
     if (!kernel_vmm) return VMM_ERR_NOT_INIT;
 
     // PML4 kernel entries are static so no lock needed here
@@ -675,7 +650,7 @@ vmm_status_t vmm_alloc(vmm_t* vmm_pub, size_t length, size_t flags, void* arg, v
     }
 
     // Determine page table flags and map the pages
-    obj->phys_base   = (flags & VM_FLAG_FOREIGN) ? VMM_PHYS_NONE : phys_base;
+    obj->phys_base = (flags & VM_FLAG_FOREIGN) ? VMM_PHYS_NONE : phys_base;
     obj->phys_length = (flags & VM_FLAG_FOREIGN) ? 0 : length;
     bool is_user_vmm = !vmm->is_kernel;
     uint64_t pt_flags = vmm_convert_vm_flags(flags, vmm->is_kernel);
@@ -809,7 +784,7 @@ vmm_status_t vmm_alloc_at(vmm_t* vmm_pub, void* desired_addr, size_t length, siz
         }
     }
 
-    obj->phys_base   = (flags & VM_FLAG_FOREIGN) ? VMM_PHYS_NONE : phys_base;
+    obj->phys_base = (flags & VM_FLAG_FOREIGN) ? VMM_PHYS_NONE : phys_base;
     obj->phys_length = (flags & VM_FLAG_FOREIGN) ? 0 : length;
     bool is_user_vmm = !vmm->is_kernel;
     uint64_t pt_flags = vmm_convert_vm_flags(flags, vmm->is_kernel);
@@ -908,8 +883,8 @@ vmm_status_t vmm_free(vmm_t* vmm_pub, void* addr) {
         pages and free only the ones that were actually faulted in. 
         */
 
-        uintptr_t base   = cur->public.base;
-        size_t    length = cur->public.length;
+        uintptr_t base = cur->public.base;
+        size_t length = cur->public.length;
 
         if (has_pmm_backing && cur->phys_base != VMM_PHYS_NONE) {
             // Free any grown pages
@@ -953,9 +928,6 @@ vmm_status_t vmm_free(vmm_t* vmm_pub, void* addr) {
 
 #pragma region Non Kernel VMM Instance Management
 
-/*
- * vmm_create - Create a new VMM instance
- */
 vmm_t* vmm_create(uintptr_t alloc_base, uintptr_t alloc_end) {
     if (alloc_end <= alloc_base) return NULL;
     
@@ -994,7 +966,7 @@ vmm_t* vmm_create(uintptr_t alloc_base, uintptr_t alloc_end) {
     }
 
     if (kernel_vmm) {
-        vmm_status_t status = vmm_copy_kernel_mappings(pt_root);
+        vmm_status_t status = vmm_copy_kmaps(pt_root);
         if (status != VMM_OK) {
             pmm_free(pt_root, PAGE_SIZE);
             slab_free(vmm_cache, vmm_mem);
@@ -1013,9 +985,6 @@ vmm_t* vmm_create(uintptr_t alloc_base, uintptr_t alloc_end) {
     return &vmm->public;
 }
 
-/*
- * vmm_destroy - Destroy a VMM instance and free all resources
- */
 void vmm_destroy(vmm_t* vmm_pub) {
     vmm_ctx* vmm = vmm_get_instance(vmm_pub);
     if (!vmm) return;
@@ -1044,8 +1013,8 @@ void vmm_destroy(vmm_t* vmm_pub) {
             } else {
                 // No arch_unmap_page needed, vmm_destroy_page_table frees
                 // the entire page table structure immediately after this loop
-                uintptr_t base   = cur->public.base;
-                size_t    length = cur->public.length;
+                uintptr_t base = cur->public.base;
+                size_t length = cur->public.length;
 
                 if (cur->phys_base != VMM_PHYS_NONE) {
                     if (cur->phys_length == length) {
@@ -1113,9 +1082,6 @@ void vmm_switch(vmm_t* vmm_pub) {
     current_vmm = &vmm->public;
 }
 
-/*
- * vmm_get_current - Get the currently active VMM instance
- */
 vmm_t* vmm_get_current(void) {
     // If not explicitly set yet, assume kernel VMM
     if (!current_vmm && kernel_vmm) {
@@ -1128,9 +1094,6 @@ vmm_t* vmm_get_current(void) {
 
 #pragma region Kernel VMM Management
 
-/*
- * vmm_kernel_init - Initialize the kernel VMM specifically
- */
 vmm_status_t vmm_kernel_init(uintptr_t alloc_base, uintptr_t alloc_end) {
     if (kernel_vmm) return VMM_ERR_ALREADY_INIT;
 
@@ -1184,9 +1147,6 @@ vmm_status_t vmm_kernel_init(uintptr_t alloc_base, uintptr_t alloc_end) {
     return VMM_OK;
 }
 
-/*
- * vmm_kernel_get - Get the kernel VMM instance
- */
 vmm_t* vmm_kernel_get(void) {
     return kernel_vmm ? &kernel_vmm->public : NULL;
 }
@@ -1236,9 +1196,6 @@ bool vmm_table_is_empty(uint64_t* table) {
 
 #pragma region Address Translation and Query
 
-/*
- * vmm_get_physical - Get the physical address mapped to a virtual address
- */
 bool vmm_get_physical(vmm_t* vmm_pub, void* virt, uint64_t* out_phys) {
     vmm_ctx* vmm = vmm_get_instance(vmm_pub);
     if (!vmm) return false;
@@ -1268,9 +1225,6 @@ vm_object* vmm_find_mapped_object(vmm_t* vmm_pub, void* addr) {
     return cur ? &cur->public : NULL;
 }
 
-/*
- * vmm_check_flags - Check if a specific address has specific flags
- */
 bool vmm_check_flags(vmm_t* vmm_pub, void* addr, size_t required_flags) {
     vm_object* obj = vmm_find_mapped_object(vmm_pub, addr);
     if (!obj) return false;
@@ -1279,8 +1233,7 @@ bool vmm_check_flags(vmm_t* vmm_pub, void* addr, size_t required_flags) {
 }
 
 /*
- * vmm_walk_pte - Walk the page table hierarchy rooted at pt_root and return
- * the leaf PTE entry for the given virtual address.
+ * vmm_walk_pte - Leaf PTE for a virtual address, walking down from pt_root
  */
 static uint64_t vmm_walk_pte(uint64_t pt_root, void* virt) {
     uint64_t* pml4 = (uint64_t*)PHYSMAP_P2V(pt_root);
@@ -1298,8 +1251,7 @@ static uint64_t vmm_walk_pte(uint64_t pt_root, void* virt) {
 }
 
 /*
- * vmm_check_buffer - Check that every page of [ptr, ptr+size) is mapped in
- * the hardware page tables with the requested VM_FLAG_* permissions
+ * vmm_check_buffer - True if every page of [ptr, ptr+size) is mapped with the requested VM_FLAG_* perms
  */
 bool vmm_check_buffer(vmm_t* vmm_pub, const void* ptr, size_t size, size_t required_flags) {
     vmm_ctx* vmm = vmm_get_instance(vmm_pub);
@@ -1604,10 +1556,7 @@ vmm_status_t vmm_resize(vmm_t* vmm_pub, void* addr, size_t new_length) {
 #pragma region Protection
 
 /*
- * vmm_protect - Change the permission flags of a specific virtual address
- *
- * This improved version uses in-place flag updates instead of unmap+remap,
- * which is significantly more efficient.
+ * vmm_protect - Change the flags of a virtual address in place (no unmap + remap)
  */
 vmm_status_t vmm_protect(vmm_t* vmm_pub, void* addr, size_t new_flags) {
     vmm_ctx* vmm = vmm_get_instance(vmm_pub);
@@ -1659,13 +1608,8 @@ size_t vmm_mmio_total(void) {
 
 #endif // GATA_CAP_MEM
 
-/*
- * vmm_add_mmio - Add to the total MMIO byte count. Kept outside the
- * GATA_CAP_MEM gate above: kmain's memory-map walk calls this
- * unconditionally while populating the PMM, regardless of whether a heap
- * exists. Without one, the count just goes nowhere (no vmm_mmio_total to
- * read it back from).
- */
+// vmm_add_mmio sits outside the GATA_CAP_MEM gate: kmain's memory-map walk calls it
+// unconditionally while populating the PMM, and without a heap the count just goes nowhere
 #ifdef GATA_CAP_MEM
 void vmm_add_mmio(size_t bytes) {
     __atomic_add_fetch(&mmio_bytes, bytes, __ATOMIC_RELAXED);
@@ -1800,9 +1744,6 @@ void vmm_dump_pte_chain(uint64_t pt_root, void* virt) {
     }
 }
 
-/*
- * vmm_verify_integrity - Verify integrity of VMM and all vm_objects
- */
 bool vmm_verify_integrity(vmm_t* vmm_pub) {
     vmm_ctx* vmm = vmm_get_instance(vmm_pub);
     if (!vmm) {

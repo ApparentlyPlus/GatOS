@@ -1,11 +1,9 @@
 /*
  * debug.h - Userspace debug-only serial channel
  *
- * Mirrors the kernel's own debug logging (LOGF, on COM2) for userspace:
- * writes straight to COM3 via SYS_DEBUG_WRITE, bypassing the TTY entirely
- * so it's observable regardless of TTY/console state. Meant for Gata
- * `debug` statements running in the user realm - see kernel/sys/syscall.c
- * (SYS_DEBUG_WRITE) and kernel/drivers/serial.h (SERIAL_COM3).
+ * Writes straight to COM3 via SYS_DEBUG_WRITE, bypassing the TTY, so it works whatever the console
+ * state. For Gata `debug` statements in the user realm (see kernel/sys/syscall.c, SERIAL_COM3 in
+ * kernel/drivers/serial.h).
  *
  * Author: u/ApparentlyPlus
  */

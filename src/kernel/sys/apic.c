@@ -1,9 +1,5 @@
 /*
- * apic.c - Local and I/O APIC Implementation (Production Grade)
- *
- * This module provides an implementation of the APIC interrupt controller.
- * It handles the transition from legacy PIC to APIC, parses the ACPI MADT for 
- * hardware topology, and manages both Local and I/O APIC configurations.
+ * apic.c - Local and I/O APIC Implementation
  *
  * Author: u/ApparentlyPlus
  */
@@ -22,25 +18,17 @@
 
 #pragma region Internal Helpers & Globals
 
-// lapic_base, lapic_write/read/eoi stay always-available below: spinlock.c
-// (lapic_get_id, inline in apic.h) and interrupts.c's IRQ dispatch
-// (lapic_eoi) are foundational and used regardless of capability level.
-// They're already safe pre-init (lapic_base == 0 makes them all no-ops),
-// which is exactly the state a build with neither GATA_CAP_THREADS nor
-// GATA_CAP_INPUT leaves them in, since nothing ever calls apic_init().
+// lapic_base, lapic_write/read/eoi stay always available: spinlock.c (lapic_get_id, inline in
+// apic.h) and interrupts.c's IRQ dispatch (lapic_eoi) use them at every capability level. They're
+// safe pre-init (lapic_base == 0 makes them no-ops), which is the state builds without THREADS or
+// INPUT leave them in since apic_init() never runs.
 uint64_t lapic_base = 0;
 
-/*
- * lapic_write - Write a value to a LAPIC register
- */
 void lapic_write(uint32_t reg, uint32_t value) {
     if (lapic_base == 0) return;
     *(volatile uint32_t*)(lapic_base + reg) = value;
 }
 
-/*
- * lapic_read - Read a value from a LAPIC register
- */
 uint32_t lapic_read(uint32_t reg) {
     if (lapic_base == 0) return 0;
     return *(volatile uint32_t*)(lapic_base + reg);
@@ -54,11 +42,8 @@ void lapic_eoi(void) {
 }
 
 /*
- * disable_pic - Disable the legacy 8259 PICs. Always available and always
- * called from idt_init() (before pretty much anything else) regardless of
- * capability level: an undisabled legacy PIC can still fire a spurious IRQ
- * with no handler registered for it, crashing builds that never bring up
- * the real APIC.
+ * disable_pic - Always runs from idt_init(), whatever the capability level: a legacy PIC left unmasked can
+ * fire a spurious IRQ with no handler and crash builds that never bring up the APIC
  */
 void disable_pic(void) {
 
@@ -90,10 +75,8 @@ void disable_pic(void) {
     LOGF("[APIC] Legacy PIC disabled and masked.\n");
 }
 
-// Everything below actually brings up the LAPIC/IOAPIC (MADT parsing via
-// ACPI, vmm_alloc for MMIO mapping) - dead weight without
-// GATA_NEEDS_INTERRUPT_SUBSYS (kernel/caps.h), since exceptions are handled
-// straight off the IDT and never need a real APIC.
+// Everything below brings up the LAPIC/IOAPIC (MADT via ACPI, vmm_alloc for MMIO). Dead weight
+// without GATA_NEEDS_INTERRUPT_SUBSYS (caps.h), exceptions are handled straight off the IDT.
 #ifdef GATA_NEEDS_INTERRUPT_SUBSYS
 
 static uint64_t ioapic_base = 0;
@@ -182,9 +165,6 @@ void lapic_set_tpm(uint64_t tpm) {
     ticks_per_ms = tpm;
 }
 
-/*
- * lapic_timer_oneshot - Arms the LAPIC timer in one-shot mode
- */
 void lapic_timer_oneshot(uint32_t us, uint8_t vector) {
     if (ticks_per_ms == 0) return;
     uint32_t ticks = (uint32_t)(((uint64_t)us * ticks_per_ms) / 1000);
@@ -194,9 +174,6 @@ void lapic_timer_oneshot(uint32_t us, uint8_t vector) {
     lapic_write(LAPIC_TICR, ticks);
 }
 
-/*
- * lapic_timer_periodic - Arms the LAPIC timer in periodic mode
- */
 void lapic_timer_periodic(uint32_t us, uint8_t vector) {
     if (ticks_per_ms == 0) return;
     uint32_t ticks = (uint32_t)(((uint64_t)us * ticks_per_ms) / 1000);
@@ -214,9 +191,6 @@ void lapic_timer_stop(void) {
     lapic_write(LAPIC_TICR, 0);
 }
 
-/*
- * lapic_tsc_arm - Arms the LAPIC timer in TSC Deadline mode
- */
 void lapic_tsc_arm(uint64_t tsc_deadline, uint8_t vector) {
     lapic_write(LAPIC_LVT_TIMER, (uint32_t)vector | LVT_TIMER_TSC_DEADLINE);
     __asm__ volatile("lfence" ::: "memory");
@@ -245,9 +219,6 @@ void ioapic_write(uint32_t reg, uint32_t value) {
     *(volatile uint32_t*)(ioapic_base + IOAPIC_IOWIN) = value;
 }
 
-/*
- * ioapic_set_entry - Set a redirection table entry
- */
 void ioapic_set_entry(uint8_t index, uint64_t data) {
     ioapic_write(IOAPIC_REDTBL + 2 * index, (uint32_t)(data & 0xFFFFFFFF));
     ioapic_write(IOAPIC_REDTBL + 2 * index + 1, (uint32_t)(data >> 32));
@@ -273,7 +244,7 @@ void ioapic_redirect(uint8_t irq, uint8_t vector, uint32_t dest_core, uint16_t f
     uint8_t trigger = (flags >> 2) & 0x03;
 
     if (polarity == 0x03) entry |= (1 << 13);
-    if (trigger == 0x03)  entry |= (1 << 15);
+    if (trigger == 0x03) entry |= (1 << 15);
 
     entry |= ((uint64_t)dest_core << 56);
     

@@ -1,9 +1,6 @@
 /*
  * scheduler.c - Round-Robin Scheduler implementation
  *
- * This file implements the core scheduling logic, including thread switching,
- * idle task management, and sleep/wakeup mechanisms.
- *
  * Author: u/ApparentlyPlus
  */
 
@@ -31,10 +28,10 @@ static thread_t* rq_tail = NULL;
 
 // CPU utilisation counters (incremented in IRQ context, no locking needed)
 static volatile uint64_t ticks_total = 0;
-static volatile uint64_t ticks_idle  = 0;
+static volatile uint64_t ticks_idle = 0;
 
 static avl_tree_t sleep_tree;
-static thread_t*  dead_head = NULL;
+static thread_t* dead_head = NULL;
 
 static thread_t* idle = NULL;
 static process_t* idle_proc = NULL;
@@ -55,9 +52,9 @@ static int sleep_cmp(const avl_node_t* a, const avl_node_t* b) {
     const thread_t* ta = AVL_ENTRY(a, thread_t, sleep_node);
     const thread_t* tb = AVL_ENTRY(b, thread_t, sleep_node);
     if (ta->wake_at < tb->wake_at) return -1;
-    if (ta->wake_at > tb->wake_at) return  1;
+    if (ta->wake_at > tb->wake_at) return 1;
     if (ta->tid < tb->tid) return -1;
-    if (ta->tid > tb->tid) return  1;
+    if (ta->tid > tb->tid) return 1;
     return 0;
 }
 
@@ -92,8 +89,7 @@ static void sched_add_dead(thread_t* thread);
 static void sched_add_sleep(thread_t* thread);
 
 /*
- * idle_thread_entry - MONITOR/MWAIT idle loop (falls back to HLT).
- * Watches rq_head so any sched_add() store wakes MWAIT immediately.
+ * idle_thread_entry - MONITOR/MWAIT idle loop, HLT fallback. Watches rq_head so any sched_add() wakes it
  */
 static void idle_thread_entry(void* arg) {
     (void)arg;
@@ -403,14 +399,11 @@ cpu_context_t* sched_schedule(cpu_context_t* ctx) {
 
     write_msr(MSR_FS_BASE, cur->fs_base);
 
-    /* 
-    Author's Note: 
-    
-    Return a pointer to the embedded context struct.
-    ISR.S will do "mov rsp, rax" to use it as a staging area 
-    for the pop/iretq sequence, and iretq then restores the real 
-    RSP from context.iret_rsp
-    */
+    /*
+     * Author's Note:
+     * Return the embedded context struct. ISR.S does mov rsp, rax and uses it as a staging area
+     * for the pop/iretq sequence, iretq then restores the real RSP from context.iret_rsp
+     */
 
     cpu_context_t *next_ctx = &cur->context;
     uint16_t cs = (uint16_t)next_ctx->iret_cs;
@@ -473,18 +466,14 @@ void sched_exit(void) {
 
 #else // !GATA_CAP_THREADS
 
-// No scheduler exists. interrupts.c's fault handler and timers.c's tick
-// both call into a handful of these functions unconditionally (some of it
-// dating back to before process_init()/sched_init() run even in a full
-// build), and xhci.c already has an explicit "no scheduler" fallback gated
-// on sched_active() - all of that keeps working as long as these symbols
-// exist and consistently report "there is no scheduler."
+// No scheduler. interrupts.c's fault handler and timers.c's tick call into a few of these
+// unconditionally (even before process_init()/sched_init() in a full build), and xhci.c has a "no
+// scheduler" fallback gated on sched_active(). All of it works as long as these symbols exist and
+// say there's no scheduler.
 
-// ISR.S reads this directly (not through a function call) to decide
-// whether to switch onto the per-CPU scheduler stack before dispatching an
-// interrupt; it already treats 0 as "stay on the current stack," which is
-// exactly what we want here since sched_init() (the only thing that ever
-// sets it to something else) never runs.
+// ISR.S reads this directly to decide whether to switch onto the per-CPU scheduler stack before
+// dispatching. 0 means stay on the current stack, which is right here since sched_init() (the only
+// thing that sets it) never runs.
 uint64_t sched_stack_top = 0;
 
 bool sched_active(void) { return false; }

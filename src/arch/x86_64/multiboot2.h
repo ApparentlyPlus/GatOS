@@ -1,9 +1,6 @@
 /*
  * multiboot2.h - Multiboot 2 specification definitions
  *
- * Defines structures and constants for parsing Multiboot 2 boot information.
- * Includes memory management structures for available memory tracking.
- *
  * Author: u/ApparentlyPlus
  */
 
@@ -159,30 +156,30 @@ extern uintptr_t KPHYS_END;
 void multiboot_init(multiboot_parser_t* parser, void* mb_info, uint8_t* buffer, size_t buffer_size);
 
 // Information accessors
-const char* multiboot_get_bootloader_name(multiboot_parser_t* parser);
-const char* multiboot_get_command_line(multiboot_parser_t* parser);
-uint64_t multiboot_get_total_RAM(multiboot_parser_t* parser, int measurementUnit);
-uint64_t multiboot_get_highest_physical_address(multiboot_parser_t* parser);
+const char* multiboot_bootloader(multiboot_parser_t* parser);
+const char* multiboot_cmdline(multiboot_parser_t* parser);
+uint64_t multiboot_total_ram(multiboot_parser_t* parser, int measurementUnit);
+uint64_t multiboot_highest_addr(multiboot_parser_t* parser);
 
 // Memory management
-memory_range_t* multiboot_get_available_memory(multiboot_parser_t* parser);
-size_t multiboot_get_available_memory_count(multiboot_parser_t* parser);
-int multiboot_get_memory_region(multiboot_parser_t* parser, size_t index, 
+memory_range_t* multiboot_avail_mem(multiboot_parser_t* parser);
+size_t multiboot_avail_count(multiboot_parser_t* parser);
+int multiboot_mem_region(multiboot_parser_t* parser, size_t index, 
                                uintptr_t* start, uintptr_t* end, uint32_t* type);
 
 // Module access
-int multiboot_get_module_count(multiboot_parser_t* parser);
-multiboot_module_t* multiboot_get_module(multiboot_parser_t* parser, int index);
+int multiboot_module_count(multiboot_parser_t* parser);
+multiboot_module_t* multiboot_module(multiboot_parser_t* parser, int index);
 
 // Hardware information
-multiboot_framebuffer_t* multiboot_get_framebuffer(multiboot_parser_t* parser);
-multiboot_elf_sections_t* multiboot_get_elf_sections(multiboot_parser_t* parser);
-multiboot_acpi_t* multiboot_get_acpi_rsdp(multiboot_parser_t* parser);
+multiboot_framebuffer_t* multiboot_framebuffer(multiboot_parser_t* parser);
+multiboot_elf_sections_t* multiboot_elf_sections(multiboot_parser_t* parser);
+multiboot_acpi_t* multiboot_acpi_rsdp(multiboot_parser_t* parser);
 
 // Utilities
 void mb_kernel_range(uintptr_t* start, uintptr_t* end);
-int multiboot_is_page_used(multiboot_parser_t* parser, uintptr_t start, size_t page_size);
+int multiboot_page_used(multiboot_parser_t* parser, uintptr_t start, size_t page_size);
 
 // Debug output
 void mb_dump(multiboot_parser_t* parser);
-void multiboot_dump_memory_map(multiboot_parser_t* parser);
+void multiboot_dump_mmap(multiboot_parser_t* parser);

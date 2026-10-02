@@ -1,8 +1,7 @@
 /*
  * ldisc.h - Line Discipline Header
- * 
- * This file defines the line discipline structure and function prototypes for TTY input handling.
- * The line discipline operates in canonical mode, buffering input until a newline is received.
+ *
+ * Canonical mode, input is buffered until a newline.
  *
  * Author: u/ApparentlyPlus
  */

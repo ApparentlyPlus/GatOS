@@ -1,10 +1,6 @@
 /*
  * timers.c - Kernel Timer Subsystem Implementation
  *
- * This module implements the core timing functionality for GatOS.
- * It handles hardware discovery for PIT and HPET, performs calibration
- * of the Local APIC and TSC, and provides high-level sleep and uptime APIs.
- *
  * Author: u/ApparentlyPlus
  */
 
@@ -25,9 +21,8 @@
 #include <klibc/string.h>
 #include <klibc/stdio.h>
 
-// Only needed once there's a scheduler timer tick or keyboard IRQ to route
-// (GATA_NEEDS_INTERRUPT_SUBSYS in kernel/caps.h, which already implies a
-// heap - this maps HPET MMIO through the VMM).
+// Only needed once there's a scheduler tick or keyboard IRQ to route (GATA_NEEDS_INTERRUPT_SUBSYS
+// in caps.h, implies a heap: HPET MMIO is mapped through the VMM).
 #ifdef GATA_NEEDS_INTERRUPT_SUBSYS
 
 #pragma region Internal Globals
@@ -59,8 +54,7 @@ void pit_set_oneshot(uint16_t ticks) {
 }
 
 /*
- * pit_latch - Latches and reads channel 0's current count. The latch command
- * freezes the count so the two byte reads see one consistent value.
+ * pit_latch - Latch and read channel 0's count (the latch freezes it, so the two byte reads agree)
  */
 static uint16_t pit_latch(void) {
     outb(0x43, 0x00);
@@ -104,9 +98,6 @@ static void pit_wait(void) {
 
 #pragma region HPET Implementation
 
-/*
- * hpet_init - Discovers and initializes the HPET from ACPI
- */
 static void hpet_init(void) {
     struct HpetSdt {
         ACPISDTHeader header;
@@ -156,9 +147,6 @@ bool hpet_is_available(void) {
     return hpet != NULL;
 }
 
-/*
- * hpet_read_counter - Reads the current value of the HPET main counter
- */
 uint64_t hpet_read_counter(void) {
     if (!hpet) return 0;
     return hpet->main_counter;
@@ -168,9 +156,6 @@ uint64_t hpet_read_counter(void) {
 
 #pragma region Calibration Logic
 
-/*
- * timer_handler - Periodic timer interrupt handler
- */
 static cpu_context_t* timer_handler(cpu_context_t* ctx) {
     ticks++;
     
@@ -464,9 +449,8 @@ uint64_t get_uptime_ms(void) {
 }
 
 /*
- * get_uptime_ns - Returns the number of nanoseconds since the kernel booted
- * Split division keeps everything in 64 bits: delta * 1e6 alone overflows
- * u64 after ~1.7h at 3 GHz (and no libgcc means no 128-bit divide)
+ * get_uptime_ns - Nanoseconds since boot. The split division stays in 64 bits: delta * 1e6 overflows
+ * u64 after ~1.7h at 3 GHz, and without libgcc there's no 128-bit divide
  */
 uint64_t get_uptime_ns(void) {
     if (tsc_tpm == 0) return 0;
@@ -476,9 +460,6 @@ uint64_t get_uptime_ns(void) {
     return whole * 1000000 + (rem * 1000000) / tsc_tpm;
 }
 
-/*
- * timer_arm_next - Arms the LAPIC timer for the next scheduler event
- */
 void timer_arm_next(bool going_idle) {
     if (!tsc_deadline_mode) return;
 

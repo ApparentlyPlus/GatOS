@@ -1,9 +1,6 @@
 /*
  * scheduler.h - Round-Robin Scheduler interface
  *
- * This file defines the interface for the GatOS task scheduler.
- * It manages the execution of threads across the system.
- *
  * Author: u/ApparentlyPlus
  */
 

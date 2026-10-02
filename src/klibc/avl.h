@@ -1,8 +1,7 @@
 /*
  * avl.h - Generic intrusive AVL tree
  *
- * Embed avl_node_t in any struct, create an avl_tree_t with a comparator,
- * and use the provided O(log N) operations. All traversal is non-recursive.
+ * Embed avl_node_t in your struct. O(log N), traversal is non-recursive.
  *
  * Author: u/ApparentlyPlus
  */

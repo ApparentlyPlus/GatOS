@@ -1,9 +1,6 @@
 /*
  * syscalls.h - Userspace system call interface
  *
- * This file provides inline assembly wrappers for invoking
- * kernel system calls from Ring 3.
- * 
  * Author: u/ApparentlyPlus
  */
 
@@ -115,8 +112,7 @@ userspace static inline uint64_t syscall_tty_ctrl(uint64_t cmd, uint64_t arg) {
     return sc2(SYS_TTY_CTRL, cmd, arg);
 }
 
-// Writes straight to the kernel's COM3 debug serial port, bypassing the TTY
-// entirely - see ulibc/debug.h.
+// Writes straight to the kernel's COM3 debug serial port, bypassing the TTY (ulibc/debug.h).
 userspace static inline void syscall_debug_write(const char* buf, size_t len) {
     sc2(SYS_DEBUG_WRITE, (uint64_t)buf, (uint64_t)len);
 }

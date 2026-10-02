@@ -1,8 +1,6 @@
 /*
  * font.c - Font Driver
  *
- * Provides support for loading and rendering fonts.
- *
  * Author: u/ApparentlyPlus
  */
 
@@ -112,7 +110,7 @@ static void box_arms(uint32_t cp, uint8_t* a, uint8_t* dash, uint8_t* arc, uint8
             m = (v == 0u) ? 0u : (v == 1u) ? 4u : (v <= 4u) ? v - 1u : v;
             a[BX_UP] = (uint8_t)((m & 1u) ? 2 : 1);
             a[BX_DN] = (uint8_t)((m & 2u) ? 2 : 1);
-            a[g ? BX_LF : BX_RT]  = (uint8_t)((m & 4u) ? 2 : 1);
+            a[g ? BX_LF : BX_RT] = (uint8_t)((m & 4u) ? 2 : 1);
         } else {
             m = ((v & 3u) << 1) | (v >> 2);
             a[(g == 3u) ? BX_UP : BX_DN] = (uint8_t)((m & 1u) ? 2 : 1);
@@ -186,7 +184,7 @@ static void synth_box(uint8_t* g, int h, uint32_t cp) {
 
     if (diag) {
         for (y = 0; y < h; y++) {
-            if (diag & 2u) { x = y * 7 / (h - 1);           g[y] |= (uint8_t)(0x80u >> x); }
+            if (diag & 2u) { x = y * 7 / (h - 1); g[y] |= (uint8_t)(0x80u >> x); }
             if (diag & 1u) { x = (h - 1 - y) * 7 / (h - 1); g[y] |= (uint8_t)(0x80u >> x); }
         }
         return;
@@ -298,18 +296,12 @@ const uint8_t* font_glyph(uint16_t slot) {
 }
 
 
-/*
- * font_init - Initialize the font system
- */
 void font_init(void) {
     cur_font.header = (const psf1_header_t*)vga_font;
     cur_font.glyph_buffer = vga_font + sizeof(psf1_header_t);
     build_glyphs(cur_font.header->charsize);
 }
 
-/*
- * font_get_current - Get a pointer to the current font
- */
 psf1_font_t* font_get_current(void) {
     return &cur_font;
 }

@@ -1,20 +1,14 @@
 /*
  * slab.h - Slab Allocator for Small Object Allocation
- * 
- * This allocator manages fixed-size object caches (slabs) to efficiently
- * allocate small structures without wasting PMM pages. 
- * 
+ *
  * VMM
- * ├─→ Slab Allocator (for small objects < PAGE_SIZE/8)
- * │      └─→ PMM (for backing pages)
- * └─→ PMM (for large allocations >= PAGE_SIZE/8)
- * 
- * A warning is emitted in QEMU serial if the PAGE_SIZE/8 
- * constraint is violated.
- * 
- * This allocator must be initialized directly after the PMM is online,
- * and before the VMM becomes online.
- * 
+ * ├─→ Slab (small objects < PAGE_SIZE/8)
+ * │     └─→ PMM (backing pages)
+ * └─→ PMM (large allocations >= PAGE_SIZE/8)
+ *
+ * Initialize right after the PMM, before the VMM. Violating the PAGE_SIZE/8 limit
+ * logs a warning on serial.
+ *
  * Author: u/ApparentlyPlus
  */
 
@@ -101,30 +95,8 @@ size_t slab_cache_obj_size(slab_cache_t* cache);
 const char* slab_cache_name(slab_cache_t* cache);
 
 /*
-
-Notes on improving the Slab Alloc in the future:
-
-1. Per CPU Caches
-
-When we add SMP, per-CPU slab caches will be critical:
-
-typedef struct {
-    void* freelist;           // Per-CPU freelist
-    uint32_t available;       // Objects available
-    slab_t* current_slab;     // Active slab for this CPU
-} slab_cpu_cache_t;
-
-// In slab_cache:
-slab_cpu_cache_t cpu_caches[MAX_CPUS];
-
-2. Timestamp in allocations 
-
-The alloc_timestamp in slab is 0 - consider using RDTSC:
-
-cstatic inline uint64_t rdtsc(void) {
-    uint32_t lo, hi;
-    __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
-    return ((uint64_t)hi << 32) | lo;
-}
-
-*/
+ * Notes on improving the slab allocator in the future:
+ *
+ * - Per-CPU caches (a freelist, a count and a current slab per CPU) once SMP is in.
+ * - alloc_timestamp in the slab is always 0, rdtsc would do.
+ */

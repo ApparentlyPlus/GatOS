@@ -1,8 +1,6 @@
 /*
  * dashboard.c - Live Kernel Dashboard
  *
- * Provides a real-time dashboard with CPU, memory, and process information.
- *
  * Author: u/ApparentlyPlus, ChatGPT Codex 5.4 (look dude, there was no way I was writing all this by hand)
  */
 
@@ -154,9 +152,6 @@ static void clip_text(char* out, size_t n, const char* s, int width) {
     ksnprintf(out, n, "%.*s...", width - 3, s ? s : "");
 }
 
-/*
- * print_padded - Print a string padded to a given width
- */
 static void print_padded(console_t* c, const char* s, int width) {
     int len = kstrlen(s);
     print_str(c, s);
@@ -166,9 +161,6 @@ static void print_padded(console_t* c, const char* s, int width) {
     }
 }
 
-/*
- * print_spaces - Print a given number of spaces
- */
 static void print_spaces(console_t* c, int count) {
     for (int i = 0; i < count; i++) {
         con_putc(c, ' ');
@@ -397,9 +389,6 @@ static void draw_kvpcol(console_t* c, const plout_t* P, const char* k1, const ch
     draw_pcol(c, P, &left, &right);
 }
 
-/*
- * draw_bar - Draw a standalone progress bar
- */
 static void draw_bar(console_t* c, const plout_t* P, const char* label, int percent) {
     ppart_t left = { label, PAIR_BAR, NULL, 0, percent };
     draw_pcol(c, P, &left, NULL);
@@ -487,7 +476,7 @@ static cpu_sec_t mk_cpu(const layout_t* L) {
 }
 
 /*
- * apply_lgrid - Unify column positions across all sections
+ * apply_lgrid - Unify column positions across sections
  * Author's Note: this is a nightmare function, godspeed Codex
  */
 static void apply_lgrid(layout_t* L, const cpu_sec_t* cpu, const mem_sec_t* mem) {
@@ -661,9 +650,6 @@ static char* fmt_size(char* out, size_t n, uint64_t bytes) {
 
 #pragma region CPU
 
-/*
- * render_cpu - Render CPU info and features
- */
 static void render_cpu(console_t* c, const layout_t* L, const cpu_sec_t* S) {
     int cur;
 
@@ -733,12 +719,12 @@ static void render_mem(console_t* c, const layout_t* L, const mem_sec_t* S) {
  */
 static const char* state_str(thread_state_t s) {
     switch (s) {
-        case T_READY:    return "READY";
-        case T_RUNNING:  return "RUNNING";
-        case T_BLOCKED:  return "BLOCKED";
+        case T_READY: return "READY";
+        case T_RUNNING: return "RUNNING";
+        case T_BLOCKED: return "BLOCKED";
         case T_SLEEPING: return "SLEEPING";
-        case T_DEAD:     return "DEAD";
-        default:         return "?";
+        case T_DEAD: return "DEAD";
+        default: return "?";
     }
 }
 
@@ -747,12 +733,12 @@ static const char* state_str(thread_state_t s) {
  */
 static uint8_t state_color(thread_state_t s) {
     switch (s) {
-        case T_RUNNING:  return CONSOLE_COLOR_LIGHT_GREEN;
-        case T_READY:    return CONSOLE_COLOR_GREEN;
+        case T_RUNNING: return CONSOLE_COLOR_LIGHT_GREEN;
+        case T_READY: return CONSOLE_COLOR_GREEN;
         case T_SLEEPING: return CONSOLE_COLOR_YELLOW;
-        case T_BLOCKED:  return CONSOLE_COLOR_LIGHT_CYAN;
-        case T_DEAD:     return CONSOLE_COLOR_DARK_GRAY;
-        default:         return CONSOLE_COLOR_LIGHT_GRAY;
+        case T_BLOCKED: return CONSOLE_COLOR_LIGHT_CYAN;
+        case T_DEAD: return CONSOLE_COLOR_DARK_GRAY;
+        default: return CONSOLE_COLOR_LIGHT_GRAY;
     }
 }
 
@@ -965,9 +951,7 @@ static void dash_draw(void) {
 #pragma region Thread
 
 /*
- * dash_thread - Dashboard thread, redraws every second while visible and
- * blocks entirely otherwise (dash_toggle wakes it), so a hidden dashboard
- * costs zero wakeups
+ * dash_thread - Redraws every second while visible, blocks otherwise (dash_toggle wakes it) so a hidden dashboard costs nothing
  */
 static void dash_thread(void* arg) {
     (void)arg;

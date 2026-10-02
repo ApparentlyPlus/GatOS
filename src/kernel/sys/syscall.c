@@ -1,9 +1,6 @@
 /*
  * syscall.c - Syscall initialization and dispatching
  *
- * Configures the MSRs for the syscall/sysret instructions and
- * dispatches syscalls from userspace.
- *
  * Author: u/ApparentlyPlus
  */
 
@@ -59,8 +56,7 @@ void syscall_init(void) {
 }
 
 /*
- * syscall_dispatcher - Called from syscall_entry.S with a pointer to
- * the full cpu_context_t built on the per-thread kernel stack
+ * syscall_dispatcher - Called from syscall_entry.S with the cpu_context_t from the thread's kernel stack
  */
 void syscall_dispatcher(cpu_context_t* regs) {
     thread_t* current = sched_current();
@@ -84,12 +80,10 @@ void syscall_dispatcher(cpu_context_t* regs) {
 
             if (len > 65536) len = 65536;
 
-            // Copy through a fixed stack buffer instead of a per-call kmalloc.
-            // The user buffer is validated and copied in small sub-chunks with
-            // interrupts disabled (so it cannot be remapped mid-copy and the
-            // IRQ-off window stays bounded), but each filled buffer is handed
-            // to the TTY in a single call so the console flushes once per
-            // buffer rather than once per copy chunk.
+            // Copy through a fixed stack buffer instead of a per-call kmalloc. Validated and copied
+            // in small sub-chunks with interrupts off (can't be remapped mid-copy, IRQ-off window
+            // stays bounded), but each filled buffer goes to the TTY in one call so the console
+            // flushes once per buffer.
             char kbuf[4096];
             size_t done = 0;
             while (done < len) {
@@ -116,11 +110,10 @@ void syscall_dispatcher(cpu_context_t* regs) {
                     filled += n;
                 }
 
-                // A userspace thread's stdout goes through this syscall
-                // regardless of output mode - GATA_OUTPUT_SERIAL only rewires
-                // the kernel realm's own _putchar (klibc/stdio.c), so without
-                // this, "serial output" builds would still send userspace
-                // program output to the (headless, invisible) framebuffer TTY.
+                // Userspace stdout goes through this syscall in every output mode.
+                // GATA_OUTPUT_SERIAL only rewires the kernel realm's _putchar (klibc/stdio.c), so
+                // without this serial builds would still send userspace output to the headless
+                // framebuffer TTY.
                 #ifdef GATA_OUTPUT_SERIAL
                 serial_write_len_port(SERIAL_COM1, kbuf, block);
                 #else

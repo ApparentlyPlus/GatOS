@@ -1,9 +1,6 @@
 /*
  * layout.h - Memory layout definitions
  *
- * Centralized memory addresses, sizes, and primitive memory utilities
- * shared by all kernel subsystems. Included by assembler and C code.
- *
  * Author: u/ApparentlyPlus
  */
 
@@ -31,7 +28,7 @@ extern uintptr_t KPHYS_START;
 extern uintptr_t KPHYS_END;
 
 
-// Runtime kernel extent, tracked in paging.c, KEND is bumped by reserve_required_tablespace 
+// Runtime kernel extent, tracked in paging.c, KEND is bumped by reserve_tables 
 // to include page table space. All callers must use get_kend() to read the authoritative value.
 extern uint64_t KSTART;
 extern uint64_t KEND;
@@ -50,9 +47,6 @@ static inline uintptr_t align_up(uintptr_t val, uintptr_t align) {
     return (val + align - 1) & ~(align - 1);
 }
 
-/*
- * align_down - Align a value down to the previous alignment boundary
- */
 static inline uintptr_t align_down(uintptr_t val, uintptr_t align) {
     return val & ~(align - 1);
 }
@@ -71,17 +65,11 @@ static inline uint64_t get_kend(bool virtual) {
     return virtual ? (KEND | KERNEL_VIRTUAL_BASE) : KEND;
 }
 
-/*
- * get_linker_kstart - Get the linker defined kernel start address
- */
 static inline uint64_t get_linker_kstart(bool virtual) {
     uint64_t l = (uint64_t)(uintptr_t)&KPHYS_START;
     return virtual ? (l | KERNEL_VIRTUAL_BASE) : l;
 }
 
-/*
- * get_linker_kend - Get the linker defined kernel end address
- */ 
 static inline uint64_t get_linker_kend(bool virtual) {
     uint64_t l = (uint64_t)(uintptr_t)&KPHYS_END;
     return virtual ? (l | KERNEL_VIRTUAL_BASE) : l;

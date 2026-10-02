@@ -1,18 +1,11 @@
 /*
  * serial.c - Serial port driver
  *
- * This file implements basic initialization and output functions for the standard PC serial ports (COM1-COM4).
- * It allows the kernel to output debug information over a serial connection, which is invaluable for early
- * boot debugging and for use in virtual machines where serial output can be easily captured.
- * 
  * Author: u/ApparentlyPlus
  */
 
 #include <kernel/drivers/serial.h>
 
-/*
- * get_port_base - Get port base address for each serial port
- */
 uint16_t get_port_base(serial_port_t port) {
     switch(port) {
         case SERIAL_COM1: return COM1_PORT;
@@ -38,9 +31,6 @@ void serial_init_port(serial_port_t port) {
     outb(port_base + 4, 0x0B);
 }
 
-/*
- * serial_init_all - Initializes all available serial ports
- */
 void serial_init_all(void) {
     serial_init_port(SERIAL_COM1);
     serial_init_port(SERIAL_COM2);

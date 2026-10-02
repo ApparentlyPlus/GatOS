@@ -1,19 +1,10 @@
 /*
  * xhci.c - eXtensible Host Controller Interface Driver
  *
- * Features:
- * 
- * - Full xHCI 1.1 compliance with support for USB 2.0 and 3.0 devices
- * - BIOS handoff and Intel USB port routing quirks
- * - TRB-based command submission and event handling
- * - Dynamic device slot allocation and context management
- * - Control transfer support for device enumeration and configuration
- * - Hub enumeration and downstream port management
- * - Integration with input subsystem for USB keyboards
- * - Robust error handling and timeouts for hardware interactions
- * - DMA memory management with kernel address mapping
- * - Spinlock synchronization for concurrent access to shared data structures
- * 
+ * Reference: the xHCI specification (rev 1.1) and the Linux kernel's xHCI driver
+ * (drivers/usb/host/, GPL-2.0). The Intel port routing sequence in bios_handoff()
+ * follows usb_enable_intel_xhci_ports() in drivers/usb/host/pci-quirks.c.
+ *
  * Author: u/ApparentlyPlus
  */
 
@@ -36,12 +27,9 @@
 #include <klibc/string.h>
 #include <kernel/sys/panic.h>
 
-// Dead weight without USB keyboard support - see GATA_KBD_EXTERNAL/
-// GATA_KBD_HOTPLUG in kernel/caps.h. xhci_hotplug_init specifically is
-// further nested-gated below on GATA_KBD_HOTPLUG alone: it's the only part
-// of this file that calls into process.c (process_create/thread_create),
-// which only exists with GATA_CAP_THREADS - implied by HOTPLUG, not by
-// EXTERNAL alone.
+// Dead weight without USB keyboard support, see GATA_KBD_EXTERNAL/GATA_KBD_HOTPLUG in caps.h.
+// xhci_hotplug_init is nested-gated on HOTPLUG alone: it's the only part calling into process.c,
+// which needs THREADS (implied by HOTPLUG, not by EXTERNAL).
 #if defined(GATA_KBD_EXTERNAL) || defined(GATA_KBD_HOTPLUG)
 
 static xhci_hc_t *hcs[16];
@@ -55,20 +43,20 @@ static tty_t *hotplug_tty = NULL;
 static volatile bool worker_idle = false;
 
 static inline uint32_t cr32(xhci_hc_t *hc, uint32_t o) { return *(volatile uint32_t *)(hc->cap + o); }
-static inline uint8_t  cr8 (xhci_hc_t *hc, uint32_t o) { return *(volatile uint8_t  *)(hc->cap + o); }
-static inline uint32_t or32(xhci_hc_t *hc, uint32_t o) { return *(volatile uint32_t *)(hc->op  + o); }
-static inline void     ow32(xhci_hc_t *hc, uint32_t o, uint32_t v) { *(volatile uint32_t *)(hc->op + o) = v; }
-static inline void     ow64(xhci_hc_t *hc, uint32_t o, uint64_t v) { ow32(hc, o, (uint32_t)v); ow32(hc, o + 4, (uint32_t)(v >> 32)); }
-static inline uint32_t rr32(xhci_hc_t *hc, uint32_t o) { return *(volatile uint32_t *)(hc->rt  + o); }
-static inline void     rw32(xhci_hc_t *hc, uint32_t o, uint32_t v) { *(volatile uint32_t *)(hc->rt + o) = v; }
-static inline void     rw64(xhci_hc_t *hc, uint32_t o, uint64_t v) { rw32(hc, o, (uint32_t)v); rw32(hc, o + 4, (uint32_t)(v >> 32)); }
+static inline uint8_t cr8 (xhci_hc_t *hc, uint32_t o) { return *(volatile uint8_t *)(hc->cap + o); }
+static inline uint32_t or32(xhci_hc_t *hc, uint32_t o) { return *(volatile uint32_t *)(hc->op + o); }
+static inline void ow32(xhci_hc_t *hc, uint32_t o, uint32_t v) { *(volatile uint32_t *)(hc->op + o) = v; }
+static inline void ow64(xhci_hc_t *hc, uint32_t o, uint64_t v) { ow32(hc, o, (uint32_t)v); ow32(hc, o + 4, (uint32_t)(v >> 32)); }
+static inline uint32_t rr32(xhci_hc_t *hc, uint32_t o) { return *(volatile uint32_t *)(hc->rt + o); }
+static inline void rw32(xhci_hc_t *hc, uint32_t o, uint32_t v) { *(volatile uint32_t *)(hc->rt + o) = v; }
+static inline void rw64(xhci_hc_t *hc, uint32_t o, uint64_t v) { rw32(hc, o, (uint32_t)v); rw32(hc, o + 4, (uint32_t)(v >> 32)); }
 static inline uint32_t ir32(xhci_hc_t *hc, uint32_t r) { return rr32(hc, XHCI_IR0 + r); }
-static inline void     iw32(xhci_hc_t *hc, uint32_t r, uint32_t v) { rw32(hc, XHCI_IR0 + r, v); }
-static inline void     iw64(xhci_hc_t *hc, uint32_t r, uint64_t v) { rw64(hc, XHCI_IR0 + r, v); }
-static inline void     dbw (xhci_hc_t *hc, uint32_t s, uint32_t v) { *(volatile uint32_t *)(hc->db  + s) = v; }
+static inline void iw32(xhci_hc_t *hc, uint32_t r, uint32_t v) { rw32(hc, XHCI_IR0 + r, v); }
+static inline void iw64(xhci_hc_t *hc, uint32_t r, uint64_t v) { rw64(hc, XHCI_IR0 + r, v); }
+static inline void dbw (xhci_hc_t *hc, uint32_t s, uint32_t v) { *(volatile uint32_t *)(hc->db + s) = v; }
 
 /*
- * assert_dma_clean - Ensures that allocated DMA memory does not overlap with the kernel image
+ * assert_dma_clean - Panics if the DMA memory overlaps the kernel image
  */
 static void assert_dma_clean(uint64_t phys, size_t sz, const char *name) {
     uint64_t kstart = get_kstart(false);
@@ -194,14 +182,14 @@ static trb_t wait_ev_poll(xhci_hc_t *hc, uint8_t type, uint32_t tmo) {
 }
 
 /*
- * prepare_wait - Clear the completion slot BEFORE ringing the doorbell.
+ * prepare_wait - Clear the completion slot BEFORE ringing the doorbell
  * Author's Note: Call before enq and dbw for any command that expects an event
  */
 static void prepare_wait(xhci_hc_t *hc, uint8_t type) {
     if (!sched_active()) return;
     xhci_completion_t *comp = (type == TRB_EV_CMD) ? &hc->cmd_comp : &hc->xfer_comp;
     bool iflag = intr_save();
-    comp->done   = 0;
+    comp->done = 0;
     comp->waiter = NULL;
     kmemset(&comp->result, 0, sizeof(comp->result));
     intr_restore(iflag);
@@ -466,9 +454,6 @@ static uint16_t get_mps(uint8_t spd) {
     return (spd == SPD_SS || spd == SPD_SSP) ? 512 : (spd == SPD_LS ? 8 : 64);
 }
 
-/*
- * reset_port - Triggers a port reset and waits for it to complete
- */
 static bool reset_port(xhci_hc_t *hc, uint8_t p) {
     uint32_t sc = or32(hc, XHCI_PORTSC(p));
     uint32_t safe_sc = sc & 0x0E00C200;
@@ -636,7 +621,7 @@ static bool enum_dev(xhci_hc_t *hc, uint8_t p, uint8_t spd, uint32_t route_strin
                         if ((ed->bEndpointAddress & USB_EP_DIR_IN) &&
                             (ed->bmAttributes & 3) == USB_EP_TYPE_INTERRUPT) {
                             hub_ep_addr = ed->bEndpointAddress;
-                            hub_ep_mps  = ed->wMaxPacketSize & 0x7FF;
+                            hub_ep_mps = ed->wMaxPacketSize & 0x7FF;
                             hub_ep_ival = ed->bInterval;
                             break;
                         }
@@ -650,9 +635,9 @@ static bool enum_dev(xhci_hc_t *hc, uint8_t p, uint8_t spd, uint32_t route_strin
                 // Arm the hub's interrupt endpoint for status change polling
                 if (hub_ep_addr && hub_ep_mps) {
                     s->ep_addr = hub_ep_addr;
-                    s->ep_mps  = hub_ep_mps;
+                    s->ep_mps = hub_ep_mps;
                     s->ep_ival = hub_ep_ival;
-                    s->ep_idx  = (hub_ep_addr & 0xF) * 2 + 1;
+                    s->ep_idx = (hub_ep_addr & 0xF) * 2 + 1;
 
                     ring_init(hc, &s->intr, RING_SZ);
                     s->hid_buf = dma_alloc(hc, PAGE_SIZE, &s->hid_phys);
@@ -878,9 +863,9 @@ static void proc_evts(xhci_hc_t *hc) {
         if (ev_type == TRB_EV_CMD) {
             complete(&hc->cmd_comp, ev);
         } else if (ev_type == TRB_EV_XFER) {
-            uint8_t cc      = GET_CC(ev.dw2);
+            uint8_t cc = GET_CC(ev.dw2);
             uint8_t slot_id = GET_SLOT(ev.ctrl);
-            uint8_t ev_ep   = GET_EP(ev.ctrl);
+            uint8_t ev_ep = GET_EP(ev.ctrl);
             bool handled = false;
             if (slot_id < 256) {
                 xhci_slot_t *s = &hc->dev_slots[slot_id];
@@ -923,9 +908,6 @@ static void proc_evts(xhci_hc_t *hc) {
     }
 }
 
-/*
- * cmd_disable_slot - Issue a Disable Slot command to free the device slot
- */
 static void cmd_disable_slot(xhci_hc_t *hc, uint8_t slot_id) {
     prepare_wait(hc, TRB_EV_CMD);
     enq(&hc->cmd, RING_SZ, 0, 0, 0, TRB_TYPE(TRB_DIS_SLOT) | TRB_SLOT(slot_id));
@@ -950,9 +932,9 @@ static void handle_hub_changes(xhci_hc_t *hc, uint32_t hub_mask) {
             usb_setup_t sts = { USB_DIR_IN | USB_TYPE_CLASS | USB_RECIP_OTHER, USB_REQ_GET_STATUS, 0, i, 4 };
             if (ctrl_xfer(hc, hs, &sts, hc->scratch_phys) != 4) continue;
             uint32_t status = *(uint32_t *)hc->scratch;
-            bool connected  = (status & 1) != 0;
-            bool c_connect  = (status & (1u << 16)) != 0; // C_PORT_CONNECTION
-            bool c_reset    = (status & (1u << 20)) != 0; // C_PORT_RESET
+            bool connected = (status & 1) != 0;
+            bool c_connect = (status & (1u << 16)) != 0; // C_PORT_CONNECTION
+            bool c_reset = (status & (1u << 20)) != 0; // C_PORT_RESET
 
             // Clear change bits
             if (c_connect) {
@@ -979,11 +961,11 @@ static void handle_hub_changes(xhci_hc_t *hc, uint32_t hub_mask) {
                         ds->active = false;
                         cmd_disable_slot(hc, j);
                         hc->dcbaa[j] = 0;
-                        if (ds->ep0.phys)  pmm_free(ds->ep0.phys,  PAGE_SIZE);
+                        if (ds->ep0.phys) pmm_free(ds->ep0.phys, PAGE_SIZE);
                         if (ds->intr.phys) pmm_free(ds->intr.phys, PAGE_SIZE);
-                        if (ds->out_phys)  pmm_free(ds->out_phys,  PAGE_SIZE);
-                        if (ds->hid_phys)  pmm_free(ds->hid_phys,  PAGE_SIZE);
-                        if (ds->led_phys)  pmm_free(ds->led_phys,  PAGE_SIZE);
+                        if (ds->out_phys) pmm_free(ds->out_phys, PAGE_SIZE);
+                        if (ds->hid_phys) pmm_free(ds->hid_phys, PAGE_SIZE);
+                        if (ds->led_phys) pmm_free(ds->led_phys, PAGE_SIZE);
                         kmemset(ds, 0, sizeof(*ds));
                     }
                 }
@@ -992,7 +974,7 @@ static void handle_hub_changes(xhci_hc_t *hc, uint32_t hub_mask) {
             }
 
             // Device connected
-            usb_setup_t rst = { USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_OTHER,  USB_REQ_SET_FEATURE, 4 /* PORT_RESET */, i, 0 };
+            usb_setup_t rst = { USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_OTHER, USB_REQ_SET_FEATURE, 4 /* PORT_RESET */, i, 0 };
             ctrl_xfer(hc, hs, &rst, 0);
             sleep_ms(50);
 
@@ -1007,7 +989,7 @@ static void handle_hub_changes(xhci_hc_t *hc, uint32_t hub_mask) {
                 if (!(s2 & 1)) continue; // device gone after reset
 
                 uint8_t dspd = SPD_FS;
-                if (s2 & (1 << 9))  dspd = SPD_LS;
+                if (s2 & (1 << 9)) dspd = SPD_LS;
                 else if (s2 & (1 << 10)) dspd = SPD_HS;
 
                 // Determine the correct TT slot/port to use for this device
@@ -1057,11 +1039,11 @@ static void handle_pending_ports(xhci_hc_t *hc, uint32_t ports) {
                     s->active = false;
                     cmd_disable_slot(hc, j);
                     hc->dcbaa[j] = 0;
-                    if (s->ep0.phys)  pmm_free(s->ep0.phys, PAGE_SIZE);
+                    if (s->ep0.phys) pmm_free(s->ep0.phys, PAGE_SIZE);
                     if (s->intr.phys) pmm_free(s->intr.phys, PAGE_SIZE);
-                    if (s->out_phys)  pmm_free(s->out_phys, PAGE_SIZE);
-                    if (s->hid_phys)  pmm_free(s->hid_phys, PAGE_SIZE);
-                    if (s->led_phys)  pmm_free(s->led_phys, PAGE_SIZE);
+                    if (s->out_phys) pmm_free(s->out_phys, PAGE_SIZE);
+                    if (s->hid_phys) pmm_free(s->hid_phys, PAGE_SIZE);
+                    if (s->led_phys) pmm_free(s->led_phys, PAGE_SIZE);
                     kmemset(s, 0, sizeof(*s));
                 }
             }
@@ -1123,7 +1105,7 @@ static void xhci_worker(void *arg) {
 
             bool iflag = intr_save();
             uint32_t ports = hc->pending_ports;
-            uint32_t hubs  = hc->pending_hub_slots;
+            uint32_t hubs = hc->pending_hub_slots;
             hc->pending_ports = 0;
             hc->pending_hub_slots = 0;
             intr_restore(iflag);
@@ -1164,7 +1146,7 @@ cpu_context_t *xhci_irq_handler(cpu_context_t *ctx) {
  */
 bool xhci_init(void) {
     pci_dev_t pcis[16];
-    int cnt = pci_get_xhci_controllers(pcis, 16);
+    int cnt = pci_find_xhci(pcis, 16);
     if (cnt == 0) return false;
 
     for (int i = 0; i < cnt; i++) {
@@ -1264,7 +1246,7 @@ bool xhci_init(void) {
 }
 
 /*
- * xhci_hotplug_init - Initializes the hotplug worker thread and shared resources for handling dynamic device events
+ * xhci_hotplug_init - Starts the hotplug worker thread
  * Author's Note: You can ignore calling this if you don't care about hotplugging
  */
 #ifdef GATA_KBD_HOTPLUG

@@ -1,8 +1,6 @@
 /*
  * debug.c - Implementation of debugging utilities for GatOS kernel
  *
- * Implements all debugging related functions declared in debug.h
- *
  * Author: u/ApparentlyPlus
  */
 
@@ -13,8 +11,8 @@
 #include <stddef.h>
 #include <stdarg.h>
 
-// Serializes serial log writes so IRQ-context and thread-context
-// messages never interleave mid-line (CI parses debug.log)
+// Serializes serial log writes so IRQ and thread context messages never interleave mid-line (CI
+// parses debug.log).
 static spinlock_t log_lock = {0};
 
 /*

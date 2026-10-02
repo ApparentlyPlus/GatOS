@@ -1,8 +1,6 @@
 /*
  * syscall.h - Syscall interface definitions
  *
- * Defines the syscall numbers and initialization function.
- *
  * Author: u/ApparentlyPlus
  */
 

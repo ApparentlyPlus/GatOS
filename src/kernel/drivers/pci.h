@@ -1,8 +1,6 @@
 /*
  * pci.h - PCI/PCIe Subsystem
  *
- * Legacy I/O config space access, device enumeration, BAR decoding, and MSI.
- * 
  * Author: u/ApparentlyPlus
  */
 
@@ -66,7 +64,7 @@ typedef struct {
 } pci_dev_t;
 
 void pci_init(void);
-int pci_get_xhci_controllers(pci_dev_t *out_arr, int max_out);
+int pci_find_xhci(pci_dev_t *out_arr, int max_out);
 
 uint8_t pci_read8(pci_dev_t *d, uint8_t off);
 uint16_t pci_read16(pci_dev_t *d, uint8_t off);

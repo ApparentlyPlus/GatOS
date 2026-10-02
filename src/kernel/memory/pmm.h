@@ -1,18 +1,10 @@
 /*
  * pmm.h - Physical Memory Manager
  *
- * The Physical Memory Manager (PMM) is responsible for managing all physical memory
- * in the system, excluding the kernel region. It tracks free and allocated memory frames,
- * handles allocation requests, and manages memory deallocation. The PMM implements
- * a buddy allocation algorithm, organizing memory into free-lists of power-of-two sized
- * blocks for efficient memory management.
+ * Buddy allocator over the PHYSMAP region. Internals use virtual addresses, the public
+ * API deals in physical ones.
  *
- * Memory blocks are managed through the kernel's PHYSMAP region, which provides direct
- * access to physical memory from the higher-half kernel address space. While internal
- * operations use virtual addresses via PHYSMAP, all public interfaces return physical
- * addresses to maintain abstraction.
- *
- * The PMM *must* be initialized FIRST, before the Slab allocator and the VMM.
+ * Must be initialized FIRST, before the slab allocator and the VMM.
  *
  * Author: u/ApparentlyPlus
  */
@@ -92,14 +84,10 @@ bool pmm_verify_integrity(void);
 
 
 /*
-
-Notes on improving the PMM in the future:
-
-1. Coalescing Could Be More Aggressive
-
-The buddy allocator only coalesces upward during free. Consider checking 
-if the block being freed can be merged with its buddy even when the buddy is in a higher-order list.
-
-Can't think of anything else now ~u/ApparentlyPlus
-
-*/
+ * Notes on improving the PMM in the future:
+ *
+ * Coalescing only goes upward on free. Could check whether the freed block can merge with its
+ * buddy even when the buddy sits in a higher-order list.
+ *
+ * Can't think of anything else now ~u/ApparentlyPlus
+ */

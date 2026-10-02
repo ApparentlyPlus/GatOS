@@ -8,9 +8,8 @@
 #include <stdint.h>
 
 /*
- * kmemset - Fill memory using rep stosq with a byte tail.
- * DF is 0 per the ABI, and rep stos* never touches FPU/SSE state, so this
- * is safe from any context including the interrupt path.
+ * kmemset - rep stosq plus a byte tail. DF is 0 per the ABI and rep stos* never touches FPU/SSE state,
+ * so it's safe from any context, interrupts included
  */
 void* kmemset(void *dest, int c, size_t n) {
     void* d = dest;
@@ -24,8 +23,7 @@ void* kmemset(void *dest, int c, size_t n) {
 }
 
 /*
- * kmemcpy - Copy memory using rep movsq with a byte tail.
- * Unaligned qword accesses are fine on x86, so no alignment prologue.
+ * kmemcpy - rep movsq plus a byte tail. Unaligned qwords are fine on x86, so no alignment prologue
  */
 void *kmemcpy(void *dest, const void *src, size_t n) {
     void* d = dest;
@@ -38,9 +36,8 @@ void *kmemcpy(void *dest, const void *src, size_t n) {
 }
 
 /*
- * kmemmove - Overlap-safe copy. Forward copies use the fast rep path;
- * backward copies go qword-wise from the tail (writing strictly higher
- * chunks before reading lower ones, safe for any overlap distance).
+ * kmemmove - Overlap-safe. Forward copies use the rep path, backward ones go qword-wise from the tail
+ * (higher chunks are written before lower ones are read, so any overlap distance works)
  */
 void *kmemmove(void *dest, const void *src, size_t n) {
     uint8_t* d = (uint8_t*)dest;

@@ -1,10 +1,8 @@
 /*
  * vmm.h - Virtual Memory Manager
  *
- * Manages virtual address spaces. Each instance owns a page table and a sorted tree
- * of vm_objects (virtual memory regions). NULL = kernel VMM in all public APIs.
- *
- * Init order: PMM → slab → VMM (depends on both).
+ * Each instance owns a page table and a sorted tree of vm_objects. NULL = kernel VMM in
+ * all public APIs. Init order: PMM → slab → VMM.
  *
  * Author: u/ApparentlyPlus
  */
@@ -20,13 +18,12 @@
 #define VM_FLAG_WRITE        (1 << 0)
 #define VM_FLAG_EXEC         (1 << 1)
 #define VM_FLAG_USER         (1 << 2)
-// Physical range the VMM does not own, so it is never freed on unmap. Covers
-// device BARs but also RAM-backed process images, so it implies nothing about
-// cacheability - use VM_FLAG_DEVICE for that.
+// Physical range the VMM doesn't own, never freed on unmap. Covers device BARs and RAM-backed
+// process images, so it says nothing about cacheability (VM_FLAG_DEVICE does).
 #define VM_FLAG_FOREIGN (1 << 3)
 #define VM_FLAG_LAZY         (1 << 4)
-// Real device registers, mapped uncacheable. Deliberately separate from
-// FOREIGN: marking process images UC runs userspace straight off DRAM.
+// Real device registers, mapped uncacheable. Separate from FOREIGN on purpose: marking process
+// images UC would run userspace straight off DRAM.
 #define VM_FLAG_DEVICE       (1 << 5)
 
 // Return codes
@@ -115,31 +112,9 @@ void vmm_dump_pte_chain(uint64_t pt_root, void* virt);
 bool vmm_verify_integrity(vmm_t* vmm_pub);
 
 /*
-
-Notes on improving the VMM in the future:
-
-1. Range Operations Could Be Optimized
-
-vmm_map_range maps page by page. For large contiguous ranges, we could potentially use 
-larger page sizes (2MB/1GB pages).
-
-2. Add Copy on Write Support
-
-For fork() later, we'll want CoW:
-
-#define VM_FLAG_COW (1 << 6)
-
-In page fault handler:
-
-if (fault_address has VM_FLAG_COW) {
-    Allocate new page
-    Copy content
-    Remap with write permissions
-}
-
-3. Add vmm_resize()
-
-Heap will need to grow, so good to have a function to handle that
-
-
-*/
+ * Notes on improving the VMM in the future:
+ *
+ * - vmm_map_range goes page by page. Large contiguous ranges could use 2MB/1GB pages.
+ * - Copy on write for fork(): a VM_FLAG_COW flag, and the page fault handler allocates,
+ *   copies and remaps writable.
+ */

@@ -1,9 +1,7 @@
 /*
  * pmm.c - Range-based physical memory manager (buddy allocator)
  *
- * This implementation uses an explicit [start, end) physical range stored
- * in range_start/range_end. The public init takes a range (start,end)
- * and rounds/aligns it to the chosen minimum block size.
+ * Buddy allocator over an explicit [start, end) range, rounded to the min block size.
  *
  * Author: u/ApparentlyPlus
  */
@@ -58,9 +56,6 @@ typedef struct {
 static pmm_exclusion_t exclusions[PMM_MAX_EXCLUSIONS];
 static uint32_t exclusion_count = 0;
 
-/*
- * order_to_size - convert order to block size in bytes 
- */
 static inline uint64_t order_to_size(uint32_t order) {
     return min_block << order;
 }
@@ -86,9 +81,6 @@ static inline bool validate_block_in_range(uint64_t block_phys, uint32_t order) 
     return true;
 }
 
-/*
- * validate_free_header - Validate free block header for corruption
- */
 static inline bool validate_free_header(uint64_t block_phys, uint32_t expected_order) {
     if (!validate_block_in_range(block_phys, expected_order)) {
         return false;
@@ -131,9 +123,8 @@ static inline bool validate_free_header(uint64_t block_phys, uint32_t expected_o
     return true;
 }
 
-/* 
- * read_next_word - read the next pointer stored at the start of a free block
- * Always use the PHYSMAP_P2V macro to access physical memory.
+/*
+ * read_next_word - Next pointer stored at the start of a free block (goes through PHYSMAP_P2V)
  */
 static inline uint64_t read_next_word(uint64_t block_phys, uint32_t order) {
     if (!validate_free_header(block_phys, order)) {
@@ -145,9 +136,8 @@ static inline uint64_t read_next_word(uint64_t block_phys, uint32_t order) {
     return header->next_phys;
 }
 
-/* 
- * write_next_word - write the next pointer stored at the start of a free block
- * Always use the PHYSMAP_P2V macro to access physical memory.
+/*
+ * write_next_word - Store the next pointer at the start of a free block (goes through PHYSMAP_P2V)
  */
 static inline void write_next_word(uint64_t block_phys, uint64_t next_phys, uint32_t order) {
     pmm_free_header_t *header = (pmm_free_header_t *)PHYSMAP_P2V(block_phys);
@@ -156,9 +146,6 @@ static inline void write_next_word(uint64_t block_phys, uint64_t next_phys, uint
     header->next_phys = next_phys;
 }
 
-/* 
- * clear_free_header - Clear header when allocating
- */
 static inline void clear_free_header(uint64_t block_phys) {
     pmm_free_header_t *header = (pmm_free_header_t *)PHYSMAP_P2V(block_phys);
     header->magic = 0;
@@ -214,7 +201,7 @@ static bool remove_specific(uint32_t order, uint64_t target_phys) {
 
     pmm_free_header_t* hdr = (pmm_free_header_t*)PHYSMAP_P2V(target_phys);
 
-    // Magic/order mismatch means allocated or different order - not corruption
+    // Magic/order mismatch means allocated or a different order, not corruption
     if (hdr->magic != PMM_FREE_BLOCK_MAGIC || hdr->order != order)
         return false;
 
@@ -248,9 +235,6 @@ static inline uint64_t buddy_of(uint64_t addr, uint32_t order) {
     return (addr ^ size);
 }
 
-/*
- * size_to_order - convert size in bytes to minimum order that fits it
- */
 static uint32_t size_to_order(uint64_t size_bytes) {
     if (size_bytes == 0) return 0;
     uint64_t need = min_block;
@@ -262,12 +246,11 @@ static uint32_t size_to_order(uint64_t size_bytes) {
     return order;
 }
 
-/* 
- * partition_range_into_blocks - Partition an arbitrary aligned range [start,end) 
- * into largest possible aligned blocks and push them into freelists (classic greedy partition).
- * Assumes 'start' is aligned to min_block and 'end' is multiple of min_block.
+/*
+ * split_range - Greedy split of [start, end) into the largest aligned blocks, pushed to the freelists.
+ * Needs start aligned to min_block and end a multiple of it
  */
-static void partition_range_into_blocks(uint64_t range_start, uint64_t range_end) {
+static void split_range(uint64_t range_start, uint64_t range_end) {
     uint64_t cur = range_start;
 
     while (cur < range_end) {
@@ -289,9 +272,6 @@ static void partition_range_into_blocks(uint64_t range_start, uint64_t range_end
     }
 }
 
-/*
- * pmm_is_initialized - Returns whether the PMM has been initialized
- */
 bool pmm_is_initialized(void) {
     return inited;
 }
@@ -303,16 +283,10 @@ uint64_t pmm_managed_base(void) {
     return range_start;
 }
 
-/*
- * pmm_managed_end - Returns the end of the managed physical memory range
- */
 uint64_t pmm_managed_end(void) {
     return range_end;
 }
 
-/*
- * pmm_managed_size - Returns the size of the managed physical memory range
- */
 uint64_t pmm_managed_size(void) {
     return range_end - range_start;
 }
@@ -325,13 +299,8 @@ uint64_t pmm_min_block_size(void) {
 }
 
 /*
- * pmm_init - Initialize the physical memory manager.
- *
- * Sets up the buddy allocator data structures for the managed range
- * [range_start_phys, range_end_phys). 
- * 
- * Freelists are now empty by default and the caller must register 
- * exclusions via pmm_exclude_range(), then populate free memory via pmm_populate()
+ * pmm_init - Set up the buddy structures for [range_start_phys, range_end_phys)
+ * Freelists start empty: pmm_exclude_range() first, then pmm_populate()
  */
 pmm_status_t pmm_init(uint64_t range_start_phys, uint64_t range_end_phys, uint64_t min_block_size) {
     spinlock_init(&pmm_lock, "pmm_global");
@@ -397,8 +366,7 @@ pmm_status_t pmm_init(uint64_t range_start_phys, uint64_t range_end_phys, uint64
 }
 
 /*
- * pmm_exclude_range - Register a physical range [start, end) that must never
- * be allocated or written to
+ * pmm_exclude_range - Physical range [start, end) that must never be allocated or written
  */
 pmm_status_t pmm_exclude_range(uint64_t start, uint64_t end) {
     bool flags = spinlock_acquire(&pmm_lock);
@@ -527,9 +495,6 @@ pmm_status_t pmm_alloc(size_t size_bytes, uint64_t *out_phys) {
     return status;
 }
 
-/*
- * pmm_free - Free an allocation previously returned by pmm_alloc
- */
 pmm_status_t pmm_free(uint64_t phys, size_t size_bytes) {
     bool flags = spinlock_acquire(&pmm_lock);
     if (!inited) {
@@ -603,8 +568,7 @@ pmm_status_t pmm_free(uint64_t phys, size_t size_bytes) {
 }
 
 /*
- * pmm_mark_reserved - mark [start,end) as reserved
- * This handles partial overlaps and ensures free-lists remain consistent.
+ * pmm_mark_reserved - Mark [start, end) as reserved, partial overlaps included
  */
 pmm_status_t pmm_mark_reserved(uint64_t start, uint64_t end) {
     bool flags = spinlock_acquire(&pmm_lock);
@@ -704,7 +668,7 @@ static pmm_status_t pmm_mark_free_range(uint64_t start, uint64_t end) {
         }
     }
 
-    partition_range_into_blocks(start, end);
+    split_range(start, end);
     return PMM_OK;
 }
 
@@ -718,9 +682,6 @@ pmm_status_t pmm_populate(uint64_t start, uint64_t end) {
     return status;
 }
 
-/*
- * pmm_get_stats - Get current PMM statistics
- */
 void pmm_get_stats(pmm_stats_t* out_stats) {
     if (!out_stats) return;
     bool flags = spinlock_acquire(&pmm_lock);
@@ -799,8 +760,7 @@ void pmm_dump_stats(void) {
 }
 
 /*
- * pmm_verify_integrity - Verify free-list integrity
- * Returns true if all checks pass, false otherwise
+ * pmm_verify_integrity - Free-list sanity check, false if anything is off
  */
 bool pmm_verify_integrity(void) {
     bool flags = spinlock_acquire(&pmm_lock);

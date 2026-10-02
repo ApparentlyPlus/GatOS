@@ -1,16 +1,11 @@
 /*
  * console.c - Framebuffer console implementation
  *
- * This is the lowest level of the output stack, solely responsible for 
- * rendering characters to the framebuffer. It provides a simple API for drawing
- * characters, managing the cursor, setting colors and controlling a sticky header area.
- * 
- * TTY and higher-level console abstractions are built on top of this.
- * 
- * For panic specifically, the console can be used directly through the con_crash_*
- * API without relying on the rest of the console/TTY subsystem, which may be in an 
+ * Lowest level of the output stack, TTY and friends sit on top of it.
+ *
+ * The con_crash_* API works without the rest of the console/TTY, which may be in an
  * inconsistent state during a panic.
- * 
+ *
  * Author: u/ApparentlyPlus
  */
 
@@ -82,10 +77,8 @@ static inline uint32_t crash_pack(uint32_t cp, uint8_t fg, uint8_t bg) {
 }
 
 /*
- * con_crash_shadow_init - Give the crash console its scroll shadow.
- * console_init runs before the PMM exists, so this is called separately once
- * memory is available. Sized to the live resolution: any display works and
- * nothing is reserved statically for one that is never used.
+ * con_crash_shadow_init - Gives the crash console its scroll shadow. Separate because console_init runs before the PMM exists
+ * Sized to the live resolution, so nothing is reserved statically
  */
 void con_crash_shadow_init(void) {
     if (crash_shadow || !cols || !rows) return;
@@ -162,12 +155,9 @@ static uint8_t* get_glyph(uint32_t cp) {
     return get_glyph_idx(glyph_index(cp));
 }
 
-// Everything below, down to the Crash Console region, is the normal
-// backbuffer/TTY-routed console path: it allocates (con_init) and reads
-// active_tty, both of which only exist when the scheduler/TTY stack is
-// built (GATA_CAP_THREADS). Builds without it use the crash-console path
-// below directly (see kernel/caps.h). get_glyph above stays always-on:
-// the crash path (crash_emit) needs it too.
+// Everything down to the Crash Console region is the backbuffer/TTY console. It allocates and reads
+// active_tty, so it only exists with GATA_CAP_THREADS, otherwise the crash console path is used
+// directly (caps.h). get_glyph above stays on, crash_emit needs it.
 #ifdef GATA_CAP_THREADS
 
 /*
@@ -227,9 +217,8 @@ static void render_cursor(console_t* con, bool on) {
 #define GLYPH_RUN_MAX 16
 
 /*
- * draw_glyph_run - Renders `count` consecutive cells of row y in one pass.
- * Each glyph row of the run is written as one contiguous span, so the writes
- * fill whole cache lines instead of touching 32 bytes per glyph and moving on.
+ * draw_glyph_run - Render `count` cells of row y in one pass. Each glyph row goes out as one contiguous
+ * span, so the writes fill whole cache lines
  */
 static void draw_glyph_run(console_t* con, size_t y, size_t x0, size_t count) {
     size_t py = y * (fh + PADDING_Y);
@@ -273,8 +262,7 @@ static void draw_glyph_run(console_t* con, size_t y, size_t x0, size_t count) {
 }
 
 /*
- * flush_display - Flushes dirty character cells to the framebuffer
- * Assumption: No SMP
+ * flush_display - Push dirty cells to the framebuffer (assumes no SMP)
  */
 static void flush_display(console_t* con) {
     if (!fb) return;
@@ -326,7 +314,7 @@ static void flush_display(console_t* con) {
     }
     if (run_n) draw_glyph_run(con, run_y, run_x, run_n);
 
-    // After flushing, ensure the cursor is drawn on top of any recently changed cells
+    // After flushing, draw the cursor on top of any recently changed cells
     if (con->on) render_cursor(con, true);
 }
 
@@ -363,12 +351,9 @@ static void scroll(console_t* con) {
         }
     }
 
-    // Deferred mode: the framebuffer still matches the backbuffer for every
-    // cell that is not already dirty, so we can work out here exactly which
-    // cells will look different once the rows shift and mark only those.
-    // Costs no memory and makes no assumption about the resolution, and the
-    // common case (text scrolling over blanks or over itself) marks almost
-    // nothing instead of the whole screen.
+    // Deferred mode: the framebuffer still matches the backbuffer for every non-dirty cell, so
+    // work out which cells will differ after the shift and mark only those. No extra memory, any
+    // resolution, and text scrolling over blanks marks almost nothing
     if (active && con->defer_render && con->dirty) {
         console_char_t blank = (console_char_t){ ' ', con->fg, con->bg };
         for (size_t y = first; y < con->height; y++) {
@@ -409,7 +394,7 @@ static void emit_cp(console_t* con, uint32_t cp) {
     extern tty_t* volatile active_tty;
     bool active = (active_tty && active_tty->console == con);
 
-    if (cp == '\n')      { con->cx = 0; con->cy++; }
+    if (cp == '\n') { con->cx = 0; con->cy++; }
     else if (cp == '\r') { con->cx = 0; }
     else if (cp == '\b') {
         if (con->cx > 0) con->cx--;
@@ -509,9 +494,9 @@ static void _con_process_byte(console_t* con, uint8_t byte) {
         else { con->ansi_st = 0; emit_cp(con, '\x1b'); emit_cp(con, byte); }
         return;
     } else if (con->ansi_st == 2) {
-        if      (byte == 'H') { con->cx = 0; con->cy = con->header_rows; con->ansi_st = 0; }
+        if (byte == 'H') { con->cx = 0; con->cy = con->header_rows; con->ansi_st = 0; }
         else if (byte == '2') { con->ansi_st = 3; }
-        else                  { con->ansi_st = 0; }
+        else { con->ansi_st = 0; }
         return;
     } else if (con->ansi_st == 3) {
         if (byte == 'J') {
@@ -562,7 +547,7 @@ utf8_restart:
 
     con->u8cp = (con->u8cp << 6) | (byte & 0x3Fu);
     if (--con->u8n == 0) {
-        uint32_t cp  = con->u8cp;
+        uint32_t cp = con->u8cp;
         uint32_t min = (con->u8lead < 0xE0u) ? 0x80u
                      : (con->u8lead < 0xF0u) ? 0x800u : 0x10000u;
         if (cp < min || cp > 0x10FFFFu || (cp >= 0xD800u && cp <= 0xDFFFu)) cp = 0xFFFD;
@@ -652,7 +637,7 @@ void con_set_color(console_t* con, uint8_t foreground, uint8_t background) {
  */
 void con_enable_cursor(console_t* con, bool enabled) {
     bool flags = spinlock_acquire(&con->lock);
-    if (con->on && !enabled)  render_cursor(con, false);
+    if (con->on && !enabled) render_cursor(con, false);
     else if (!con->on && enabled) render_cursor(con, true);
     con->on = enabled;
     spinlock_release(&con->lock, flags);
@@ -706,9 +691,6 @@ void con_header_write(console_t* con, size_t row, const char* text, uint8_t fg, 
 
 #pragma region Crash Console
 
-/*
- * con_crash_width - Returns the width of the crash console in characters
- */
 size_t con_crash_width(void){ 
     return cols; 
 }
@@ -734,8 +716,7 @@ static inline void crash_set_cell(uint32_t x, uint32_t y, uint32_t cp) {
 }
 
 /*
- * crash_draw_glyph - Draw one codepoint cell to the framebuffer (write-only).
- * Works at any resolution, independent of the shadow's coverage.
+ * crash_draw_glyph - Draw one codepoint cell, write-only, works at any resolution
  */
 static void crash_draw_glyph(uint16_t gidx, uint8_t fg, uint8_t bg, uint32_t x, uint32_t y) {
     if (x >= (uint32_t)cols || y >= (uint32_t)rows) return;
@@ -771,9 +752,8 @@ static void crash_draw_glyph(uint16_t gidx, uint8_t fg, uint8_t bg, uint32_t x, 
 }
 
 /*
- * crash_scroll - Scroll the crash view by one text row. The framebuffer
- * matches the shadow, so redraw only cells that visually change, then
- * shift the shadow (never reading the framebuffer back)
+ * crash_scroll - Redraw only the cells that change (the framebuffer matches the shadow), then shift
+ * the shadow. Never reads the framebuffer back
  */
 static void crash_scroll(void) {
     uint32_t r = (uint32_t)rows;
@@ -802,12 +782,10 @@ static void crash_scroll(void) {
 }
 
 /*
- * crash_emit - Renders one Unicode codepoint directly to the framebuffer.
- * Drawing never depends on the shadow, so output is correct at any
- * resolution; the shadow only backs scroll redraws.
+ * crash_emit - Render one codepoint straight to the framebuffer. The shadow only backs scroll redraws, so output is right at any resolution
  */
 static void crash_emit(uint32_t cp) {
-    if      (cp == '\n') { ccx = 0; ccy++; }
+    if (cp == '\n') { ccx = 0; ccy++; }
     else if (cp == '\r') { ccx = 0; }
     else if (cp == '\t') { ccx = (ccx + 4) & ~3u; }
     else if (cp == '\b') {
@@ -827,9 +805,9 @@ static void crash_emit(uint32_t cp) {
     if (ccy >= (uint32_t)rows) crash_scroll();
 }
 
-static int      cu8n = 0;
+static int cu8n = 0;
 static uint32_t cu8cp = 0;
-static uint8_t  cu8lead = 0;
+static uint8_t cu8lead = 0;
 
 #ifndef GATA_CAP_THREADS
 static void crash_cursor_draw(bool on) {
@@ -845,10 +823,9 @@ static void crash_cursor_draw(bool on) {
 #endif
 
 /*
- * crash_decode - Feeds one raw byte through the crash console's UTF-8 decoder,
- * emitting a codepoint via crash_emit once a sequence completes. Rejects
- * overlongs, surrogates and out-of-range codepoints, and resynchronises on a
- * truncated sequence by reprocessing the offending byte as a fresh lead.
+ * crash_decode - Feed one raw byte to the crash console's UTF-8 decoder, crash_emit on a complete
+ * sequence. Rejects overlongs, surrogates and out of range codepoints, and on a truncated sequence
+ * reprocesses the bad byte as a new lead
  */
 static void crash_decode(uint8_t byte) {
 utf8_restart:
@@ -876,7 +853,7 @@ utf8_restart:
 
     cu8cp = (cu8cp << 6) | (byte & 0x3Fu);
     if (--cu8n == 0) {
-        uint32_t cp  = cu8cp;
+        uint32_t cp = cu8cp;
         uint32_t min = (cu8lead < 0xE0u) ? 0x80u
                      : (cu8lead < 0xF0u) ? 0x800u : 0x10000u;
         if (cp < min || cp > 0x10FFFFu || (cp >= 0xD800u && cp <= 0xDFFFu)) cp = 0xFFFD;
@@ -885,9 +862,8 @@ utf8_restart:
 }
 
 /*
- * crash_process_byte - Wraps crash_decode in the cursor bracket. Kept separate
- * so the decoder can return early on a rejected byte without skipping the
- * cursor redraw below.
+ * crash_process_byte - crash_decode inside the cursor bracket. Separate so the decoder can return
+ * early without skipping the cursor redraw
  */
 static void crash_process_byte(uint8_t byte) {
 #ifndef GATA_CAP_THREADS
@@ -900,8 +876,7 @@ static void crash_process_byte(uint8_t byte) {
 }
 
 /*
- * con_crash_set_colors - Sets the foreground/background used by con_crash_*
- * (shared with the panic screen's palette, since it's the same hardware path)
+ * con_crash_set_colors - Colors for con_crash_* (same palette as the panic screen)
  */
 void con_crash_set_colors(uint8_t fg, uint8_t bg) {
     cfg = fg & 0xF; cbg = bg & 0xF;
@@ -971,11 +946,11 @@ void con_crash_printf(const char* fmt, ...) {
  */
 void console_init(multiboot_parser_t* parser) {
     font_init();
-    multiboot_framebuffer_t* mbfb = multiboot_get_framebuffer(parser);
+    multiboot_framebuffer_t* mbfb = multiboot_framebuffer(parser);
     if (!mbfb) return;
     fb_phys = mbfb->addr;
-    fb_w = mbfb->width;  fb_h = mbfb->height;
-    fb_pitch = mbfb->pitch;  fb_bpp = mbfb->bpp;
+    fb_w = mbfb->width; fb_h = mbfb->height;
+    fb_pitch = mbfb->pitch; fb_bpp = mbfb->bpp;
     fb_sz = fb_h * fb_pitch;
     fb = (uint8_t*)PHYSMAP_P2V(fb_phys);
     fh = font_get_current()->header->charsize;
@@ -983,17 +958,15 @@ void console_init(multiboot_parser_t* parser) {
     rows = fb_h / (fh + PADDING_Y);
     kmemset(fb, 0, fb_sz);
 #ifndef GATA_CAP_THREADS
-    // No scheduler/TTY: the crash-console path is the only console there
-    // is, used for ordinary output rather than just panics, so start it
-    // with a normal palette instead of the panic screen's white-on-red.
+    // No scheduler/TTY: the crash console is the only console, used for normal output too, so start
+    // it with a normal palette instead of white-on-red.
     con_crash_set_colors(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
     con_crash_clear(CONSOLE_COLOR_BLACK);
 #endif
 }
 
 /*
- * console_print_char - Global accessor: prints a character to the active TTY
- * (or, with no scheduler/TTY, straight to the static framebuffer console)
+ * console_print_char - Print to the active TTY, or straight to the static console without a scheduler/TTY
  */
 void console_print_char(char character) {
 #ifdef GATA_CAP_THREADS
@@ -1006,8 +979,7 @@ void console_print_char(char character) {
 }
 
 /*
- * console_set_color - Global accessor: sets colors on the active TTY
- * (or the static framebuffer console's palette, with no scheduler/TTY)
+ * console_set_color - Colors on the active TTY, or the static console's palette without a scheduler/TTY
  */
 void console_set_color(uint8_t foreground, uint8_t background) {
 #ifdef GATA_CAP_THREADS
@@ -1020,8 +992,7 @@ void console_set_color(uint8_t foreground, uint8_t background) {
 }
 
 /*
- * console_enable_cursor - Global accessor: toggles the cursor on the active
- * TTY (threads path) or on the crash console (no-threads path).
+ * console_enable_cursor - Toggle the cursor on the active TTY (threads) or the crash console (no threads)
  */
 void console_enable_cursor(bool enabled) {
 #ifdef GATA_CAP_THREADS
@@ -1035,8 +1006,7 @@ void console_enable_cursor(bool enabled) {
 }
 
 /*
- * console_clear - Global accessor: clears the active TTY's display (or the
- * static framebuffer console, with no scheduler/TTY)
+ * console_clear - Clear the active TTY, or the static console without a scheduler/TTY
  */
 void console_clear(uint8_t background) {
 #ifdef GATA_CAP_THREADS
@@ -1048,7 +1018,7 @@ void console_clear(uint8_t background) {
 #endif
 }
 
-size_t console_get_width()  { return cols; }
+size_t console_get_width() { return cols; }
 size_t console_get_height() { return rows; }
 
 #endif // GATA_CAP_FRAMEBUFFER

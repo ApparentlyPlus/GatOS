@@ -1,10 +1,11 @@
 /*
  * i8042.c - Intel 8042 PS/2 Controller Driver Implementation
  *
- * This implementation follows the standard initialization sequence: 
- * 
- * Disable devices, Flush buffer, Set config byte, Self-test controller,
- * Check for dual channel, Interface tests, Enable devices
+ * Standard init sequence: disable devices, flush buffer, set config byte, self-test, check
+ * for dual channel, interface tests, enable devices.
+ *
+ * Reference: the OSDev wiki "8042 PS/2 Controller" page and the Linux kernel's
+ * i8042 driver (drivers/input/serio/i8042.c, GPL-2.0).
  *
  * Author: u/ApparentlyPlus
  */
@@ -15,7 +16,7 @@
 #include <kernel/sys/timers.h>
 #include <kernel/debug.h>
 
-// Only keyboard.c uses this - dead weight without GATA_CAP_INPUT (kernel/caps.h).
+// Only keyboard.c uses this, dead weight without GATA_CAP_INPUT (caps.h).
 #ifdef GATA_CAP_INPUT
 
 #define I8042_TIMEOUT_US 100000 // 100ms timeout for hardware sync
@@ -123,9 +124,8 @@ bool i8042_init(void) {
         return false;
     }
 
-    // Re-write config byte: the self-test resets the controller on many
-    // implementations (including QEMU), clearing the interrupt-enable and
-    // translation bits we set above.
+    // Re-write the config byte: the self-test resets the controller on many implementations (QEMU
+    // included), clearing the interrupt-enable and translation bits we set above.
     i8042_write_command(PS2_CMD_WRITE_CONFIG);
     i8042_write_data(config);
 

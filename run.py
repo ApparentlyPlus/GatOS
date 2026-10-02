@@ -8,10 +8,7 @@ import signal
 import argparse
 import subprocess
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple
 from multiprocessing import Pool, cpu_count
-
-# Configuration & Constants
 
 if os.name == 'nt':
     os.system("color")
@@ -41,7 +38,6 @@ BASE_TOOLCHAIN_DIR = ROOT_DIR / "toolchain"
 PLATFORM_TOOLCHAIN_DIR = BASE_TOOLCHAIN_DIR / f"x86_64-{OS_NAME}"
 GRUB_DIR = PLATFORM_TOOLCHAIN_DIR / "grub"
 
-# UPDATED PATHS FOR NEW STRUCTURE
 SRC_DIR = ROOT_DIR / "src"
 HEADER_DIR = ROOT_DIR / "src"
 BUILD_DIR = ROOT_DIR / "build"
@@ -54,8 +50,6 @@ GRUB_CFG = ISO_DIR / "boot/grub/grub.cfg"
 KERNEL_BIN = DIST_DIR / "kernel.bin"
 DEBUG_LOG = ROOT_DIR / "debug.log"
 
-# Toolchain Paths
-
 if not PLATFORM_TOOLCHAIN_DIR.exists():
     sys.stderr.write(f"{RED}[FATAL] Toolchain not found at: {PLATFORM_TOOLCHAIN_DIR}\n")
     sys.stderr.write(f"{YELLOW}Please run 'python setup.py' to install the toolchain.{NC}\n")
@@ -65,32 +59,27 @@ CC = PLATFORM_TOOLCHAIN_DIR / "gcc" / "bin" / f"x86_64-elf-gcc{EXE_EXT}"
 LD = PLATFORM_TOOLCHAIN_DIR / "gcc" / "bin" / f"x86_64-elf-ld{EXE_EXT}"
 STRIP = PLATFORM_TOOLCHAIN_DIR / "gcc" / "bin" / f"x86_64-elf-strip{EXE_EXT}"
 GRUB_MKSTANDALONE = GRUB_DIR / f"grub-mkstandalone{EXE_EXT}"
-GRUB_MKRESCUE_CMD = GRUB_DIR / f"grub-mkrescue{EXE_EXT}"
+GRUB_MKRESCUE = GRUB_DIR / f"grub-mkrescue{EXE_EXT}"
 
+GRUB_MODULE_DIR = GRUB_DIR / "x86_64-efi"
+GRUB_FONT_PATH = GRUB_DIR / "unicode.pf2"
 if OS_NAME == "win":
     QEMU_EXEC = PLATFORM_TOOLCHAIN_DIR / "qemu" / f"qemu-system-x86_64{EXE_EXT}"
     XORRISO_EXEC = PLATFORM_TOOLCHAIN_DIR / "xorriso" / f"xorriso{EXE_EXT}"
-    GRUB_MODULE_DIR = GRUB_DIR / "x86_64-efi"
-    GRUB_FONT_PATH = GRUB_DIR / "unicode.pf2"
 elif OS_NAME == "linux":
     QEMU_EXEC = PLATFORM_TOOLCHAIN_DIR / "qemu" / "QEMU-x86_64.AppImage"
     XORRISO_EXEC = PLATFORM_TOOLCHAIN_DIR / "xorriso" / "xorriso"
-    GRUB_MODULE_DIR = GRUB_DIR / "x86_64-efi"
-    GRUB_FONT_PATH = GRUB_DIR / "unicode.pf2"
 elif OS_NAME == "macos":
     QEMU_EXEC = PLATFORM_TOOLCHAIN_DIR / "qemu" / "bin" / "qemu-system-x86_64"
     XORRISO_EXEC = PLATFORM_TOOLCHAIN_DIR / "xorriso" / "xorriso"
-    GRUB_MODULE_DIR = GRUB_DIR / "x86_64-efi"
-    GRUB_FONT_PATH = GRUB_DIR / "unicode.pf2"
-
-# Compiler Flags & Profiles
 
 # Now with DCE!
-CFLAGS_BASE = ["-m64", "-ffreestanding", "-nostdlib", "-fno-pic", "-mcmodel=kernel", "-mno-red-zone", "-ffunction-sections", "-fdata-sections", f"-I{HEADER_DIR}"]
+CFLAGS_BASE = ["-m64", "-ffreestanding", "-nostdlib", "-fno-pic", "-mcmodel=kernel", "-mno-red-zone",
+               "-ffunction-sections", "-fdata-sections", f"-I{HEADER_DIR}"]
 KERNEL_FPU_RESTRICTIONS = ["-mno-sse", "-mno-sse2", "-mno-mmx", "-mno-80387"]
 
 # Files whose functions run (or are called) from interrupt context and must
-# never emit SSE instructions — corrupting the interrupted thread's XMM state.
+# never emit SSE instructions, since that corrupts the interrupted thread's XMM state.
 # Everything NOT in this set is free to use floats and SSE normally.
 KERNEL_INTERRUPT_PATH = {
     "arch/x86_64/cpu/interrupts.c",    # interrupt_dispatcher
@@ -107,24 +96,14 @@ KERNEL_INTERRUPT_PATH = {
 CPPFLAGS = [f"-I{HEADER_DIR}", f"-Wa,-I{HEADER_DIR}", "-D__ASSEMBLER__"]
 LDFLAGS = ["-n", "-nostdlib", "--gc-sections", f"-T{ROOT_DIR / 'targets/x86_64/linker.ld'}", "--no-relax", "-g"]
 
-# Optimization Levels
 CFLAGS_FAST = ["-O2", "-fomit-frame-pointer", "-fpredictive-commoning", "-fstrict-aliasing"]
-CFLAGS_VFAST = ["-O3", "-fpredictive-commoning", "-fstrict-aliasing", "-fno-delete-null-pointer-checks", "-fomit-frame-pointer", "-fno-stack-protector"]
+CFLAGS_VFAST = ["-O3", "-fpredictive-commoning", "-fstrict-aliasing", "-fno-delete-null-pointer-checks",
+                "-fomit-frame-pointer", "-fno-stack-protector"]
 
-# Profile Definitions
 BUILD_PROFILES = {
-    "default": {
-        "flags": [],
-        "confirm": False
-    },
-    "test": {
-        "flags": CFLAGS_FAST + ["-DTEST_BUILD"],
-        "confirm": False
-    },
-    "fast": {
-        "flags": CFLAGS_FAST,
-        "confirm": False
-    },
+    "default": {"flags": []},
+    "test": {"flags": CFLAGS_FAST + ["-DTEST_BUILD"]},
+    "fast": {"flags": CFLAGS_FAST},
     "vfast": {
         "flags": CFLAGS_VFAST,
         "confirm": True,
@@ -132,38 +111,38 @@ BUILD_PROFILES = {
     }
 }
 
-# Core Functions
+# See src/kernel/caps.h, appa and GatOS share the implication rules
+DEFAULT_CAPS = {"mem": True, "threads": True, "input": True, "time": False, "output": "framebuffer", "kbd": "hotplug"}
 
-def run_cmd(cmd: List[str | Path], cwd: Optional[Path] = None, env: Optional[Dict] = None, check: bool = True, timeout: int = None) -> bool:
-    cmd_str = [str(c) for c in cmd]
-    print(f"{BLUE}>>> {' '.join(cmd_str)}{f' (in {cwd})' if cwd else ''}{NC}")
+def run_cmd(cmd, cwd=None, env=None, check=True, timeout=None):
+    cmd = [str(c) for c in cmd]
+    print(f"{BLUE}>>> {' '.join(cmd)}{f' (in {cwd})' if cwd else ''}{NC}")
 
-    run_env = os.environ.copy()
-    if env: run_env.update(env)
+    full_env = os.environ.copy()
+    if env: full_env.update(env)
 
     try:
-        proc = subprocess.Popen(cmd_str, cwd=cwd, env=run_env, text=True, start_new_session=True)
+        proc = subprocess.Popen(cmd, cwd=cwd, env=full_env, text=True, start_new_session=True)
     except FileNotFoundError:
-        sys.stderr.write(f"{RED}[FATAL] Executable not found: {cmd_str[0]}{NC}\n")
+        sys.stderr.write(f"{RED}[FATAL] Executable not found: {cmd[0]}{NC}\n")
         sys.exit(1)
 
     try:
         ret = proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         if OS_NAME == "win":
-            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-                           capture_output=True, check=False)
+            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True, check=False)
         else:
             try:
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
             except ProcessLookupError:
                 pass
         proc.wait()
-        _reap_appimage_fuse_mounts(cmd_str)
+        reap_fuse(cmd)
         sys.stderr.write(f"\n{YELLOW}[WARN] Process timed out after {timeout}s (This is expected for timeout tests).{NC}\n")
         return False
 
-    _reap_appimage_fuse_mounts(cmd_str)
+    reap_fuse(cmd)
 
     if ret != 0:
         sys.stderr.write(f"{RED}[ERROR] Command failed with exit code {ret}{NC}\n")
@@ -171,21 +150,21 @@ def run_cmd(cmd: List[str | Path], cwd: Optional[Path] = None, env: Optional[Dic
         return False
     return True
 
-def _reap_appimage_fuse_mounts(cmd_str: List[str]):
+# kills leftover dwarfs (FUSE) processes from the QEMU AppImage
+def reap_fuse(cmd):
     if OS_NAME != "linux": return
-    if not any("AppImage" in c for c in cmd_str): return
+    if not any("AppImage" in c for c in cmd): return
     try:
-        result = subprocess.run(["pgrep", "-f", "dwarfs .*QEMU-x86_64.AppImage"],
-                                 capture_output=True, text=True, check=False)
-        for pid_str in result.stdout.split():
+        out = subprocess.run(["pgrep", "-f", "dwarfs .*QEMU-x86_64.AppImage"], capture_output=True, text=True, check=False)
+        for pid in out.stdout.split():
             try:
-                os.kill(int(pid_str), signal.SIGKILL)
+                os.kill(int(pid), signal.SIGKILL)
             except (ValueError, ProcessLookupError, PermissionError):
                 pass
     except FileNotFoundError:
-        pass  # pgrep not available; best-effort cleanup only
+        pass
 
-def get_kernel_version() -> str:
+def get_kernel_version():
     pattern = re.compile(r'KERNEL_VERSION\s*=\s*"([^"]*)"')
     for directory in {SRC_DIR, HEADER_DIR}:
         for file in directory.rglob("*.[chS]"):
@@ -195,32 +174,25 @@ def get_kernel_version() -> str:
             except Exception: pass
     return "v0.0.0-unknown"
 
-def fix_unix_permissions():
+def fix_perms():
     if OS_NAME == "win": return
     print(f"{YELLOW}[INFO] Ensuring toolchain permissions...{NC}")
     subprocess.run(["chmod", "-R", "+x", str(BASE_TOOLCHAIN_DIR)], check=False, capture_output=True)
 
-def compile_worker(job):
+def compile_one(job):
     compiler, src, obj, flags = job
     obj.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [str(compiler), "-c", *flags, str(src), "-o", str(obj)]
-    result = subprocess.run(cmd, text=True, capture_output=True)
-    return f"{RED}[FAIL] {src.name}:{NC}\n{result.stderr}" if result.returncode != 0 else f"{BLUE}[OK] {src.name}{NC}"
+    res = subprocess.run([str(compiler), "-c", *flags, str(src), "-o", str(obj)], text=True, capture_output=True)
+    return f"{RED}[FAIL] {src.name}:{NC}\n{res.stderr}" if res.returncode != 0 else f"{BLUE}[OK] {src.name}{NC}"
 
-def is_userspace(src: Path) -> bool:
-    rel = src.relative_to(SRC_DIR)
-    rel_str = rel.as_posix()
-    return rel_str.startswith("ulibc/") or rel_str == "kernel/uproc.c"
-
-def is_interrupt_path(src: Path) -> bool:
+def is_userspace(src):
     rel = src.relative_to(SRC_DIR).as_posix()
-    return rel in KERNEL_INTERRUPT_PATH
+    return rel.startswith("ulibc/") or rel == "kernel/uproc.c"
 
-# Capability flags (see src/kernel/caps.h for the implication contract appa
-# and GatOS share).
-DEFAULT_CAPS = {"mem": True, "threads": True, "input": True, "time": False, "output": "framebuffer", "kbd": "hotplug"}
+def is_interrupt_path(src):
+    return src.relative_to(SRC_DIR).as_posix() in KERNEL_INTERRUPT_PATH
 
-def caps_defines(caps: Dict) -> List[str]:
+def caps_defines(caps):
     d = []
     if caps["mem"]:     d.append("-DGATA_CAP_MEM")
     if caps["threads"]: d.append("-DGATA_CAP_THREADS")
@@ -230,15 +202,15 @@ def caps_defines(caps: Dict) -> List[str]:
     d.append({"default": "-DGATA_KBD_DEFAULT", "external": "-DGATA_KBD_EXTERNAL", "hotplug": "-DGATA_KBD_HOTPLUG"}[caps["kbd"]])
     return d
 
-def compile_sources(c_files: List[Path], asm_files: List[Path], profile_name: str, caps: Dict) -> bool:
+def compile_sources(c_files, asm_files, profile_name, caps):
     profile = BUILD_PROFILES.get(profile_name, BUILD_PROFILES["default"])
-    
+
     if profile.get("confirm", False):
         print(f"{RED}{profile['msg']}{NC}")
         try:
             sys.stdout.flush()
-            response = input(f"{YELLOW}Do you want to proceed? (y/N): {NC}").strip().lower()
-            if response != 'y':
+            answer = input(f"{YELLOW}Do you want to proceed? (y/N): {NC}").strip().lower()
+            if answer != 'y':
                 print(f"{RED}[ABORT] Build cancelled by user.{NC}")
                 sys.exit(0)
         except KeyboardInterrupt:
@@ -247,81 +219,68 @@ def compile_sources(c_files: List[Path], asm_files: List[Path], profile_name: st
 
     print(f"{YELLOW}[INFO] Starting parallel compilation (Profile: {profile_name.upper()})...{NC}")
 
-    caps_d = caps_defines(caps)
-    print(f"{CYAN}[INFO] Capabilities: {' '.join(caps_d)}{NC}")
+    defs = caps_defines(caps)
+    print(f"{CYAN}[INFO] Capabilities: {' '.join(defs)}{NC}")
 
     jobs = []
     for src in c_files:
-        src_flags = CFLAGS_BASE + profile["flags"] + caps_d
+        flags = CFLAGS_BASE + profile["flags"] + defs
         if not is_userspace(src):
-            # Kernel code gets LTO for better DCE
+            # LTO so the linker can drop dead kernel code
             if OS_NAME != "macos":
-                src_flags += ["-flto"]
+                flags += ["-flto"]
 
             # Only restrict SSE/FPU in files whose code runs from interrupt context.
             # Everything else (kmain, kernel threads, drivers init, libc, etc.) can
             # use floats and SSE freely, the lazy FPU mechanism handles state save/restore.
             if is_interrupt_path(src):
-                src_flags += KERNEL_FPU_RESTRICTIONS
-        jobs.append((CC, src, BUILD_DIR / src.relative_to(SRC_DIR).with_suffix(".o"), src_flags))
+                flags += KERNEL_FPU_RESTRICTIONS
+        jobs.append((CC, src, BUILD_DIR / src.relative_to(SRC_DIR).with_suffix(".o"), flags))
     for src in asm_files:
-        jobs.append((CC, src, BUILD_DIR / src.relative_to(SRC_DIR).with_suffix(".o"), CPPFLAGS + caps_d))
+        jobs.append((CC, src, BUILD_DIR / src.relative_to(SRC_DIR).with_suffix(".o"), CPPFLAGS + defs))
 
     with Pool(processes=cpu_count()) as pool:
-        results = pool.map(compile_worker, jobs)
+        results = pool.map(compile_one, jobs)
         pool.close()
         pool.join()
 
-    errors = [r for r in results if "[FAIL]" in r]
-    for res in results:
-        if "[FAIL]" in res: sys.stderr.write(res + "\n")
+    failed = [r for r in results if "[FAIL]" in r]
+    for r in failed:
+        sys.stderr.write(r + "\n")
 
-    if errors:
-        sys.stderr.write(f"{RED}[FATAL] Compilation failed for {len(errors)} files.{NC}\n")
+    if failed:
+        sys.stderr.write(f"{RED}[FATAL] Compilation failed for {len(failed)} files.{NC}\n")
         sys.exit(1)
     print(f"{GREEN}[INFO] Compilation successful.{NC}")
     return True
 
-def link_kernel(obj_files: List[Path]):
+def link_kernel(objs):
     DIST_DIR.mkdir(parents=True, exist_ok=True)
-    
+
     if OS_NAME == "macos":
-        run_cmd([LD, *LDFLAGS, "-o", KERNEL_BIN] + [str(f) for f in obj_files])
+        run_cmd([LD, *LDFLAGS, "-o", KERNEL_BIN] + [str(f) for f in objs])
     else:
-        linker_script = ROOT_DIR / "targets/x86_64/linker.ld"
-        gcc_link_flags = [
-            "-nostdlib",
-            "-flto",
-            "-g",
-            f"-Wl,-n,--gc-sections,--no-relax,-T{linker_script}"
-        ]
-        run_cmd([CC, *gcc_link_flags, "-o", KERNEL_BIN] + [str(f) for f in obj_files])
-        
+        script = ROOT_DIR / "targets/x86_64/linker.ld"
+        flags = ["-nostdlib", "-flto", "-g", f"-Wl,-n,--gc-sections,--no-relax,-T{script}"]
+        run_cmd([CC, *flags, "-o", KERNEL_BIN] + [str(f) for f in objs])
+
     run_cmd([STRIP, str(KERNEL_BIN)])
 
-def make_iso(output_iso: Path):
+def make_iso(iso):
     (ISO_DIR / "boot").mkdir(parents=True, exist_ok=True)
     shutil.copy2(KERNEL_BIN, ISO_DIR / "boot/kernel.bin")
-    print(f"{YELLOW}[INFO] Creating hybrid ISO: {output_iso}{NC}")
+    print(f"{YELLOW}[INFO] Creating hybrid ISO: {iso}{NC}")
 
     if not GRUB_FONT_PATH.exists():
         sys.stderr.write(f"{RED}[FATAL] Unicode font missing at {GRUB_FONT_PATH}{NC}\n")
         sys.exit(1)
 
-    cmd = [
-        str(GRUB_MKRESCUE_CMD),
-        f"--xorriso={XORRISO_EXEC}",
-        "--fonts=unicode",
-        "--themes=",
-        "-o", str(output_iso),
-        str(ISO_DIR)
-    ]
-    run_cmd(cmd, cwd=GRUB_DIR)
+    run_cmd([str(GRUB_MKRESCUE), f"--xorriso={XORRISO_EXEC}", "--fonts=unicode", "--themes=",
+             "-o", str(iso), str(ISO_DIR)], cwd=GRUB_DIR)
 
-
-def build_iso(c_src: List[Path], asm_src: List[Path], obj_files: List[Path], iso_name: str, profile: str, caps: Dict):
+def build_iso(c_src, asm_src, objs, iso_name, profile, caps):
     if compile_sources(c_src, asm_src, profile, caps):
-        link_kernel(obj_files)
+        link_kernel(objs)
         make_iso(DIST_DIR / iso_name)
 
 def clean():
@@ -334,14 +293,12 @@ def clean():
     if DEBUG_LOG.exists(): DEBUG_LOG.unlink()
     print(f"{GREEN}[INFO] Clean complete.{NC}")
 
-def verify_environment() -> bool:
+def check_env():
     print(f"{YELLOW}[INFO] Verifying environment...{NC}")
-    fix_unix_permissions()
-    missing = []
-    tools = {"QEMU": QEMU_EXEC, "GCC": CC, "LD": LD, "STRIP": STRIP, "GRUB Standalone": GRUB_MKSTANDALONE, "GRUB Rescue": GRUB_MKRESCUE_CMD}
+    fix_perms()
+    tools = {"QEMU": QEMU_EXEC, "GCC": CC, "LD": LD, "STRIP": STRIP, "GRUB Standalone": GRUB_MKSTANDALONE, "GRUB Rescue": GRUB_MKRESCUE}
     if OS_NAME in ["linux", "macos"]: tools["Xorriso"] = XORRISO_EXEC
-    for name, path in tools.items():
-        if path and not path.exists(): missing.append(f"{name} ({path})")
+    missing = [f"{name} ({path})" for name, path in tools.items() if path and not path.exists()]
     if missing:
         sys.stderr.write(f"{RED}[ERROR] Missing dependencies:{NC}\n")
         for m in missing: sys.stderr.write(f"- {m}\n")
@@ -349,54 +306,34 @@ def verify_environment() -> bool:
     print(f"{GREEN}[INFO] Environment OK.{NC}")
     return True
 
-def find_iso_file() -> Optional[Path]:
-    if not DIST_DIR.exists(): return None
-    isos = list(DIST_DIR.glob("GatOS-*.iso"))
-    if not isos: return None
-    isos.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    return isos[0]
+def newest_iso():
+    isos = sorted(DIST_DIR.glob("GatOS-*.iso"), key=lambda p: p.stat().st_mtime, reverse=True) if DIST_DIR.exists() else []
+    return isos[0] if isos else None
 
-# Parse headless and timeout options
-
-def parse_timeout(val: str) -> Optional[int]:
-    """Parses 10s, 2m, 1h into seconds."""
-    match = re.match(r"^(\d+)([smh])$", val)
-    if not match:
+# "10s", "2m", "1h" -> seconds
+def parse_timeout(val):
+    m = re.match(r"^(\d+)([smh])$", val)
+    if not m:
         sys.stderr.write(f"{YELLOW}[WARN] Invalid timeout format '{val}'. Ignoring. Use 10s, 5m, etc.{NC}\n")
         return None
-    num, unit = int(match.group(1)), match.group(2)
-    if unit == 's': return num
-    if unit == 'm': return num * 60
-    if unit == 'h': return num * 3600
-    return None
+    return int(m.group(1)) * {'s': 1, 'm': 60, 'h': 3600}[m.group(2)]
 
-def run_qemu(iso_file: Path, headless: bool = False, timeout: Optional[int] = None):
-    print(f"{GREEN}[SUCCESS] Starting QEMU with {iso_file.name}...{NC}")
+def run_qemu(iso, headless=False, timeout=None):
+    print(f"{GREEN}[SUCCESS] Starting QEMU with {iso.name}...{NC}")
     print(f"{CYAN}   > Mode: {'Headless' if headless else 'GUI'}")
     print(f"   > Timeout: {f'{timeout} seconds' if timeout else 'None'}{NC}")
-    
-    qemu_cmd = [str(QEMU_EXEC)]
-    if OS_NAME == "linux": qemu_cmd.append("qemu-system-x86_64")
-    
-    # QEMU Flags. 3 serial ports: COM1 (mon:stdio - boot stage markers, and
-    # real program stdout when built with GATA_OUTPUT_SERIAL), COM2 (kernel's
-    # own internal debug.log), COM3 (userspace debug channel, ulibc/debug.h).
-    args = [
-        "-cdrom", str(iso_file),
-        "-serial", "mon:stdio",
-        "-serial", f"file:{DEBUG_LOG}",
-        "-serial", f"file:{ROOT_DIR / 'user-debug.log'}",
-        "-cpu", "kvm64,+smep,+smap"
-    ]
-    
-    if headless:
-        args.append("-nographic")
-    
-    qemu_cmd.extend(args)
-    
-    # We use run_cmd but need to handle the fact that timeout might kill it cleanly
-    run_cmd(qemu_cmd, check=False, timeout=timeout)
-    
+
+    cmd = [str(QEMU_EXEC)]
+    if OS_NAME == "linux": cmd.append("qemu-system-x86_64")
+
+    # 3 serial ports: COM1 (mon:stdio, boot stage markers and the program's stdout under
+    # GATA_OUTPUT_SERIAL), COM2 (kernel debug.log), COM3 (userspace debug channel, ulibc/debug.h)
+    cmd += ["-cdrom", str(iso), "-serial", "mon:stdio", "-serial", f"file:{DEBUG_LOG}",
+            "-serial", f"file:{ROOT_DIR / 'user-debug.log'}", "-cpu", "kvm64,+smep,+smap"]
+    if headless: cmd.append("-nographic")
+
+    run_cmd(cmd, check=False, timeout=timeout)
+
     if timeout:
         print(f"{GREEN}[INFO] QEMU session ended (Timeout enforced).{NC}")
 
@@ -438,74 +375,59 @@ def print_help():
   python run.py all timeout=30s
     """)
 
-# Entry Point
-
 def main():
     parser = argparse.ArgumentParser(description="GatOS Build System", add_help=False)
-    parser.add_argument("args", nargs="*", help="Flexible arguments")
-    args_parsed = parser.parse_args()
-    user_args = args_parsed.args
+    parser.add_argument("args", nargs="*")
+    argv = parser.parse_args().args
 
-    # State
     command = "all"
-    build_profile = "default"
-    run_headless = False
-    run_timeout = None
+    profile = "default"
+    headless = False
+    timeout = None
     caps = dict(DEFAULT_CAPS)
-    kbd_explicit = False
+    kbd_set = False
 
-    valid_commands = {"all", "build", "clean", "help"}
-    valid_build_profiles = set(BUILD_PROFILES.keys())
-    valid_kbd = {"default", "external", "hotplug"}
+    for arg in argv:
+        a = arg.lower()
 
-    # Improved Parser
-    for arg in user_args:
-        arg_lower = arg.lower()
-
-        if arg_lower == "help":
+        if a == "help":
             print_help()
             sys.exit(0)
-        elif arg_lower in valid_commands:
-            command = arg_lower
-        elif arg_lower in valid_build_profiles:
-            build_profile = arg_lower
-        elif arg_lower == "headless":
-            run_headless = True
-        elif arg_lower.startswith("timeout="):
-            run_timeout = parse_timeout(arg_lower.split("=")[1])
-        elif arg_lower == "nomem":
+        elif a in ("all", "build", "clean"):
+            command = a
+        elif a in BUILD_PROFILES:
+            profile = a
+        elif a == "headless":
+            headless = True
+        elif a.startswith("timeout="):
+            timeout = parse_timeout(a.split("=")[1])
+        elif a == "nomem":
             caps["mem"] = False
-        elif arg_lower == "nothreads":
+        elif a == "nothreads":
             caps["threads"] = False
-        elif arg_lower == "noinput":
+        elif a == "noinput":
             caps["input"] = False
-        elif arg_lower == "time":
+        elif a == "time":
             caps["time"] = True
-        elif arg_lower == "serial":
+        elif a == "serial":
             caps["output"] = "serial"
-        elif arg_lower.startswith("kbd="):
-            kbd = arg_lower.split("=", 1)[1]
-            if kbd in valid_kbd:
+        elif a.startswith("kbd="):
+            kbd = a.split("=", 1)[1]
+            if kbd in ("default", "external", "hotplug"):
                 caps["kbd"] = kbd
-                kbd_explicit = True
+                kbd_set = True
             else:
                 print(f"{YELLOW}[WARN] Invalid kbd level '{kbd}'. Use default|external|hotplug. Ignoring.{NC}")
         else:
             print(f"{YELLOW}[WARN] Unknown argument '{arg}', ignoring.{NC}")
 
-    # DEFAULT_CAPS' kbd=hotplug exists to match the historical "full build"
-    # default when nothing is passed - but it forces threads/mem back on
-    # (see below), which would silently undo an explicit nomem/nothreads if
-    # left alone. Only keep it if the user actually asked for it; otherwise
-    # fall back to the plain PS/2-only level so a strip request actually
-    # strips.
-    if not kbd_explicit and (not caps["mem"] or not caps["threads"] or not caps["input"]):
+    # The kbd=hotplug default only exists to match the old full build. It forces threads and mem
+    # back on, which would undo an explicit nomem/nothreads, so only keep it when asked for.
+    if not kbd_set and (not caps["mem"] or not caps["threads"] or not caps["input"]):
         caps["kbd"] = "default"
 
-    # Implications mirror src/kernel/caps.h, applied here too so an explicit
-    # config like "nothreads kbd=hotplug" doesn't silently produce an
-    # inconsistent build - the user asked for hotplug, which needs threads,
-    # so give it threads back rather than failing later at link time.
+    # Same implications as caps.h, so "nothreads kbd=hotplug" doesn't build something inconsistent.
+    # Hotplug needs threads, so give it threads back instead of failing at link time.
     if caps["kbd"] == "hotplug":
         if not caps["threads"]:
             print(f"{YELLOW}[WARN] kbd=hotplug needs a scheduler (it runs as a thread) - re-enabling threads.{NC}")
@@ -526,24 +448,24 @@ def main():
         clean()
         return
 
-    if not verify_environment(): sys.exit(1)
+    if not check_env(): sys.exit(1)
 
     c_src = list(SRC_DIR.rglob("*.c"))
     asm_src = list(SRC_DIR.rglob("*.S"))
-    obj_files = [BUILD_DIR / f.relative_to(SRC_DIR).with_suffix(".o") for f in c_src + asm_src]
-    iso_name = f"GatOS-{"Test-Build-" if build_profile == "test" else ""}{get_kernel_version()}.iso"
+    objs = [BUILD_DIR / f.relative_to(SRC_DIR).with_suffix(".o") for f in c_src + asm_src]
+    iso_name = f"GatOS-{"Test-Build-" if profile == "test" else ""}{get_kernel_version()}.iso"
 
     if command == "build":
         clean()
-        build_iso(c_src, asm_src, obj_files, iso_name, build_profile, caps)
+        build_iso(c_src, asm_src, objs, iso_name, profile, caps)
     elif command == "all":
         try: clean()
         except Exception: pass
-        build_iso(c_src, asm_src, obj_files, iso_name, build_profile, caps)
+        build_iso(c_src, asm_src, objs, iso_name, profile, caps)
 
-        iso = find_iso_file()
+        iso = newest_iso()
         if iso:
-            run_qemu(iso, headless=run_headless, timeout=run_timeout)
+            run_qemu(iso, headless=headless, timeout=timeout)
         else:
             sys.stderr.write(f"{RED}[ERROR] ISO file not found after build.{NC}\n")
             sys.exit(1)

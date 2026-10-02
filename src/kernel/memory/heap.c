@@ -1,11 +1,6 @@
 /*
  * heap.c - Multi-Arena Kernel Heap Manager Implementation
- * 
- * This implementation provides a robust heap manager supporting multiple arenas,
- * block coalescing, and comprehensive integrity checking. Each heap maintains
- * separate arenas with free lists sorted by size for efficient allocation.
- * The global kernel heap is automatically initialized on first use.
- * 
+ *
  * Author: u/ApparentlyPlus
  */
 
@@ -23,8 +18,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-// This entire file is dead weight without a heap to manage - see
-// GATA_CAP_MEM in kernel/caps.h.
+// Dead weight without a heap to manage, see GATA_CAP_MEM in caps.h.
 #ifdef GATA_CAP_MEM
 
 // Magic numbers for validation
@@ -132,17 +126,11 @@ size_t heap_align_size(size_t size) {
     return align_up(size, BLOCK_ALIGN);
 }
 
-/*
- * get_footer - Return the footer of a block
- */
 static inline blk_foot_t* get_footer(blk_hdr_t* header) {
     // Footer sits right after header + user data
     return (blk_foot_t*)((uint8_t*)header + sizeof(blk_hdr_t) + header->size);
 }
 
-/*
- * get_user_ptr - Return a pointer to the user data of a block
- */
 static inline void* get_user_ptr(blk_hdr_t* header) {
     // Pointer returned to caller (first byte of user data)
     return (void*)((uint8_t*)header + sizeof(blk_hdr_t));
@@ -371,9 +359,6 @@ static void freelist_insert(heap_t* heap, blk_hdr_t* block) {
 
 #pragma region Arena Management
 
-/*
- * find_arena - Find which arena an address belongs to
- */
 static arena_t* find_arena(heap_t* heap, uintptr_t addr) {
     if (!heap) return NULL;
 
@@ -536,9 +521,6 @@ static arena_t* create_arena(heap_t* heap, size_t size) {
     return arena;
 }
 
-/*
- * destroy_arena - Free the arena's memory and remove it from the heap
- */
 static void destroy_arena(heap_t* heap, arena_t* arena) {
     if (!heap || !arena) return;
     if (!arena_validate(arena)) return;
@@ -670,9 +652,7 @@ static blk_hdr_t* coalesce_blocks(heap_t* heap,
 #pragma region Allocation/Deallocation
 
 /*
- * find_free_block - Search the size bins for a block that fits.
- * The block's own bin may hold smaller blocks and needs a scan; any
- * block in a higher bin is guaranteed large enough.
+ * find_free_block - Scan the size bins for a fit. The block's own bin can hold smaller blocks so it gets scanned, any higher bin is big enough
  */
 static blk_hdr_t* find_free_block(heap_t* heap, size_t size) {
     if (!heap) return NULL;
@@ -778,7 +758,7 @@ static void split_block(heap_t* heap, blk_hdr_t* block, size_t size) {
 }
 
 /*
- * heap_malloc_internal - Core allocation path used by kernel/user wrappers
+ * heap_malloc_internal - Core alloc path behind the kernel/user wrappers
  * Author note: ASSUMES LOCK IS HELD!
  */
 static void* heap_malloc_internal(heap_t* heap, size_t size, bool zero, bool urgent) {
@@ -865,7 +845,7 @@ static void* heap_malloc_internal(heap_t* heap, size_t size, bool zero, bool urg
 }
 
 /*
- * heap_free_internal - Core free logic used by kernel/user wrappers
+ * heap_free_internal - Core free path behind the kernel/user wrappers
  * Author note: ASSUMES LOCK IS HELD!
  */
 static void heap_free_internal(heap_t* heap, void* ptr) {
@@ -907,9 +887,6 @@ static void heap_free_internal(heap_t* heap, void* ptr) {
 
 #pragma region Kernel Heap Management
 
-/*
- * heap_kernel_init - Initialize the global kernel heap
- */
 heap_status_t heap_kernel_init(void) {
     bool init_flags = spinlock_acquire(&heap_lock);
 
@@ -1266,9 +1243,6 @@ heap_status_t heap_check(heap_t* heap) {
     return HEAP_OK;
 }
 
-/*
- * heap_dump - Basic human-friendly heap dump for debugging
- */
 void heap_dump(heap_t* heap) {
     if (!heap_validate(heap)) {
         LOGF("[HEAP DUMP] Invalid heap\n");

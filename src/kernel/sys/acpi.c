@@ -1,10 +1,6 @@
 /*
  * acpi.c - ACPI (Advanced Configuration and Power Interface) related functions.
  *
- * This implementation handles locating the RSDP, finding the Root SDT (RSDT/XSDT),
- * and iterating through ACPI tables. It uses the VMM to safe virtual memory mapping
- * for ACPI tables, ensuring they are mapped into the dynamic kernel region.
- *
  * Author: u/ApparentlyPlus
  */
 
@@ -17,10 +13,9 @@
 #include <kernel/debug.h>
 #include <klibc/string.h>
 
-// Only needed to bring up the LAPIC/IOAPIC (GATA_NEEDS_INTERRUPT_SUBSYS in
-// kernel/caps.h) - exceptions are handled straight off the IDT and don't
-// need ACPI. Maps tables through the VMM, so this also needs a heap
-// (already implied by that macro).
+// Only needed to bring up the LAPIC/IOAPIC (GATA_NEEDS_INTERRUPT_SUBSYS in caps.h), exceptions come
+// straight off the IDT. Maps tables through the VMM, so it needs a heap too (implied by that
+// macro).
 #ifdef GATA_NEEDS_INTERRUPT_SUBSYS
 
 static RSDP2Descriptor* rsdp = NULL;
@@ -29,8 +24,7 @@ static void* rsdt_virt = NULL; // Mapped virtual address
 static bool xsdt_ok = false;
 
 /*
- * acpi_map_phys - Map a physical address to a virtual one using vmm_alloc
- * This ensures the address is mapped in a safe, non-conflicting region of kernel memory.
+ * acpi_map_phys - Map a physical address through vmm_alloc
  */
 void* acpi_map_phys(uint64_t phys_addr, size_t size) {
     if (phys_addr == 0) return NULL;
@@ -41,8 +35,8 @@ void* acpi_map_phys(uint64_t phys_addr, size_t size) {
     uint64_t base_phys = phys_addr - page_offset;
     size_t map_size = align_up(size + page_offset, PAGE_SIZE);
 
-    // VM_FLAG_DEVICE maps these registers uncacheable; FOREIGN keeps the
-    // VMM from ever freeing the firmware-owned physical range
+    // VM_FLAG_DEVICE maps the registers uncacheable, FOREIGN stops the VMM from freeing the
+    // firmware-owned range
     // MMIO dude, I hate that we need the vmm for this dammit
     vmm_status_t status = vmm_alloc(NULL, map_size, VM_FLAG_WRITE | VM_FLAG_FOREIGN | VM_FLAG_DEVICE, (void*)base_phys, &virt_addr);
 
@@ -85,7 +79,7 @@ RSDP2Descriptor* acpi_find_rsdp(multiboot_parser_t* parser) {
     if (!parser || !parser->initialized || !parser->info)
         return NULL;
 
-    multiboot_acpi_t* acpi_tag = multiboot_get_acpi_rsdp(parser);
+    multiboot_acpi_t* acpi_tag = multiboot_acpi_rsdp(parser);
     if (!acpi_tag)
         return NULL;
 

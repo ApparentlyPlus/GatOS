@@ -1,9 +1,8 @@
 /*
  * gdt.c - Global Descriptor Table and Task State Segment implementation
  *
- * This file implements the management of the GDT and TSS in C, assuming control
- * from the early assembly-based GDT defined in the bootloader. 
- * 
+ * Takes over from the early GDT defined in the boot assembly.
+ *
  * Author: u/ApparentlyPlus
  */
 
@@ -16,9 +15,6 @@
 static gdt_t gdt;
 static tss_t tss;
 
-/*
- * gdt_set_entry - Populates a single GDT entry with provided parameters
- */
 static void gdt_set_entry(int index, uint32_t base, uint32_t limit, uint8_t access, uint8_t flags) {
     gdt.entries[index].limit_low = (uint16_t)(limit & 0xFFFF);
     gdt.entries[index].base_low = (uint16_t)(base & 0xFFFF);
@@ -88,14 +84,10 @@ void gdt_init(void) {
     ptr.limit = sizeof(gdt) - 1;
     ptr.base = (uintptr_t)&gdt;
 
-    /* Note from the author:
-    
-    We cannot change the CS register directly with a mov instruction, so to update cs 
-    to the new KERNEL_CS, the code does a far return trick utilizing the current static linker stack:
-    
-    - push %2 to push the new CS selector (KERNEL_CS) onto the static stack
-    - push %%rax to push the address of the very next instruction (1f) onto the static stack
-    - retfq to pops those two values off the static stack into the cs and rip registers */ 
+    /*
+     * Note from the author: cs can't be set with a mov, so we far return. Push KERNEL_CS,
+     * push the address of the next instruction (1f), and retfq pops both into cs and rip.
+     */
     
     __asm__ volatile (
         "lgdt %0\n\t"
