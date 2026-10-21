@@ -169,6 +169,17 @@ static void _putbuf(const char* buf, size_t len) {
     if (target_tty) tty_write(target_tty, buf, len);
 }
 
+/*
+ * _out_lock, _out_unlock - One printf is one write, however many 256 byte chunks it flushes
+ */
+static bool _out_lock(void) {
+    return tty_lock_output(_out_tty());
+}
+
+static void _out_unlock(bool held) {
+    tty_unlock_output(_out_tty(), held);
+}
+
 // Accumulates printf output on the stack before hitting the sink
 typedef struct {
   char buf[256];
@@ -920,15 +931,13 @@ int printf_(const char* format, ...)
 {
   va_list va;
   va_start(va, format);
-  // One printf is one write, however many 256 byte chunks it flushes
-  tty_t* t = _out_tty();
-  bool held = tty_lock_output(t);
+  bool held = _out_lock();
   kout_buf_t b;
   b.n = 0;
   const out_fct_wrap_type wrap = { _kout_append, &b };
   const int ret = _vsnprintf(_out_fct, (char*)(uintptr_t)&wrap, (size_t)-1, format, va);
   _kout_flush(&b);
-  tty_unlock_output(t, held);
+  _out_unlock(held);
   va_end(va);
   return ret;
 }
@@ -956,14 +965,13 @@ int snprintf_(char* buffer, size_t count, const char* format, ...)
 
 int vprintf_(const char* format, va_list va)
 {
-  tty_t* t = _out_tty();
-  bool held = tty_lock_output(t);
+  bool held = _out_lock();
   kout_buf_t b;
   b.n = 0;
   const out_fct_wrap_type wrap = { _kout_append, &b };
   const int ret = _vsnprintf(_out_fct, (char*)(uintptr_t)&wrap, (size_t)-1, format, va);
   _kout_flush(&b);
-  tty_unlock_output(t, held);
+  _out_unlock(held);
   return ret;
 }
 

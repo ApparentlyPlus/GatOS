@@ -27,13 +27,15 @@ static void tty_init(tty_t* tty, console_t* console) {
     tty->next = NULL;
     tty->prev = NULL;
     tty->wait_head = NULL;
-    tty->out_owner = NULL;
-    tty->out_depth = 0;
-    tty->out_wait = NULL;
-    tty->held_len = 0;
+
+    tty->own_out.owner = NULL;
+    tty->own_out.depth = 0;
+    tty->own_out.wait = NULL;
+    tty->own_out.held_len = 0;
+    spinlock_init(&tty->own_out.lock, "tty_out_lock");
+    tty->out = &tty->own_out;
 
     spinlock_init(&tty->lock, "tty_lock");
-    spinlock_init(&tty->out_lock, "tty_out_lock");
     ldisc_init(&tty->ldisc);
 }
 
@@ -101,6 +103,8 @@ tty_t* tty_create(void) {
     return tty;
 }
 
+static void out_release(tty_t* tty);
+
 void tty_destroy(tty_t* tty) {
     if (!tty) return;
     
@@ -110,7 +114,13 @@ void tty_destroy(tty_t* tty) {
     // they're already T_DEAD from procs_kill_tty, so sched_add routes them straight to reaping
     bool iflags = intr_save();
     wake_all(&tty->wait_head);
-    wake_all(&tty->out_wait);
+
+    // An owner just killed mid-write never lets go. Its TTY dies with it, but a shared COM1 doesn't
+    tty_output_t* o = tty->out;
+    bool oflags = spinlock_acquire(&o->lock);
+    if (o->owner && o->owner->state == T_DEAD) out_release(tty);
+    else wake_all(&o->wait);
+    spinlock_release(&o->lock, oflags);
     intr_restore(iflags);
 
     ensure_lock();
@@ -285,6 +295,13 @@ void tty_set_mode(tty_t* tty, bool raw, bool echo) {
 }
 
 /*
+ * tty_emit - Put text on the TTY's console
+ */
+static void tty_emit(tty_t* tty, const char* buf, size_t count) {
+    if (tty->console) con_write_batch(tty->console, buf, count);
+}
+
+/*
  * tty_can_wait - Whether the caller is a scheduled thread that may block. Interrupt handlers and early boot can't
  */
 static bool tty_can_wait(void) {
@@ -298,18 +315,19 @@ bool tty_lock_output(tty_t* tty) {
     if (!tty || !tty_can_wait()) return false;
     thread_t* me = sched_current();
 
+    tty_output_t* o = tty->out;
     while (true) {
-        bool flags = spinlock_acquire(&tty->out_lock);
-        if (!tty->out_owner || tty->out_owner == me) {
-            tty->out_owner = me;
-            tty->out_depth++;
-            spinlock_release(&tty->out_lock, flags);
+        bool flags = spinlock_acquire(&o->lock);
+        if (!o->owner || o->owner == me) {
+            o->owner = me;
+            o->depth++;
+            spinlock_release(&o->lock, flags);
             return true;
         }
         me->state = T_BLOCKED;
-        me->rnext = tty->out_wait;
-        tty->out_wait = me;
-        spinlock_release(&tty->out_lock, flags);
+        me->rnext = o->wait;
+        o->wait = me;
+        spinlock_release(&o->lock, flags);
         sched_yield();
     }
 }
@@ -319,39 +337,48 @@ bool tty_lock_output(tty_t* tty) {
  */
 void tty_unlock_output(tty_t* tty, bool held) {
     if (!tty || !held) return;
-    bool flags = spinlock_acquire(&tty->out_lock);
-    if (--tty->out_depth == 0) {
-        if (tty->held_len && tty->console) con_write_batch(tty->console, tty->held, tty->held_len);
-        tty->held_len = 0;
-        tty->out_owner = NULL;
-        wake_all(&tty->out_wait);
-    }
-    spinlock_release(&tty->out_lock, flags);
+    bool flags = spinlock_acquire(&tty->out->lock);
+    if (--tty->out->depth == 0) out_release(tty);
+    spinlock_release(&tty->out->lock, flags);
+}
+
+/*
+ * out_release - Write out what interrupt context held back, drop the owner and wake the waiting writers.
+ * Call with the output's lock held
+ */
+static void out_release(tty_t* tty) {
+    tty_output_t* o = tty->out;
+    if (o->held_len) tty_emit(tty, o->held, o->held_len);
+    o->held_len = 0;
+    o->depth = 0;
+    o->owner = NULL;
+    wake_all(&o->wait);
 }
 
 /*
  * tty_write - High-level console write. One call comes out in one piece
  */
 void tty_write(tty_t* tty, const char* buf, size_t count) {
-    if (!tty || !tty->console) return;
+    if (!tty) return;
 
     if (tty_lock_output(tty)) {
-        con_write_batch(tty->console, buf, count);
+        tty_emit(tty, buf, count);
         tty_unlock_output(tty, true);
         return;
     }
 
     // Can't wait
-    bool flags = spinlock_acquire(&tty->out_lock);
-    if (tty->out_owner) {
-        size_t room = TTY_HELD_SIZE - tty->held_len;
+    tty_output_t* o = tty->out;
+    bool flags = spinlock_acquire(&o->lock);
+    if (o->owner) {
+        size_t room = TTY_HELD_SIZE - o->held_len;
         if (count > room) count = room;
-        kmemcpy(tty->held + tty->held_len, buf, count);
-        tty->held_len += (uint32_t)count;
+        kmemcpy(o->held + o->held_len, buf, count);
+        o->held_len += (uint32_t)count;
     } else {
-        con_write_batch(tty->console, buf, count);
+        tty_emit(tty, buf, count);
     }
-    spinlock_release(&tty->out_lock, flags);
+    spinlock_release(&o->lock, flags);
 }
 
 /*

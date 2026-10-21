@@ -415,7 +415,7 @@ static bool t_out_contend(void) {
     sched_add(w);
     for (int i = 0; i < 10; i++) sched_yield();
     TEST_ASSERT(!out_done);
-    TEST_ASSERT(t->out_wait == w);
+    TEST_ASSERT(t->out->wait == w);
 
     tty_write(t, "B", 1);
     tty_unlock_output(t, held);
