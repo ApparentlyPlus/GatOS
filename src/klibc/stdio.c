@@ -143,34 +143,45 @@ typedef struct {
 } out_fct_wrap_type;
 
 
-void _putchar(char character){
-#if defined(GATA_OUTPUT_SERIAL)
-    // Real program stdout shares COM1 with the boot-stage QEMU_LOG markers -
-    // both are meant to be the one observable channel when there's no
-    // framebuffer to look at.
-    serial_write_char_port(SERIAL_COM1, character);
-#elif defined(GATA_CAP_THREADS)
-    tty_t* target_tty = active_tty;
-
-    // Route to the calling thread's own TTY if the scheduler is running
+#ifdef GATA_CAP_THREADS
+/*
+ * _out_tty - Where kernel output goes: the calling thread's own TTY if the scheduler is running, else the active one.
+ * NULL before the first TTY exists, or once it was closed via ALT+F4
+ */
+static tty_t* _out_tty(void) {
     if (sched_active()) {
         thread_t* current = sched_current();
         if (current && current->process && current->process->tty) {
-            target_tty = current->process->tty;
+            return current->process->tty;
         }
     }
+    return active_tty;
+}
+#endif
 
-    // If the TTY is NULL (closed via ALT+F4), discard the output
-    if (!target_tty) {
+/*
+ * _out_direct - Output with no TTY to go through. Serial output shares COM1 with the boot-stage QEMU_LOG markers,
+ * builds without a scheduler use the crash console's allocation-free path, and a threaded build drops it
+ */
+static void _out_direct(const char* buf, size_t len) {
+#if defined(GATA_OUTPUT_SERIAL)
+    serial_write_len_port(SERIAL_COM1, buf, len);
+#elif !defined(GATA_CAP_THREADS)
+    for (size_t i = 0; i < len; i++) con_crash_putc(buf[i]);
+#else
+    (void)buf; (void)len;
+#endif
+}
+
+void _putchar(char character){
+#ifdef GATA_CAP_THREADS
+    tty_t* target_tty = _out_tty();
+    if (target_tty) {
+        tty_write(target_tty, &character, 1);
         return;
     }
-
-    tty_write(target_tty, &character, 1);
-#else
-    // No scheduler/TTY: write straight to the framebuffer, the same
-    // allocation-free path panic uses for the crash screen.
-    con_crash_putc(character);
 #endif
+    _out_direct(&character, 1);
 }
 
 /*
@@ -179,25 +190,32 @@ void _putchar(char character){
  */
 static void _putbuf(const char* buf, size_t len) {
     if (!len) return;
-#if defined(GATA_OUTPUT_SERIAL)
-    serial_write_len_port(SERIAL_COM1, buf, len);
-#elif defined(GATA_CAP_THREADS)
-    tty_t* target_tty = active_tty;
-
-    if (sched_active()) {
-        thread_t* current = sched_current();
-        if (current && current->process && current->process->tty) {
-            target_tty = current->process->tty;
-        }
-    }
-
-    if (!target_tty) {
+#ifdef GATA_CAP_THREADS
+    tty_t* target_tty = _out_tty();
+    if (target_tty) {
+        tty_write(target_tty, buf, len);
         return;
     }
+#endif
+    _out_direct(buf, len);
+}
 
-    tty_write(target_tty, buf, len);
+/*
+ * _out_lock, _out_unlock - One printf is one write, however many 256 byte chunks it flushes
+ */
+static bool _out_lock(void) {
+#ifdef GATA_CAP_THREADS
+    return tty_lock_output(_out_tty());
 #else
-    for (size_t i = 0; i < len; i++) con_crash_putc(buf[i]);
+    return false;
+#endif
+}
+
+static void _out_unlock(bool held) {
+#ifdef GATA_CAP_THREADS
+    tty_unlock_output(_out_tty(), held);
+#else
+    (void)held;
 #endif
 }
 
@@ -952,6 +970,7 @@ int printf_(const char* format, ...)
 {
   va_list va;
   va_start(va, format);
+  bool held = _out_lock();
   // Only n needs initializing; zeroing the whole struct would let GCC
   // emit SSE stores, which kernel code reached from IRQs must never do
   kout_buf_t b;
@@ -959,6 +978,7 @@ int printf_(const char* format, ...)
   const out_fct_wrap_type wrap = { _kout_append, &b };
   const int ret = _vsnprintf(_out_fct, (char*)(uintptr_t)&wrap, (size_t)-1, format, va);
   _kout_flush(&b);
+  _out_unlock(held);
   va_end(va);
   return ret;
 }
@@ -986,11 +1006,13 @@ int snprintf_(char* buffer, size_t count, const char* format, ...)
 
 int vprintf_(const char* format, va_list va)
 {
+  bool held = _out_lock();
   kout_buf_t b;
   b.n = 0;
   const out_fct_wrap_type wrap = { _kout_append, &b };
   const int ret = _vsnprintf(_out_fct, (char*)(uintptr_t)&wrap, (size_t)-1, format, va);
   _kout_flush(&b);
+  _out_unlock(held);
   return ret;
 }
 

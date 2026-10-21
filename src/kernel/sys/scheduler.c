@@ -147,6 +147,16 @@ bool sched_active(void) {
 }
 
 /*
+ * sched_in_interrupt - True inside an interrupt or exception handler
+ */
+bool sched_in_interrupt(void) {
+    if (!sched_stack_top) return false;
+    uint64_t sp;
+    __asm__ volatile("mov %%rsp, %0" : "=r"(sp));
+    return sp < sched_stack_top && sp >= sched_stack_top - KERNEL_STACK_SIZE;
+}
+
+/*
  * sched_next_wake - Returns the timestamp of the next sleeping thread to wake up, or UINT64_MAX if none
  */
 uint64_t sched_next_wake(void) {

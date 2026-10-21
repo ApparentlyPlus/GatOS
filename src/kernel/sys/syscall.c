@@ -86,6 +86,11 @@ void syscall_dispatcher(cpu_context_t* regs) {
             // flushes once per buffer.
             char kbuf[4096];
             size_t done = 0;
+
+            // Own the TTY for the whole write, so its 4KB chunks stay together
+            tty_t* tty = current->process ? current->process->tty : NULL;
+            bool held = tty_lock_output(tty);
+
             while (done < len) {
                 size_t block = len - done;
                 if (block > sizeof(kbuf)) block = sizeof(kbuf);
@@ -98,6 +103,7 @@ void syscall_dispatcher(cpu_context_t* regs) {
                     bool ints = intr_save();
                     if (!vmm_check_buffer(current->process->vmm, buf + done + filled, n, VM_FLAG_USER)) {
                         intr_restore(ints);
+                        tty_unlock_output(tty, held);
                         LOGF("[SYSCALL] SYS_WRITE: Invalid buffer pointer 0x%lx (len: %zu) from thread '%s' (PID %u)\n", (uintptr_t)buf, len, current->name, current->process ? current->process->pid : 0);
                         sched_exit();
                     }
@@ -110,19 +116,11 @@ void syscall_dispatcher(cpu_context_t* regs) {
                     filled += n;
                 }
 
-                // Userspace stdout goes through this syscall in every output mode.
-                // GATA_OUTPUT_SERIAL only rewires the kernel realm's _putchar (klibc/stdio.c), so
-                // without this serial builds would still send userspace output to the headless
-                // framebuffer TTY.
-                #ifdef GATA_OUTPUT_SERIAL
-                serial_write_len_port(SERIAL_COM1, kbuf, block);
-                #else
-                if (current->process && current->process->tty) {
-                    tty_write(current->process->tty, kbuf, block);
-                }
-                #endif
+                // Serial builds too: their TTY has no console, so tty_write sends it to COM1
+                if (tty) tty_write(tty, kbuf, block);
                 done += block;
             }
+            tty_unlock_output(tty, held);
             regs->rax = (uint64_t)len;
             break;
         }
@@ -234,13 +232,15 @@ void syscall_dispatcher(cpu_context_t* regs) {
             
             #ifdef GATA_OUTPUT_SERIAL
 
+            // Screen control is ANSI on COM1, written through the TTY like the text it styles
+            tty_t* tty = current->process->tty;
             switch (cmd) {
                 case TTY_CTRL_CLEAR:
-                    serial_write_port(SERIAL_COM1, "\x1b[2J\x1b[H");
+                    tty_write(tty, "\x1b[2J\x1b[H", 7);
                     regs->rax = 0;
                     break;
                 case TTY_CTRL_CURSOR:
-                    serial_write_port(SERIAL_COM1, (arg2 & 0xFF) ? "\x1b[?25h" : "\x1b[?25l");
+                    tty_write(tty, (arg2 & 0xFF) ? "\x1b[?25h" : "\x1b[?25l", 6);
                     regs->rax = 0;
                     break;
                 case TTY_CTRL_GET_DIMS:
@@ -251,20 +251,20 @@ void syscall_dispatcher(cpu_context_t* regs) {
                     static const int a[8] = { 0, 4, 2, 6, 1, 5, 3, 7 };
                     char seq[24];
                     int fg = (int)(arg2 & 0xF), bg = (int)((arg2 >> 8) & 0xF);
-                    ksnprintf(seq, sizeof(seq), "\x1b[%d;%dm",
+                    int n = ksnprintf(seq, sizeof(seq), "\x1b[%d;%dm",
                               (fg & 8) ? 90 + a[fg & 7] : 30 + a[fg & 7],
                               (bg & 8) ? 100 + a[bg & 7] : 40 + a[bg & 7]);
-                    serial_write_port(SERIAL_COM1, seq);
+                    tty_write(tty, seq, (size_t)n);
                     regs->rax = 0;
                     break;
                 }
                 // The TTY still exists for its line discipline, it just has no console
                 case TTY_CTRL_SET_MODE:
-                    tty_set_mode(current->process->tty, (arg2 & TTY_MODE_RAW) != 0, (arg2 & TTY_MODE_ECHO) != 0);
+                    tty_set_mode(tty, (arg2 & TTY_MODE_RAW) != 0, (arg2 & TTY_MODE_ECHO) != 0);
                     regs->rax = 0;
                     break;
                 case TTY_CTRL_PENDING:
-                    regs->rax = (uint64_t)tty_pending(current->process->tty);
+                    regs->rax = (uint64_t)tty_pending(tty);
                     break;
                 default:
                     regs->rax = (uint64_t)-1;
