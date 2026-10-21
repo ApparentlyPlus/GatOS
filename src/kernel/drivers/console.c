@@ -410,9 +410,15 @@ static void emit_cp(console_t* con, uint32_t cp) {
         if (con->cx >= con->width) { con->cx = 0; con->cy++; }
         if (con->cy >= con->height) scroll(con);
         size_t idx = con->cy * con->width + con->cx;
-        con->buffer[idx] = (console_char_t){ cp, con->fg, con->bg };
-        DIRTY_SET(con, idx);
-        if (active && !con->defer_render) draw_glyph(get_glyph(cp), con->cx * fw, con->cy * (fh + PADDING_Y), VGA_PALETTE[con->fg], VGA_PALETTE[con->bg]);
+        console_char_t* cell = &con->buffer[idx];
+
+        // Rewriting a cell with what it already holds is free, so a program that
+        // redraws the whole screen from ESC[H only repaints the cells that changed
+        if (cell->codepoint != cp || cell->fg != con->fg || cell->bg != con->bg) {
+            *cell = (console_char_t){ cp, con->fg, con->bg };
+            DIRTY_SET(con, idx);
+            if (active && !con->defer_render) draw_glyph(get_glyph(cp), con->cx * fw, con->cy * (fh + PADDING_Y), VGA_PALETTE[con->fg], VGA_PALETTE[con->bg]);
+        }
         con->cx++;
     }
     if (con->cy >= con->height) scroll(con);

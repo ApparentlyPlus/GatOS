@@ -234,7 +234,6 @@ void syscall_dispatcher(cpu_context_t* regs) {
             
             #ifdef GATA_OUTPUT_SERIAL
 
-            (void)current;
             switch (cmd) {
                 case TTY_CTRL_CLEAR:
                     serial_write_port(SERIAL_COM1, "\x1b[2J\x1b[H");
@@ -259,6 +258,14 @@ void syscall_dispatcher(cpu_context_t* regs) {
                     regs->rax = 0;
                     break;
                 }
+                // The TTY still exists for its line discipline, it just has no console
+                case TTY_CTRL_SET_MODE:
+                    tty_set_mode(current->process->tty, (arg2 & TTY_MODE_RAW) != 0, (arg2 & TTY_MODE_ECHO) != 0);
+                    regs->rax = 0;
+                    break;
+                case TTY_CTRL_PENDING:
+                    regs->rax = (uint64_t)tty_pending(current->process->tty);
+                    break;
                 default:
                     regs->rax = (uint64_t)-1;
                     break;
@@ -296,6 +303,13 @@ void syscall_dispatcher(cpu_context_t* regs) {
                     regs->rax = 0;
                     break;
                 }
+                case TTY_CTRL_SET_MODE:
+                    tty_set_mode(tty, (arg2 & TTY_MODE_RAW) != 0, (arg2 & TTY_MODE_ECHO) != 0);
+                    regs->rax = 0;
+                    break;
+                case TTY_CTRL_PENDING:
+                    regs->rax = (uint64_t)tty_pending(tty);
+                    break;
                 default:
                     regs->rax = (uint64_t)-1;
                     break;

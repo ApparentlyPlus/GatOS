@@ -38,32 +38,42 @@ static struct {
 static struct {
     char line[INPUT_LINE_MAX];
     uint32_t pos;
-} input_ld;
+    bool raw;
+    bool echo;
+} input_ld = { .echo = true };
+
+// Caller holds input_ring.lock
+static void ring_push(char c) {
+    uint32_t next = (input_ring.head + 1) % INPUT_RING_SIZE;
+    if (next != input_ring.tail) {
+        input_ring.buffer[input_ring.head] = c;
+        input_ring.head = next;
+    }
+}
 
 static void nothread_ldisc_input(char c) {
+    // No editing in raw mode, the reader gets the byte as is
+    if (input_ld.raw) {
+        if (input_ld.echo) input_echo(c);
+        bool flags = spinlock_acquire(&input_ring.lock);
+        ring_push(c);
+        spinlock_release(&input_ring.lock, flags);
+        return;
+    }
+
     if (c == '\b') {
         if (input_ld.pos > 0) {
             input_ld.pos--;
-            input_echo('\b');
+            if (input_ld.echo) input_echo('\b');
         }
         return;
     }
 
     if (c == '\n' || c == '\r') {
-        input_echo('\n');
+        if (input_ld.echo) input_echo('\n');
         bool flags = spinlock_acquire(&input_ring.lock);
-        for (uint32_t i = 0; i < input_ld.pos; i++) {
-            uint32_t next = (input_ring.head + 1) % INPUT_RING_SIZE;
-            if (next != input_ring.tail) {
-                input_ring.buffer[input_ring.head] = input_ld.line[i];
-                input_ring.head = next;
-            }
-        }
-        uint32_t next = (input_ring.head + 1) % INPUT_RING_SIZE;
-        if (next != input_ring.tail) {
-            input_ring.buffer[input_ring.head] = '\n';
-            input_ring.head = next;
-        }
+        for (uint32_t i = 0; i < input_ld.pos; i++) ring_push(input_ld.line[i]);
+        ring_push('\n');
         spinlock_release(&input_ring.lock, flags);
         input_ld.pos = 0;
         return;
@@ -71,7 +81,7 @@ static void nothread_ldisc_input(char c) {
 
     if (input_ld.pos < INPUT_LINE_MAX - 1) {
         input_ld.line[input_ld.pos++] = c;
-        input_echo(c);
+        if (input_ld.echo) input_echo(c);
     }
 }
 #endif
@@ -83,11 +93,23 @@ void input_init(void) {
     LOGF("[INPUT] Hub initialized.\n");
 }
 
+/*
+ * arrow_final - Last byte of the VT100 sequence for an arrow key, or 0 if it isn't one
+ */
+static char arrow_final(keycode_t key) {
+    switch (key) {
+        case KEY_UP: return 'A';
+        case KEY_DOWN: return 'B';
+        case KEY_RIGHT: return 'C';
+        case KEY_LEFT: return 'D';
+        default: return 0;
+    }
+}
+
 #ifdef GATA_CAP_THREADS
 
 /*
- * input_handle_key - Without a scheduler/TTY there's no dashboard, Alt+Tab or per-process routing, so the key
- * goes through the no-threads line discipline: echo, line-buffer, commit to the ring on Enter
+ * input_handle_key - Keyboard event entry point, handles hotkeys and routes the rest to the active TTY
  */
 void input_handle_key(key_event_t event) {
     // Only handle key press events, ignore releases for now
@@ -118,10 +140,15 @@ void input_handle_key(key_event_t event) {
     // If we have an active TTY, route the key event to it
     if (active_tty) {
         char c = keycode_to_ascii(event);
+        char arrow = arrow_final(event.keycode);
         if (c) {
             tty_input(active_tty, c);
         } else if (event.keycode == KEY_BACKSPACE) {
             tty_input(active_tty, '\b');
+        } else if (arrow && active_tty->ldisc.raw) {
+            tty_input(active_tty, '\x1b');
+            tty_input(active_tty, '[');
+            tty_input(active_tty, arrow);
         }
     }
 }
@@ -136,7 +163,13 @@ void input_handle_key(key_event_t event) {
     if (!event.pressed) return;
 
     char c = keycode_to_ascii(event);
+    char arrow = arrow_final(event.keycode);
     if (!c && event.keycode == KEY_BACKSPACE) c = '\b';
+    if (!c && arrow && input_ld.raw) {
+        nothread_ldisc_input('\x1b');
+        nothread_ldisc_input('[');
+        c = arrow;
+    }
     if (!c) return;
 
     nothread_ldisc_input(c);
@@ -155,6 +188,27 @@ int input_getchar(void) {
     input_ring.tail = (input_ring.tail + 1) % INPUT_RING_SIZE;
     spinlock_release(&input_ring.lock, flags);
     return (unsigned char)c;
+}
+
+/*
+ * input_pending - Chars input_getchar could pop right now
+ */
+size_t input_pending(void) {
+    bool flags = spinlock_acquire(&input_ring.lock);
+    size_t n = (input_ring.head - input_ring.tail + INPUT_RING_SIZE) % INPUT_RING_SIZE;
+    spinlock_release(&input_ring.lock, flags);
+    return n;
+}
+
+/*
+ * input_set_mode - The no-threads twin of tty_set_mode
+ */
+void input_set_mode(bool raw, bool echo) {
+    bool flags = spinlock_acquire(&input_ring.lock);
+    input_ld.raw = raw;
+    input_ld.echo = echo;
+    input_ld.pos = 0;
+    spinlock_release(&input_ring.lock, flags);
 }
 
 #endif

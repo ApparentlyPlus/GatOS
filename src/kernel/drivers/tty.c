@@ -245,7 +245,8 @@ char tty_read_char(tty_t* tty) {
 }
 
 /*
- * tty_read - Blocks until there's data, then drains what it can under one lock. Stops early on newline
+ * tty_read - Blocks until there's data, then drains what it can under one lock. Stops early on newline,
+ * or as soon as anything was read in raw mode
  */
 size_t tty_read(tty_t* tty, char* buf, size_t count) {
     if (!tty || !buf || count == 0) return 0;
@@ -265,8 +266,29 @@ size_t tty_read(tty_t* tty, char* buf, size_t count) {
             }
         }
         spinlock_release(&tty->lock, flags);
+        if (tty->ldisc.raw) break;
     }
     return i;
+}
+
+/*
+ * tty_pending - Bytes a read could take right now without blocking
+ */
+size_t tty_pending(tty_t* tty) {
+    if (!tty) return 0;
+    return (tty->head - tty->tail + TTY_BUFFER_SIZE) % TTY_BUFFER_SIZE;
+}
+
+/*
+ * tty_set_mode - Switch the line discipline between canonical and raw, and set echo
+ */
+void tty_set_mode(tty_t* tty, bool raw, bool echo) {
+    if (!tty) return;
+    bool flags = spinlock_acquire(&tty->lock);
+    tty->ldisc.raw = raw;
+    tty->ldisc.echo = echo;
+    tty->ldisc.pos = 0; // a half typed line means nothing in the other mode
+    spinlock_release(&tty->lock, flags);
 }
 
 /*
@@ -323,6 +345,7 @@ void ldisc_init(ldisc_t* ld) {
     kmemset(ld->line_buffer, 0, LDISC_LINE_MAX);
     ld->pos = 0;
     ld->echo = true;
+    ld->raw = false;
 }
 
 /*
@@ -330,6 +353,13 @@ void ldisc_init(ldisc_t* ld) {
  */
 void ldisc_input(tty_t* tty, char c) {
     ldisc_t* ld = &tty->ldisc;
+
+    // No editing in raw mode, the reader gets the byte as is
+    if (ld->raw) {
+        if (ld->echo) tty_echo(tty, c);
+        tty_push_char_raw(tty, c);
+        return;
+    }
 
     if (c == '\b') {
         if (ld->pos > 0) {

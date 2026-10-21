@@ -5,6 +5,7 @@
  */
 
 #pragma once
+#include <stddef.h>
 #include <kernel/drivers/keyboard.h>
 
 void input_init(void);
@@ -14,3 +15,5 @@ void input_handle_key(key_event_t event);
 // caps.h). Filled from the keyboard IRQ handler via input_handle_key, -1 if empty. No hotkeys here,
 // they all act on the TTY/dashboard.
 int input_getchar(void);
+size_t input_pending(void);
+void input_set_mode(bool raw, bool echo);
