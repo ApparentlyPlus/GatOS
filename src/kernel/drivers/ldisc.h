@@ -1,7 +1,8 @@
 /*
  * ldisc.h - Line Discipline Header
  *
- * Canonical mode, input is buffered until a newline.
+ * Canonical mode buffers input until a newline. Raw mode hands every byte
+ * to the reader as it arrives, for programs that want single keys.
  *
  * Author: u/ApparentlyPlus
  */
@@ -20,6 +21,7 @@ typedef struct {
     char line_buffer[LDISC_LINE_MAX];
     uint32_t pos;
     bool echo;
+    bool raw;
 } ldisc_t;
 
 void ldisc_init(ldisc_t* ld);

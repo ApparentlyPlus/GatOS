@@ -140,23 +140,23 @@ typedef struct {
 } out_fct_wrap_type;
 
 
-void _putchar(char character){
-    tty_t* target_tty = active_tty;
-
-    // Route to the calling thread's own TTY if the scheduler is running
+/*
+ * _out_tty - Where kernel output goes: the calling thread's own TTY if the scheduler is running, else the active one.
+ * NULL once it was closed via ALT+F4, and the output is discarded
+ */
+static tty_t* _out_tty(void) {
     if (sched_active()) {
         thread_t* current = sched_current();
         if (current && current->process && current->process->tty) {
-            target_tty = current->process->tty;
+            return current->process->tty;
         }
     }
+    return active_tty;
+}
 
-    // If the TTY is NULL (closed via ALT+F4), discard the output
-    if (!target_tty) {
-        return;
-    }
-
-    tty_write(target_tty, &character, 1);
+void _putchar(char character){
+    tty_t* target_tty = _out_tty();
+    if (target_tty) tty_write(target_tty, &character, 1);
 }
 
 /*
@@ -165,22 +165,8 @@ void _putchar(char character){
  */
 static void _putbuf(const char* buf, size_t len) {
     if (!len) return;
-    tty_t* target_tty = active_tty;
-
-    // Route to the calling thread's own TTY if the scheduler is running
-    if (sched_active()) {
-        thread_t* current = sched_current();
-        if (current && current->process && current->process->tty) {
-            target_tty = current->process->tty;
-        }
-    }
-
-    // If the TTY is NULL (closed via ALT+F4), discard the output
-    if (!target_tty) {
-        return;
-    }
-
-    tty_write(target_tty, buf, len);
+    tty_t* target_tty = _out_tty();
+    if (target_tty) tty_write(target_tty, buf, len);
 }
 
 // Accumulates printf output on the stack before hitting the sink
@@ -934,11 +920,15 @@ int printf_(const char* format, ...)
 {
   va_list va;
   va_start(va, format);
+  // One printf is one write, however many 256 byte chunks it flushes
+  tty_t* t = _out_tty();
+  bool held = tty_lock_output(t);
   kout_buf_t b;
   b.n = 0;
   const out_fct_wrap_type wrap = { _kout_append, &b };
   const int ret = _vsnprintf(_out_fct, (char*)(uintptr_t)&wrap, (size_t)-1, format, va);
   _kout_flush(&b);
+  tty_unlock_output(t, held);
   va_end(va);
   return ret;
 }
@@ -966,11 +956,14 @@ int snprintf_(char* buffer, size_t count, const char* format, ...)
 
 int vprintf_(const char* format, va_list va)
 {
+  tty_t* t = _out_tty();
+  bool held = tty_lock_output(t);
   kout_buf_t b;
   b.n = 0;
   const out_fct_wrap_type wrap = { _kout_append, &b };
   const int ret = _vsnprintf(_out_fct, (char*)(uintptr_t)&wrap, (size_t)-1, format, va);
   _kout_flush(&b);
+  tty_unlock_output(t, held);
   return ret;
 }
 

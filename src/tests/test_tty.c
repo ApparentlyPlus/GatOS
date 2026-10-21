@@ -31,6 +31,7 @@ static bool t_create_fields(void) {
     TEST_ASSERT(t->tail == 0);
     TEST_ASSERT(t->ldisc.pos == 0);
     TEST_ASSERT(t->ldisc.echo == true);
+    TEST_ASSERT(t->ldisc.raw == false);
     tty_destroy(t);
     return true;
 }
@@ -384,6 +385,138 @@ static bool t_ldisc_rst(void) {
 }
 #pragma endregion
 
+#pragma region raw mode
+
+static bool t_mode_nohold(void) {
+    tty_t* t = tty_create();
+    tty_set_mode(t, true, false);
+    tty_input(t, 'w');
+    TEST_ASSERT(t->ldisc.pos == 0);
+    TEST_ASSERT(tty_pending(t) == 1);
+    tty_destroy(t);
+    return true;
+}
+
+static bool t_mode_partial(void) {
+    /* A raw read returns what is there instead of waiting to fill the buffer */
+    tty_t* t = tty_create();
+    tty_set_mode(t, true, false);
+    tty_input(t, 'a'); tty_input(t, 'b');
+    char buf[16]; size_t n = tty_read(t, buf, sizeof(buf));
+    TEST_ASSERT(n == 2 && buf[0] == 'a' && buf[1] == 'b');
+    TEST_ASSERT(tty_pending(t) == 0);
+    tty_destroy(t);
+    return true;
+}
+
+static bool t_mode_bs(void) {
+    /* Backspace is just a byte in raw mode */
+    tty_t* t = tty_create();
+    tty_set_mode(t, true, false);
+    tty_input(t, '\b');
+    TEST_ASSERT(tty_read_char(t) == '\b');
+    tty_destroy(t);
+    return true;
+}
+
+static bool t_mode_drop(void) {
+    /* Switching modes drops a half typed line */
+    tty_t* t = tty_create();
+    t->ldisc.echo = false;
+    tty_input(t, 'x'); tty_input(t, 'y');
+    tty_set_mode(t, true, false);
+    TEST_ASSERT(t->ldisc.pos == 0);
+    TEST_ASSERT(tty_pending(t) == 0);
+    tty_set_mode(t, false, false);
+    tty_input(t, 'z'); tty_input(t, '\n');
+    TEST_ASSERT(tty_pending(t) == 2);
+    tty_destroy(t);
+    return true;
+}
+
+static bool t_pending_wrap(void) {
+    tty_t* t = tty_create();
+    t->head = 2;
+    t->tail = TTY_BUFFER_SIZE - 3;
+    TEST_ASSERT(tty_pending(t) == 5);
+    tty_destroy(t);
+    return true;
+}
+#pragma endregion
+
+#pragma region output ownership
+
+/* What row 0 of the console holds, as a string */
+static bool row_is(tty_t* t, const char* want) {
+    console_t* c = t->console;
+    size_t base = c->header_rows * c->width;
+    for (size_t i = 0; want[i]; i++)
+        if (c->buffer[base + i].codepoint != (uint32_t)(unsigned char)want[i]) return false;
+    return true;
+}
+
+static bool t_out_nolock(void) {
+    /* No scheduler yet, so nobody can wait for the output */
+    tty_t* t = tty_create();
+    TEST_ASSERT(!tty_lock_output(t));
+    TEST_ASSERT(t->out_owner == NULL);
+    tty_destroy(t);
+    return true;
+}
+
+static bool t_out_direct(void) {
+    tty_t* t = tty_create();
+    tty_write(t, "abc", 3);
+    TEST_ASSERT(row_is(t, "abc"));
+    TEST_ASSERT(t->held_len == 0);
+    tty_destroy(t);
+    return true;
+}
+
+static bool t_out_held(void) {
+    /* A write that can't wait for the owner is held back, not mixed into its line */
+    tty_t* t = tty_create();
+    t->out_owner = (struct thread*)0x1;
+    t->out_depth = 1;
+    tty_write(t, "xyz", 3);
+    TEST_ASSERT(t->held_len == 3);
+    TEST_ASSERT(t->console->buffer[0].codepoint == ' ');
+    t->out_owner = NULL;
+    t->out_depth = 0;
+    tty_destroy(t);
+    return true;
+}
+
+static bool t_out_flush(void) {
+    /* The owner's last unlock writes the held text out after its own */
+    tty_t* t = tty_create();
+    t->out_owner = (struct thread*)0x1;
+    t->out_depth = 1;
+    tty_write(t, "late", 4);
+    tty_unlock_output(t, true);
+    TEST_ASSERT(row_is(t, "late"));
+    TEST_ASSERT(t->held_len == 0);
+    TEST_ASSERT(t->out_owner == NULL);
+    tty_destroy(t);
+    return true;
+}
+
+static bool t_out_cap(void) {
+    tty_t* t = tty_create();
+    t->out_owner = (struct thread*)0x1;
+    t->out_depth = 1;
+    char big[TTY_HELD_SIZE + 100];
+    kmemset(big, 'h', sizeof(big));
+    tty_write(t, big, sizeof(big));
+    tty_write(t, "more", 4);
+    TEST_ASSERT(t->held_len == TTY_HELD_SIZE);
+    t->out_owner = NULL;
+    t->out_depth = 0;
+    tty_destroy(t);
+    return true;
+}
+#pragma endregion
+
 #pragma region tty_write
 
 static bool t_wr_noring(void) {
@@ -538,6 +671,16 @@ void test_tty(void) {
     run_test("backspace: data correct",       t_bs_data);
     run_test("ldisc: overflow safe",          t_ldisc_ovf);
     run_test("ldisc: pos resets after commit",t_ldisc_rst);
+    run_test("raw mode: no line hold",        t_mode_nohold);
+    run_test("raw mode: partial read",        t_mode_partial);
+    run_test("raw mode: backspace is a byte", t_mode_bs);
+    run_test("raw mode: switch drops line",   t_mode_drop);
+    run_test("pending: wraps around",         t_pending_wrap);
+    run_test("output: no lock before sched",  t_out_nolock);
+    run_test("output: direct when unowned",   t_out_direct);
+    run_test("output: held while owned",      t_out_held);
+    run_test("output: unlock flushes held",   t_out_flush);
+    run_test("output: held text is capped",   t_out_cap);
     run_test("write: no ring buffer touch",   t_wr_noring);
     run_test("write: zero length safe",       t_wr_zero);
     run_test("write: single char",            t_wr_single);
