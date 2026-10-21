@@ -4,9 +4,10 @@
  * Builds the same cpu_context_t as ISR.S, so the scheduler and fault handlers see one
  * layout whether a thread entered via SYSCALL or an IRQ.
  *
- * Two exits. Fast: sysretq, when the saved user RIP (RCX) is canonical. Slow: iretq, when
- * it isn't, because sysretq with a non canonical RCX faults at CPL=0 with the user's GS base
- * still active (SWAPGS already ran), which is a privilege escalation. iretq faults at CPL=3.
+ * Two exits, both returning to whatever the iret frame says (the dispatcher may have changed
+ * it). Fast: sysretq, when iret_rip is canonical. Slow: iretq, when it isn't, because sysretq
+ * with a non canonical RCX faults at CPL=0 with the user's GS base still active (SWAPGS
+ * already ran), which is a privilege escalation. iretq faults at CPL=3.
  *
  * Author: u/ApparentlyPlus
  */
@@ -21,6 +22,28 @@
 
 .global syscall_entry
 .extern syscall_dispatcher
+
+// cpu_context_t offsets, counted from the bottom of the GPR block
+#define CTX_IRET_RIP (17 * 8)
+
+// Pops the GPR block of a cpu_context_t, leaving rsp at vector_number
+.macro RESTORE_GPRS
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rbp
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
+.endm
 
 .section .text
 .code64
@@ -73,45 +96,30 @@ syscall_entry:
     call syscall_dispatcher
     add rsp, 8
 
-    // Restore all regs
-    pop r15
-    pop r14
-    pop r13
-    pop r12
-    pop r11
-    pop r10
-    pop r9
-    pop r8
-    pop rbp
-    pop rdi
-    pop rsi
-    pop rdx
-    pop rcx
-    pop rbx
-    pop rax
-
-    // Skip vector number and error code
-    add rsp, 16
-
-    // Now we select which exit path we take
-    // Stack points at the iret frame
-    // RCX = user RIP, R11 = user RFLAGS
-
+    // Pick the exit while every register is still kernel scratch
     // Guard against the SYSRETQ non canonical RCX thingie
-    mov r10, rcx
-    shl r10, 16
-    sar r10, 16
-    cmp r10, rcx
+    mov rcx, [rsp + CTX_IRET_RIP]
+    mov rax, rcx
+    shl rax, 16
+    sar rax, 16
+    cmp rax, rcx
     jne .slow_exit
 
     // Fast path through sysretq
-    // Load user RSP from the iret frame (offset +24 = iret_rsp)
+    RESTORE_GPRS
+    add rsp, 16 // skip error code
+
+    // sysretq takes RIP from RCX and RFLAGS from R11, both clobbered by the ABI anyway
+    // Stack points at the iret frame: +0 rip, +16 rflags, +24 rsp
+    mov rcx, [rsp]
+    mov r11, [rsp + 16]
     mov rsp, [rsp + 24]
     swapgs
     sysretq
 
 .slow_exit:
-    // Slow path through iretq
+    RESTORE_GPRS
+    add rsp, 16
     swapgs
     iretq
 
