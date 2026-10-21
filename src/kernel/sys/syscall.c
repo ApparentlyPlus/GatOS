@@ -80,6 +80,10 @@ void syscall_dispatcher(cpu_context_t* regs) {
             char kbuf[4096];
             size_t done = 0;
 
+            // Own the TTY for the whole write, so its 4KB chunks stay together
+            tty_t* tty = current->process ? current->process->tty : NULL;
+            bool held = tty_lock_output(tty);
+
             // Copy in 4KB chunks so we don't blow the kernel stack
             while (done < len) {
                 size_t block = len - done;
@@ -93,6 +97,7 @@ void syscall_dispatcher(cpu_context_t* regs) {
                     bool ints = intr_save();
                     if (!vmm_check_buffer(current->process->vmm, buf + done + filled, n, VM_FLAG_USER)) {
                         intr_restore(ints);
+                        tty_unlock_output(tty, held);
                         LOGF("[SYSCALL] SYS_WRITE: Invalid buffer pointer 0x%lx (len: %zu) from thread '%s' (PID %u)\n", (uintptr_t)buf, len, current->name, current->process ? current->process->pid : 0);
                         sched_exit();
                     }
@@ -105,11 +110,10 @@ void syscall_dispatcher(cpu_context_t* regs) {
                     filled += n;
                 }
 
-                if (current->process && current->process->tty) {
-                    tty_write(current->process->tty, kbuf, block);
-                }
+                if (tty) tty_write(tty, kbuf, block);
                 done += block;
             }
+            tty_unlock_output(tty, held);
             regs->rax = (uint64_t)len;
             break;
         }

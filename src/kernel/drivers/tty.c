@@ -27,8 +27,13 @@ static void tty_init(tty_t* tty, console_t* console) {
     tty->next = NULL;
     tty->prev = NULL;
     tty->wait_head = NULL;
+    tty->out_owner = NULL;
+    tty->out_depth = 0;
+    tty->out_wait = NULL;
+    tty->held_len = 0;
 
     spinlock_init(&tty->lock, "tty_lock");
+    spinlock_init(&tty->out_lock, "tty_out_lock");
     ldisc_init(&tty->ldisc);
 }
 
@@ -39,6 +44,20 @@ static void ensure_lock(void) {
     if (!tty_lock_ok) {
         spinlock_init(&tty_lock, "tty_list_lock");
         tty_lock_ok = true;
+    }
+}
+
+/*
+ * wake_all - Hand every thread on a wait list back to the scheduler. Call with interrupts off
+ */
+static void wake_all(thread_t** head) {
+    thread_t* t = *head;
+    *head = NULL;
+    while (t) {
+        thread_t* next = t->rnext;
+        t->rnext = NULL;
+        sched_add(t);
+        t = next;
     }
 }
 
@@ -87,17 +106,11 @@ void tty_destroy(tty_t* tty) {
     
     procs_kill_tty(tty);
 
-    // flush any threads still parked in the wait queue into the dead queue
+    // flush any threads still parked in the wait queues into the dead queue
     // they're already T_DEAD from procs_kill_tty, so sched_add routes them straight to reaping
     bool iflags = intr_save();
-    thread_t* wt = tty->wait_head;
-    tty->wait_head = NULL;
-    while (wt) {
-        thread_t* next = wt->rnext;
-        wt->rnext = NULL;
-        sched_add(wt);
-        wt = next;
-    }
+    wake_all(&tty->wait_head);
+    wake_all(&tty->out_wait);
     intr_restore(iflags);
 
     ensure_lock();
@@ -161,14 +174,7 @@ void tty_cycle(void) {
  * tty_wake - Wake threads blocked on input. Call with tty->lock held (interrupts already off)
  */
 static void tty_wake(tty_t* tty) {
-    thread_t* t = tty->wait_head;
-    tty->wait_head = NULL;
-    while (t) {
-        thread_t* next = t->rnext;
-        t->rnext = NULL;
-        sched_add(t);
-        t = next;
-    }
+    wake_all(&tty->wait_head);
 }
 
 /*
@@ -279,11 +285,73 @@ void tty_set_mode(tty_t* tty, bool raw, bool echo) {
 }
 
 /*
- * tty_write - High-level console write
+ * tty_can_wait - Whether the caller is a scheduled thread that may block. Interrupt handlers and early boot can't
+ */
+static bool tty_can_wait(void) {
+    return sched_active() && sched_current() && !sched_in_interrupt();
+}
+
+/*
+ * tty_lock_output - Own the output until tty_unlock_output, so everything written in between comes out together
+ */
+bool tty_lock_output(tty_t* tty) {
+    if (!tty || !tty_can_wait()) return false;
+    thread_t* me = sched_current();
+
+    while (true) {
+        bool flags = spinlock_acquire(&tty->out_lock);
+        if (!tty->out_owner || tty->out_owner == me) {
+            tty->out_owner = me;
+            tty->out_depth++;
+            spinlock_release(&tty->out_lock, flags);
+            return true;
+        }
+        me->state = T_BLOCKED;
+        me->rnext = tty->out_wait;
+        tty->out_wait = me;
+        spinlock_release(&tty->out_lock, flags);
+        sched_yield();
+    }
+}
+
+/*
+ * tty_unlock_output - Let go of the output
+ */
+void tty_unlock_output(tty_t* tty, bool held) {
+    if (!tty || !held) return;
+    bool flags = spinlock_acquire(&tty->out_lock);
+    if (--tty->out_depth == 0) {
+        if (tty->held_len && tty->console) con_write_batch(tty->console, tty->held, tty->held_len);
+        tty->held_len = 0;
+        tty->out_owner = NULL;
+        wake_all(&tty->out_wait);
+    }
+    spinlock_release(&tty->out_lock, flags);
+}
+
+/*
+ * tty_write - High-level console write. One call comes out in one piece
  */
 void tty_write(tty_t* tty, const char* buf, size_t count) {
     if (!tty || !tty->console) return;
-    con_write_batch(tty->console, buf, count);
+
+    if (tty_lock_output(tty)) {
+        con_write_batch(tty->console, buf, count);
+        tty_unlock_output(tty, true);
+        return;
+    }
+
+    // Can't wait
+    bool flags = spinlock_acquire(&tty->out_lock);
+    if (tty->out_owner) {
+        size_t room = TTY_HELD_SIZE - tty->held_len;
+        if (count > room) count = room;
+        kmemcpy(tty->held + tty->held_len, buf, count);
+        tty->held_len += (uint32_t)count;
+    } else {
+        con_write_batch(tty->console, buf, count);
+    }
+    spinlock_release(&tty->out_lock, flags);
 }
 
 /*

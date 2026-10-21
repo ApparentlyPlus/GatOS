@@ -11,6 +11,7 @@
 #include <kernel/memory/vmm.h>
 #include <arch/x86_64/cpu/gdt.h>
 #include <arch/x86_64/memory/layout.h>
+#include <kernel/drivers/tty.h>
 #include <kernel/debug.h>
 #include <tests/tests.h>
 #include <klibc/string.h>
@@ -393,6 +394,40 @@ static bool t_hdr_update_thr(void) {
 
 #pragma region procs_kill_tty
 
+static volatile int out_done = 0;
+
+static void out_writer(void* arg) {
+    tty_write((tty_t*)arg, "C", 1);
+    out_done = 1;
+    sched_exit();
+}
+
+static bool t_out_contend(void) {
+    /* A second writer blocks until the owner lets go, then lands after it */
+    tty_t* t = tty_create();
+    process_t* p = process_create("t_out", NULL);
+    thread_t* w = thread_create(p, "t_out_w", out_writer, t, false, 0);
+    out_done = 0;
+
+    bool held = tty_lock_output(t);
+    TEST_ASSERT(held);
+    tty_write(t, "A", 1);
+    sched_add(w);
+    for (int i = 0; i < 10; i++) sched_yield();
+    TEST_ASSERT(!out_done);
+    TEST_ASSERT(t->out_wait == w);
+
+    tty_write(t, "B", 1);
+    tty_unlock_output(t, held);
+    for (int i = 0; i < 100 && !out_done; i++) sched_yield();
+    TEST_ASSERT(out_done);
+
+    console_char_t* row = t->console->buffer + t->console->header_rows * t->console->width;
+    TEST_ASSERT(row[0].codepoint == 'A' && row[1].codepoint == 'B' && row[2].codepoint == 'C');
+    tty_destroy(t);
+    return true;
+}
+
 static bool t_term_tty(void) {
     process_t* p = process_create("t_termtty", NULL);
     tty_t* t = p->tty;
@@ -469,6 +504,7 @@ void test_multitasking(void) {
     run_test("proc_hdr_update no crash",t_hdr_update);
     run_test("proc_hdr_update+thread",  t_hdr_update_thr);
     run_test("terminate_by_tty no crash",     t_term_tty);
+    run_test("tty output: writer waits turn", t_out_contend);
     run_test("thread_create_bootstrap",       t_bootstrap);
 
     LOGF("--- END MULTITASKING TEST ---\n");
