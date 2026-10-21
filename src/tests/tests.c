@@ -24,6 +24,7 @@
 #include <kernel/sys/apic.h>
 #include <kernel/sys/process.h>
 #include <kernel/sys/scheduler.h>
+#include <kernel/sys/syscall.h>
 #include <kernel/drivers/tty.h>
 #include <kernel/drivers/input.h>
 #include <kernel/debug.h>
@@ -49,7 +50,6 @@ void kernel_test(void* mb_info, char* KERNEL_VERSION) {
     // Initialize core subsystems
 	idt_init();
 	intr_on();
-	cpu_init();
 
 	// Initialize multiboot parser
 	multiboot_parser_t multiboot = {0};
@@ -89,7 +89,9 @@ void kernel_test(void* mb_info, char* KERNEL_VERSION) {
     
     QEMU_LOG("PMM Initialized (Tests deferred)", TOTAL_DBG);
 
+    // gdt_init reloads GS, which zeroes GS_BASE, so cpu_init has to come after it
     gdt_init();
+    cpu_init();
 
 	slab_status_t slab_status = slab_init();
 	if(slab_status != SLAB_OK){
@@ -168,6 +170,7 @@ void kernel_test(void* mb_info, char* KERNEL_VERSION) {
     QEMU_LOG("TTY Test Suite Completed", TOTAL_DBG);
 
     kprintf("Running Multitasking & Userspace tests...\n");
+    syscall_init();
     process_init();
     sched_init();
     test_multitasking();

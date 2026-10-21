@@ -7,10 +7,12 @@
 #include <kernel/sys/process.h>
 #include <kernel/sys/scheduler.h>
 #include <kernel/sys/userspace.h>
+#include <kernel/sys/syscall.h>
 #include <kernel/memory/heap.h>
 #include <kernel/memory/vmm.h>
 #include <arch/x86_64/cpu/gdt.h>
 #include <arch/x86_64/memory/layout.h>
+#include <arch/x86_64/memory/paging.h>
 #include <kernel/drivers/tty.h>
 #include <kernel/debug.h>
 #include <tests/tests.h>
@@ -450,6 +452,80 @@ static bool t_bootstrap(void) {
 }
 #pragma endregion
 
+#pragma region Syscall ABI
+
+/* Bit 63 = probe ran, low bits = registers that didn't survive the syscall */
+userspace_bss static volatile uint64_t abi_res;
+
+userspace void abi_probe(void* arg) {
+    (void)arg;
+    uint64_t bad;
+    /* Everything but RAX, RCX and R11 must come back untouched */
+    __asm__ volatile(
+        "push %%rbp\n\t"
+        "mov $0x11, %%rbx\n\t"
+        "mov $0x12, %%rdx\n\t"
+        "mov $0x13, %%rsi\n\t"
+        "mov $0x14, %%rdi\n\t"
+        "mov $0x15, %%rbp\n\t"
+        "mov $0x16, %%r8\n\t"
+        "mov $0x17, %%r9\n\t"
+        "mov $0x18, %%r10\n\t"
+        "mov $0x19, %%r12\n\t"
+        "mov $0x1a, %%r13\n\t"
+        "mov $0x1b, %%r14\n\t"
+        "mov $0x1c, %%r15\n\t"
+        "mov %[nr], %%eax\n\t"
+        "syscall\n\t"
+        "xor %%eax, %%eax\n\t"
+        "cmp $0x11, %%rbx\n\t setne %%cl\n\t or %%cl, %%al\n\t"
+        "cmp $0x12, %%rdx\n\t setne %%cl\n\t shl $1, %%cl\n\t or %%cl, %%al\n\t"
+        "cmp $0x13, %%rsi\n\t setne %%cl\n\t shl $2, %%cl\n\t or %%cl, %%al\n\t"
+        "cmp $0x14, %%rdi\n\t setne %%cl\n\t shl $3, %%cl\n\t or %%cl, %%al\n\t"
+        "cmp $0x15, %%rbp\n\t setne %%cl\n\t shl $4, %%cl\n\t or %%cl, %%al\n\t"
+        "cmp $0x16, %%r8\n\t  setne %%cl\n\t shl $5, %%cl\n\t or %%cl, %%al\n\t"
+        "cmp $0x17, %%r9\n\t  setne %%cl\n\t shl $6, %%cl\n\t or %%cl, %%al\n\t"
+        "cmp $0x18, %%r10\n\t setne %%cl\n\t shl $7, %%cl\n\t or %%cl, %%al\n\t"
+        "cmp $0x19, %%r12\n\t setne %%cl\n\t or %%cl, %%ah\n\t"
+        "cmp $0x1a, %%r13\n\t setne %%cl\n\t shl $1, %%cl\n\t or %%cl, %%ah\n\t"
+        "cmp $0x1b, %%r14\n\t setne %%cl\n\t shl $2, %%cl\n\t or %%cl, %%ah\n\t"
+        "cmp $0x1c, %%r15\n\t setne %%cl\n\t shl $3, %%cl\n\t or %%cl, %%ah\n\t"
+        "pop %%rbp"
+        : "=a"(bad)
+        : [nr] "i"(SYS_YIELD)
+        : "rbx", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11",
+          "r12", "r13", "r14", "r15", "cc", "memory");
+    abi_res = bad | (1ull << 63);
+    /* The test kernel doesn't preempt ring 3, so hand the CPU back until we're torn down */
+    while (1) __asm__ volatile("syscall" : : "a"(SYS_YIELD) : "rcx", "r11", "memory");
+}
+
+static bool t_sys_abi(void) {
+    process_t* p = process_create("t_abi", NULL);
+    thread_t* t = thread_create(p, "t_abi", abi_probe, NULL, true, 0);
+    TEST_ASSERT(t != NULL);
+
+    /* abi_res lives in p's own bss, so read it through the physmap */
+    uint64_t phys;
+    TEST_ASSERT(vmm_get_physical(p->vmm, (void*)&abi_res, &phys));
+    volatile uint64_t* res = (volatile uint64_t*)PHYSMAP_P2V(phys);
+
+    /* A probe that faults gets its process reaped, so stop looking at its memory then */
+    sched_add(t);
+    uint64_t r = 0;
+    for (int i = 0; i < 100 && !r; i++) {
+        sched_yield();
+        if (!proc_in_list(p)) break;
+        r = *res;
+    }
+    if (proc_in_list(p)) process_destroy(p);
+
+    if (r != (1ull << 63)) LOGF("(res=0x%lx) ", r);
+    TEST_ASSERT(r == (1ull << 63));
+    return true;
+}
+#pragma endregion
+
 #pragma region Runner
 
 static void run_test(const char* name, bool (*fn)(void)) {
@@ -506,6 +582,7 @@ void test_multitasking(void) {
     run_test("terminate_by_tty no crash",     t_term_tty);
     run_test("tty output: writer waits turn", t_out_contend);
     run_test("thread_create_bootstrap",       t_bootstrap);
+    run_test("syscall keeps non-ABI regs",    t_sys_abi);
 
     LOGF("--- END MULTITASKING TEST ---\n");
     LOGF("Multitasking Test Results: %d/%d\n\n", npass, ntests);
