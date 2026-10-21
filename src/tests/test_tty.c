@@ -31,6 +31,7 @@ static bool t_create_fields(void) {
     TEST_ASSERT(t->tail == 0);
     TEST_ASSERT(t->ldisc.pos == 0);
     TEST_ASSERT(t->ldisc.echo == true);
+    TEST_ASSERT(t->ldisc.raw == false);
     tty_destroy(t);
     return true;
 }
@@ -384,6 +385,65 @@ static bool t_ldisc_rst(void) {
 }
 #pragma endregion
 
+#pragma region raw mode
+
+static bool t_mode_nohold(void) {
+    tty_t* t = tty_create();
+    tty_set_mode(t, true, false);
+    tty_input(t, 'w');
+    TEST_ASSERT(t->ldisc.pos == 0);
+    TEST_ASSERT(tty_pending(t) == 1);
+    tty_destroy(t);
+    return true;
+}
+
+static bool t_mode_partial(void) {
+    /* A raw read returns what is there instead of waiting to fill the buffer */
+    tty_t* t = tty_create();
+    tty_set_mode(t, true, false);
+    tty_input(t, 'a'); tty_input(t, 'b');
+    char buf[16]; size_t n = tty_read(t, buf, sizeof(buf));
+    TEST_ASSERT(n == 2 && buf[0] == 'a' && buf[1] == 'b');
+    TEST_ASSERT(tty_pending(t) == 0);
+    tty_destroy(t);
+    return true;
+}
+
+static bool t_mode_bs(void) {
+    /* Backspace is just a byte in raw mode */
+    tty_t* t = tty_create();
+    tty_set_mode(t, true, false);
+    tty_input(t, '\b');
+    TEST_ASSERT(tty_read_char(t) == '\b');
+    tty_destroy(t);
+    return true;
+}
+
+static bool t_mode_drop(void) {
+    /* Switching modes drops a half typed line */
+    tty_t* t = tty_create();
+    t->ldisc.echo = false;
+    tty_input(t, 'x'); tty_input(t, 'y');
+    tty_set_mode(t, true, false);
+    TEST_ASSERT(t->ldisc.pos == 0);
+    TEST_ASSERT(tty_pending(t) == 0);
+    tty_set_mode(t, false, false);
+    tty_input(t, 'z'); tty_input(t, '\n');
+    TEST_ASSERT(tty_pending(t) == 2);
+    tty_destroy(t);
+    return true;
+}
+
+static bool t_pending_wrap(void) {
+    tty_t* t = tty_create();
+    t->head = 2;
+    t->tail = TTY_BUFFER_SIZE - 3;
+    TEST_ASSERT(tty_pending(t) == 5);
+    tty_destroy(t);
+    return true;
+}
+#pragma endregion
+
 #pragma region tty_write
 
 static bool t_wr_noring(void) {
@@ -538,6 +598,11 @@ void test_tty(void) {
     run_test("backspace: data correct",       t_bs_data);
     run_test("ldisc: overflow safe",          t_ldisc_ovf);
     run_test("ldisc: pos resets after commit",t_ldisc_rst);
+    run_test("raw mode: no line hold",        t_mode_nohold);
+    run_test("raw mode: partial read",        t_mode_partial);
+    run_test("raw mode: backspace is a byte", t_mode_bs);
+    run_test("raw mode: switch drops line",   t_mode_drop);
+    run_test("pending: wraps around",         t_pending_wrap);
     run_test("write: no ring buffer touch",   t_wr_noring);
     run_test("write: zero length safe",       t_wr_zero);
     run_test("write: single char",            t_wr_single);

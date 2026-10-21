@@ -251,6 +251,13 @@ void syscall_dispatcher(cpu_context_t* regs) {
                     regs->rax = 0;
                     break;
                 }
+                case TTY_CTRL_SET_MODE:
+                    tty_set_mode(tty, (arg2 & TTY_MODE_RAW) != 0, (arg2 & TTY_MODE_ECHO) != 0);
+                    regs->rax = 0;
+                    break;
+                case TTY_CTRL_PENDING:
+                    regs->rax = (uint64_t)tty_pending(tty);
+                    break;
                 default:
                     regs->rax = (uint64_t)-1;
                     break;

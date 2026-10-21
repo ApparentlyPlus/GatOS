@@ -14,6 +14,19 @@ void input_init(void) {
 }
 
 /*
+ * arrow_final - Last byte of the VT100 sequence for an arrow key, or 0 if it isn't one
+ */
+static char arrow_final(keycode_t key) {
+    switch (key) {
+        case KEY_UP: return 'A';
+        case KEY_DOWN: return 'B';
+        case KEY_RIGHT: return 'C';
+        case KEY_LEFT: return 'D';
+        default: return 0;
+    }
+}
+
+/*
  * input_handle_key - Keyboard event entry point, handles hotkeys and routes the rest to the active TTY
  */
 void input_handle_key(key_event_t event) {
@@ -45,10 +58,15 @@ void input_handle_key(key_event_t event) {
     // If we have an active TTY, route the key event to it
     if (active_tty) {
         char c = keycode_to_ascii(event);
+        char arrow = arrow_final(event.keycode);
         if (c) {
             tty_input(active_tty, c);
         } else if (event.keycode == KEY_BACKSPACE) {
             tty_input(active_tty, '\b');
+        } else if (arrow && active_tty->ldisc.raw) {
+            tty_input(active_tty, '\x1b');
+            tty_input(active_tty, '[');
+            tty_input(active_tty, arrow);
         }
     }
 }

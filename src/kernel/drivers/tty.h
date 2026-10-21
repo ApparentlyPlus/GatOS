@@ -47,6 +47,8 @@ void tty_input(tty_t* tty, char c);
 void tty_push_char_raw(tty_t* tty, char c);
 char tty_read_char(tty_t* tty);
 size_t tty_read(tty_t* tty, char* buf, size_t count);
+size_t tty_pending(tty_t* tty);
+void tty_set_mode(tty_t* tty, bool raw, bool echo);
 void tty_write(tty_t* tty, const char* buf, size_t count);
 void tty_header_init(tty_t* tty, size_t rows);
 void tty_header_write(tty_t* tty, size_t row, const char* text, uint8_t fg, uint8_t bg);

@@ -27,6 +27,12 @@
 #define TTY_CTRL_CURSOR    1
 #define TTY_CTRL_GET_DIMS  2
 #define TTY_CTRL_SET_COLOR 3
+#define TTY_CTRL_SET_MODE  4
+#define TTY_CTRL_PENDING   5
+
+// TTY_CTRL_SET_MODE flags
+#define TTY_MODE_RAW  (1 << 0)
+#define TTY_MODE_ECHO (1 << 1)
 
 void syscall_init(void);
 void syscall_dispatcher(cpu_context_t* regs);
