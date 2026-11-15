@@ -16,8 +16,9 @@
 } while(0)
 
 #define TEST_ASSERT_STATUS(s, e) do { \
-    if ((s) != (e)) { \
-        LOGF("[FAIL] Status mismatch: Got %d, Expected %d (Line %d)\n", s, e, __LINE__); \
+    int got_ = (int)(s); \
+    if (got_ != (int)(e)) { \
+        LOGF("[FAIL] Status mismatch: Got %d, Expected %d (Line %d)\n", got_, (int)(e), __LINE__); \
         return false; \
     } \
 } while(0)
@@ -30,6 +31,7 @@ void kernel_test(void* mb_info, char* KERNEL_VERSION);
 
 // Function declarations for individual test suites
 
+void test_boot();
 void test_pmm();
 void test_vmm();
 void test_slab();

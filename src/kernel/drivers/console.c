@@ -14,7 +14,6 @@
 #include <kernel/drivers/tty.h>
 #include <arch/x86_64/memory/paging.h>
 #include <kernel/memory/heap.h>
-#include <kernel/memory/pmm.h>
 #include <klibc/string.h>
 #include <klibc/stdio.h>
 #include <stdarg.h>
@@ -51,12 +50,6 @@ static uint8_t cfg = CONSOLE_COLOR_WHITE;
 static uint8_t cbg = CONSOLE_COLOR_RED;
 static char cbuf[2048];
 
-// Text cell shadow for the crash console, so scrolling redraws from RAM
-// instead of reading the framebuffer (WC/UC reads are extremely slow).
-static uint32_t* crash_shadow = NULL;
-static size_t crash_sh_cols = 0;
-static size_t crash_sh_rows = 0;
-
 /*
  * glyph_index - Map a codepoint onto its glyph slot (CP437 or synthesized)
  */
@@ -64,31 +57,6 @@ static inline uint16_t glyph_index(uint32_t cp) {
     uint16_t idx = unicode_to_glyph(cp);
     if (idx == 0 && cp != 0) idx = 0x3F;
     return idx;
-}
-
-/*
- * crash_pack - Encode a codepoint with colors into one shadow cell
- */
-static inline uint32_t crash_pack(uint32_t cp, uint8_t fg, uint8_t bg) {
-    return (uint32_t)glyph_index(cp) | ((uint32_t)(fg & 0xF) << 16) | ((uint32_t)(bg & 0xF) << 20);
-}
-
-/*
- * con_crash_shadow_init - Gives the crash console its scroll shadow. Separate because console_init runs before the PMM exists
- */
-void con_crash_shadow_init(void) {
-    if (crash_shadow || !cols || !rows) return;
-
-    uint64_t phys;
-    size_t cells = cols * rows;
-    if (pmm_alloc(cells * sizeof(uint32_t), &phys) != PMM_OK) return;
-
-    crash_shadow = (uint32_t*)PHYSMAP_P2V(phys);
-    crash_sh_cols = cols;
-    crash_sh_rows = rows;
-
-    uint32_t blank = crash_pack(' ', cfg, cbg);
-    for (size_t i = 0; i < cells; i++) crash_shadow[i] = blank;
 }
 
 #pragma region Hardware Drawing
@@ -139,17 +107,10 @@ static void draw_glyph(uint8_t* glyph, size_t px, size_t py, uint32_t fg, uint32
 }
 
 /*
- * get_glyph_idx - Returns the PSF1 glyph data for an already resolved slot
- */
-static uint8_t* get_glyph_idx(uint16_t idx) {
-    return (uint8_t*)font_glyph(idx);
-}
-
-/*
  * get_glyph - Returns the PSF1 glyph data for the given codepoint
  */
 static uint8_t* get_glyph(uint32_t cp) {
-    return get_glyph_idx(glyph_index(cp));
+    return (uint8_t*)font_glyph(glyph_index(cp));
 }
 
 /*
@@ -692,116 +653,29 @@ size_t con_crash_width(void){
 }
 
 /*
- * crash_pix - Writes one pixel directly to fb (panic path, no locks)
+ * crash_cell - Draw one codepoint at cell (x, y) in the panic colors (panic path, no locks)
  */
-static inline void crash_pix(uint32_t x, uint32_t y, uint32_t color) {
-    if (!fb || x >= fb_w || y >= fb_h) return;
-    uint8_t* dst = fb + y * fb_pitch + x * (fb_bpp / 8);
-    if (fb_bpp == 32) *(uint32_t*)dst = color;
-    else { dst[0] = color & 0xFF; dst[1] = (color >> 8) & 0xFF; dst[2] = (color >> 16) & 0xFF; }
-}
-
-void con_crash_clear(uint8_t bg);
-
-/*
- * crash_set_cell - Record a codepoint with the current colors in the shadow
- */
-static inline void crash_set_cell(uint32_t x, uint32_t y, uint32_t cp) {
-    if (crash_shadow && x < crash_sh_cols && y < crash_sh_rows)
-        crash_shadow[(size_t)y * crash_sh_cols + x] = crash_pack(cp, cfg, cbg);
-}
-
-/*
- * crash_draw_glyph - Draw one codepoint cell, write-only, works at any resolution
- */
-static void crash_draw_glyph(uint16_t gidx, uint8_t fg, uint8_t bg, uint32_t x, uint32_t y) {
+static void crash_cell(uint32_t cp, uint32_t x, uint32_t y) {
     if (x >= (uint32_t)cols || y >= (uint32_t)rows) return;
-    uint32_t row_h = (uint32_t)fh + PADDING_Y;
-    uint32_t px = x * 8;
-    uint32_t py = y * row_h;
-    uint32_t fgc = VGA_PALETTE[fg & 0xF];
-    uint32_t bgc = VGA_PALETTE[bg & 0xF];
-    uint8_t* glyph = get_glyph_idx(gidx);
-
-    // paired 64bit stores per glyph row for 32bpp
-    if (fb_bpp == 32 && px + 8 <= fb_w && py + row_h <= fb_h) {
-        uint32_t* row_ptr = (uint32_t*)(fb + (size_t)py * fb_pitch + px * 4);
-        size_t pitch_u32 = fb_pitch / 4;
-        uint32_t colors[2] = { bgc, fgc };
-        for (uint32_t gy = 0; gy < row_h; gy++) {
-            uint8_t bits = (glyph && gy < (uint32_t)fh) ? glyph[gy] : 0;
-            uint64_t* p = (uint64_t*)row_ptr;
-            p[0] = (uint64_t)colors[(bits >> 7) & 1] | ((uint64_t)colors[(bits >> 6) & 1] << 32);
-            p[1] = (uint64_t)colors[(bits >> 5) & 1] | ((uint64_t)colors[(bits >> 4) & 1] << 32);
-            p[2] = (uint64_t)colors[(bits >> 3) & 1] | ((uint64_t)colors[(bits >> 2) & 1] << 32);
-            p[3] = (uint64_t)colors[(bits >> 1) & 1] | ((uint64_t)colors[(bits >> 0) & 1] << 32);
-            row_ptr += pitch_u32;
-        }
-        return;
-    }
-
-    // Fallback to per pixel writes for any other case (non-32bpp, partial glyphs, etc)
-    for (uint32_t gy = 0; gy < row_h; gy++) {
-        uint8_t bits = (glyph && gy < (uint32_t)fh) ? glyph[gy] : 0;
-        for (uint32_t gx = 0; gx < 8; gx++)
-            crash_pix(px + gx, py + gy, ((bits >> (7 - gx)) & 1) ? fgc : bgc);
-    }
-}
-
-static void crash_scroll(void) {
-    uint32_t r = (uint32_t)rows;
-    uint32_t c = (uint32_t)cols;
-
-    // No shadow means no record of what is on screen (a panic before the PMM
-    // came up, or the allocation failed), so clear rather than scroll
-    if (!crash_shadow || c != crash_sh_cols || r != crash_sh_rows) {
-        con_crash_clear(cbg);
-        return;
-    }
-
-    // Compare each cell to the one below it and redraw only those that change
-    uint32_t blank = crash_pack(' ', cfg, cbg);
-    for (uint32_t y = 0; y + 1 < r; y++)
-        for (uint32_t x = 0; x < c; x++) {
-            uint32_t nc = crash_shadow[(size_t)(y + 1) * c + x];
-            if (nc != crash_shadow[(size_t)y * c + x])
-                crash_draw_glyph((uint16_t)(nc & 0xFFFF), (nc >> 16) & 0xF, (nc >> 20) & 0xF, x, y);
-        }
-
-    // Clear the last row in the shadow and redraw any non-blank cells that were scrolled off
-    for (uint32_t x = 0; x < c; x++)
-        if (crash_shadow[(size_t)(r - 1) * c + x] != blank)
-            crash_draw_glyph(glyph_index(' '), cfg, cbg, x, r - 1);
-
-    // Shift the shadow up by one row and clear the last row
-    kmemmove(crash_shadow, crash_shadow + c, (size_t)(r - 1) * c * sizeof(uint32_t));
-    for (uint32_t x = 0; x < c; x++)
-        crash_shadow[(size_t)(r - 1) * c + x] = blank;
-    if (ccy > 0) ccy = r - 1;
+    draw_glyph(get_glyph(cp), x * fw, y * (fh + PADDING_Y), VGA_PALETTE[cfg], VGA_PALETTE[cbg]);
 }
 
 /*
- * crash_emit - Render one codepoint straight to the framebuffer, never touches the shadow
+ * crash_emit - Render one codepoint straight to the framebuffer
+ * A panic screen fits on one screen, so instead of scrolling, a full screen starts over on a clean one
  */
 static void crash_emit(uint32_t cp) {
-    if (cp == '\n') { ccx = 0; ccy++; }
-    else if (cp == '\r') { ccx = 0; }
-    else if (cp == '\t') { ccx = (ccx + 4) & ~3u; }
-    else if (cp == '\b') {
-        if (ccx > 0) {
-            ccx--;
-            crash_set_cell(ccx, ccy, ' ');
-            crash_draw_glyph(glyph_index(' '), cfg, cbg, ccx, ccy);
-        }
+    if (cp == '\n') { ccx = 0; ccy++; return; }
+    if (cp == '\r') { ccx = 0; return; }
+    if (cp == '\t') { ccx = (ccx + 4) & ~3u; return; }
+    if (cp == '\b') {
+        if (ccx > 0) crash_cell(' ', --ccx, ccy);
+        return;
     }
-    else {
-        if (ccx >= (uint32_t)cols) { ccx = 0; ccy++; }
-        if (ccy >= (uint32_t)rows) crash_scroll();
-        crash_set_cell(ccx, ccy, cp);
-        crash_draw_glyph(glyph_index(cp), cfg, cbg, ccx, ccy);
-        ccx++;
-    }
-    if (ccy >= (uint32_t)rows) crash_scroll();
+
+    if (ccx >= (uint32_t)cols) { ccx = 0; ccy++; }
+    if (ccy >= (uint32_t)rows) con_crash_clear(cbg);
+    crash_cell(cp, ccx++, ccy);
 }
 
 /*
@@ -810,11 +684,6 @@ static void crash_emit(uint32_t cp) {
 void con_crash_clear(uint8_t bg) {
     if (!fb) return;
     cbg = bg & 0xF; ccx = 0; ccy = 0;
-    if (crash_shadow) {
-        uint32_t blank = crash_pack(' ', cfg, cbg);
-        size_t cells = crash_sh_cols * crash_sh_rows;
-        for (size_t i = 0; i < cells; i++) crash_shadow[i] = blank;
-    }
     uint32_t color = VGA_PALETTE[cbg];
     size_t total = (size_t)fb_h * fb_pitch;
     if (fb_bpp == 32) {
@@ -828,7 +697,7 @@ void con_crash_clear(uint8_t bg) {
     } else {
         for (uint32_t y = 0; y < fb_h; y++)
             for (uint32_t x = 0; x < fb_w; x++)
-                crash_pix(x, y, color);
+                put_pixel(x, y, color);
     }
 }
 

@@ -900,7 +900,7 @@ heap_status_t heap_kernel_init(void) {
     if (!kernel_vmm) {
         LOGF("[HEAP] Kernel VMM not initialized, initializing now...\n");
 
-        uintptr_t alloc_base = get_kend(true) + PAGE_SIZE;
+        uintptr_t alloc_base = KERNEL_P2V(kmem->kend) + PAGE_SIZE;
         uintptr_t alloc_end = 0xFFFFFFFFFFFFF000;
 
         vmm_status_t vmm_status = vmm_kernel_init(alloc_base, alloc_end);

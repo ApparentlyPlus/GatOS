@@ -28,10 +28,21 @@ extern uintptr_t KPHYS_START;
 extern uintptr_t KPHYS_END;
 
 
-// Runtime kernel extent, tracked in paging.c, KEND is bumped by reserve_tables 
-// to include page table space. All callers must use get_kend() to read the authoritative value.
-extern uint64_t KSTART;
-extern uint64_t KEND;
+/*
+ * The physical memory layout, filled in by paging.c as boot goes on. Read only for everyone else.
+ *
+ * kstart/kend: the kernel's physical extent. kend starts at the linker's KPHYS_END and might grow.
+ * ram: end of usable RAM, set by reserve_tables.
+ * physmap_end: end of the physmap (physical), covers RAM and the framebuffer.
+ */
+typedef struct {
+    uint64_t kstart;
+    uint64_t kend;
+    uint64_t ram;
+    uint64_t physmap_end;
+} kmem_t;
+
+extern const kmem_t* const kmem;
 
 /*
  * is_pow2_u64 - check if x is a power of two
@@ -49,30 +60,6 @@ static inline uintptr_t align_up(uintptr_t val, uintptr_t align) {
 
 static inline uintptr_t align_down(uintptr_t val, uintptr_t align) {
     return val & ~(align - 1);
-}
-
-/*
- * get_kstart - Get the kernel start address
- */
-static inline uint64_t get_kstart(bool virtual) {
-    return virtual ? (KSTART | KERNEL_VIRTUAL_BASE) : KSTART;
-}
-
-/*
- * get_kend - Get the kernel end address
- */
-static inline uint64_t get_kend(bool virtual) {
-    return virtual ? (KEND | KERNEL_VIRTUAL_BASE) : KEND;
-}
-
-static inline uint64_t get_linker_kstart(bool virtual) {
-    uint64_t l = (uint64_t)(uintptr_t)&KPHYS_START;
-    return virtual ? (l | KERNEL_VIRTUAL_BASE) : l;
-}
-
-static inline uint64_t get_linker_kend(bool virtual) {
-    uint64_t l = (uint64_t)(uintptr_t)&KPHYS_END;
-    return virtual ? (l | KERNEL_VIRTUAL_BASE) : l;
 }
 
 #endif // __ASSEMBLER__

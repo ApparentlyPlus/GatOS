@@ -60,7 +60,6 @@ typedef struct slab_free_obj {
 typedef struct {
     uint32_t magic;
     uint32_t cache_id;
-    uint64_t alloc_timestamp;
 } slab_alloc_header_t;
 
 // slab cache structure - minor reformatting but same fields
@@ -85,6 +84,9 @@ struct slab_cache {
 
 static bool slab_inited = false;
 static slab_cache_t* caches = NULL;
+
+// Cache structs live in BSS, a full page each from the PMM would be a waste
+static slab_cache_t cache_pool[SLAB_MAX_CACHES];
 static uint32_t next_cache_id = 1;
 static slab_stats_t stats;
 
@@ -220,11 +222,24 @@ static void slab_add_to_list(slab_t** list_head, slab_t* slab, uint8_t list_id) 
 }
 
 /*
- * slab_move_to_list - convenience wrapper (remove then add); records list_id
+ * slab_relist - Move a slab to the list its fill level says it belongs on, counters included
  */
-static void slab_move_to_list(slab_t** from_list, slab_t** to_list, slab_t* slab, uint8_t to_id) {
-    slab_remove_from_list(from_list, slab);
-    slab_add_to_list(to_list, slab, to_id);
+static void slab_relist(slab_cache_t* cache, slab_t* slab) {
+    slab_t** lists[] = { NULL, &cache->slabs_empty, &cache->slabs_partial, &cache->slabs_full };
+    uint64_t* counts[] = { NULL, &cache->stats.empty_slabs, &cache->stats.partial_slabs, &cache->stats.full_slabs };
+
+    uint8_t to = slab->in_use == 0 ? SLAB_LIST_EMPTY
+               : slab->in_use == slab->capacity ? SLAB_LIST_FULL
+               : SLAB_LIST_PARTIAL;
+    uint8_t from = slab->list_id;
+    if (to == from) return;
+
+    if (from != SLAB_LIST_NONE) {
+        slab_remove_from_list(lists[from], slab);
+        (*counts[from])--;
+    }
+    slab_add_to_list(lists[to], slab, to);
+    (*counts[to])++;
 }
 
 static slab_t* slab_allocate_page(slab_cache_t* cache) {
@@ -290,7 +305,6 @@ static slab_t* slab_allocate_page(slab_cache_t* cache) {
     stats.total_pmm_bytes += PAGE_SIZE;
 
     cache->stats.slab_count++;
-    cache->stats.empty_slabs++;
 
     return slab;
 }
@@ -330,35 +344,15 @@ static slab_t* get_slab_from_obj(void* obj) {
 }
 
 /*
- * slab_alloc_cache_struct - Allocate the cache structure itself from PMM
+ * slab_alloc_cache_struct - Grab a free slot in the static cache table, NULL when it's full
  */
 static slab_cache_t* slab_alloc_cache_struct(void) {
-    uint64_t phys = 0;
-    pmm_status_t status = pmm_alloc(sizeof(slab_cache_t), &phys);
-    if (status != PMM_OK) {
-        LOGF("[SLAB] Failed to allocate cache structure from PMM\n");
-        return NULL;
+    for (int i = 0; i < SLAB_MAX_CACHES; i++) {
+        if (cache_pool[i].magic == SLAB_CACHE_MAGIC) continue;
+        kmemset(&cache_pool[i], 0, sizeof(slab_cache_t));
+        return &cache_pool[i];
     }
-
-    slab_cache_t* cache = (slab_cache_t*)PHYSMAP_P2V(phys);
-
-    kmemset(cache, 0, sizeof(slab_cache_t));
-
-    return cache;
-}
-
-/*
- * slab_free_cache_struct - Free the cache structure back to PMM
- */
-static void slab_free_cache_struct(slab_cache_t* cache) {
-    if (!cache) return;
-
-    uint64_t phys = PHYSMAP_V2P((uint64_t)cache);
-
-    uint64_t aligned_phys = align_down(phys, pmm_min_block_size());
-    size_t aligned_size = align_up(sizeof(slab_cache_t), pmm_min_block_size());
-
-    pmm_free(aligned_phys, aligned_size);
+    return NULL;
 }
 
 #pragma endregion
@@ -467,7 +461,7 @@ slab_cache_t* slab_cache_create(const char* name, size_t obj_size,
 
     slab_cache_t* cache = slab_alloc_cache_struct();
     if (!cache) {
-        LOGF("[SLAB] Failed to allocate cache structure\n");
+        LOGF("[SLAB] Cache table full (max %d)\n", SLAB_MAX_CACHES);
         spinlock_release(&slab_list_lock, list_flags);
         return NULL;
     }
@@ -540,7 +534,6 @@ void slab_cache_destroy(slab_cache_t* cache) {
     spinlock_release(&cache->lock, cache_flags);
     spinlock_release(&slab_list_lock, list_flags);
 
-    slab_free_cache_struct(cache);
 }
 
 /*
@@ -597,7 +590,6 @@ slab_status_t slab_alloc(slab_cache_t* cache, void** out_obj) {
             spinlock_release(&cache->lock, flags);
             return SLAB_ERR_NO_MEMORY;
         }
-        slab_add_to_list(&cache->slabs_empty, slab, SLAB_LIST_EMPTY);
     }
 
     if (!slab_validate(slab)) {
@@ -627,28 +619,11 @@ slab_status_t slab_alloc(slab_cache_t* cache, void** out_obj) {
     slab_alloc_header_t* header = (slab_alloc_header_t*)obj;
     header->magic = SLAB_ALLOC_MAGIC;
     header->cache_id = cache->cache_id;
-    header->alloc_timestamp = 0;
 
     cache->stats.total_allocs++;
     cache->stats.active_objects++;
 
-    if (slab->in_use == slab->capacity) {
-        if (slab->list_id == SLAB_LIST_PARTIAL) {
-            slab_move_to_list(&cache->slabs_partial, &cache->slabs_full, slab, SLAB_LIST_FULL);
-            cache->stats.partial_slabs--;
-            cache->stats.full_slabs++;
-        } else if (slab->list_id == SLAB_LIST_EMPTY) {
-            slab_move_to_list(&cache->slabs_empty, &cache->slabs_full, slab, SLAB_LIST_FULL);
-            cache->stats.empty_slabs--;
-            cache->stats.full_slabs++;
-        }
-    } else if (slab->in_use == 1) {
-        if (slab->list_id == SLAB_LIST_EMPTY) {
-            slab_move_to_list(&cache->slabs_empty, &cache->slabs_partial, slab, SLAB_LIST_PARTIAL);
-            cache->stats.empty_slabs--;
-            cache->stats.partial_slabs++;
-        }
-    }
+    slab_relist(cache, slab);
 
     *out_obj = (void*)((uint8_t*)obj + sizeof(slab_alloc_header_t));
     
@@ -709,32 +684,12 @@ slab_status_t slab_free(slab_cache_t* cache, void* obj) {
     cache->stats.total_frees++;
     cache->stats.active_objects--;
 
-    // this is interesting here
-    // if slab is now empty, we want to move it to the empty list
-    // if there are already too many empty slabs, we can free it back to PMM to reduce fragmentation
-    if (slab->in_use == 0) {
-        if (slab->list_id == SLAB_LIST_PARTIAL) {
-            slab_move_to_list(&cache->slabs_partial, &cache->slabs_empty, slab, SLAB_LIST_EMPTY);
-            cache->stats.partial_slabs--;
-            cache->stats.empty_slabs++;
-        } else if (slab->list_id == SLAB_LIST_FULL) {
-            slab_move_to_list(&cache->slabs_full, &cache->slabs_empty, slab, SLAB_LIST_EMPTY);
-            cache->stats.full_slabs--;
-            cache->stats.empty_slabs++;
-        }
-
-        if (cache->stats.empty_slabs > 1) {
-            slab_remove_from_list(&cache->slabs_empty, slab);
-            slab_free_page(slab);
-            cache->stats.empty_slabs--;
-        }
-
-    } else if (slab->in_use == slab->capacity - 1) {
-        if (slab->list_id == SLAB_LIST_FULL) {
-            slab_move_to_list(&cache->slabs_full, &cache->slabs_partial, slab, SLAB_LIST_PARTIAL);
-            cache->stats.full_slabs--;
-            cache->stats.partial_slabs++;
-        }
+    // An empty slab goes back to the empty list
+    slab_relist(cache, slab);
+    if (slab->in_use == 0 && cache->stats.empty_slabs > 1) {
+        slab_remove_from_list(&cache->slabs_empty, slab);
+        cache->stats.empty_slabs--;
+        slab_free_page(slab);
     }
 
     spinlock_release(&cache->lock, flags);

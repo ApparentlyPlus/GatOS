@@ -7,6 +7,7 @@
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
+#include <stdbool.h>
 
 // Multiboot2 magic number
 #define MULTIBOOT2_BOOTLOADER_MAGIC 0x36d76289
@@ -42,8 +43,6 @@
 #define MULTIBOOT_TAG_TYPE_EFI64_IH            20
 #define MULTIBOOT_TAG_TYPE_LOAD_BASE_ADDR      21
 
-// Maximum number of memory ranges we can store
-#define MAX_MEMORY_RANGES 64
 
 // Multiboot2 structures (packed for bootloader compatibility)
 typedef struct {
@@ -72,29 +71,6 @@ typedef struct {
 } __attribute__((packed)) multiboot_memory_map_t;
 
 typedef struct {
-    uint32_t mod_start;
-    uint32_t mod_end;
-    uint32_t string;
-    uint32_t reserved;
-} __attribute__((packed)) multiboot_module_t;
-
-typedef struct {
-    uint32_t type;
-    uint32_t size;
-    multiboot_module_t module;
-} __attribute__((packed)) multiboot_module_tag_t;
-
-typedef struct {
-    uint32_t type;
-    uint32_t size;
-    uint32_t num;
-    uint32_t entsize;
-    uint32_t shndx;
-    uint32_t addr;
-    uint32_t reserved;
-} __attribute__((packed)) multiboot_elf_sections_t;
-
-typedef struct {
     uint32_t type;
     uint32_t size;
     uint64_t addr;
@@ -109,77 +85,31 @@ typedef struct {
 typedef struct {
     uint32_t type;
     uint32_t size;
-    char string[];
-} __attribute__((packed)) multiboot_string_tag_t;
-
-typedef struct {
-    uint32_t type;
-    uint32_t size;
     uint8_t rsdp[];
 } __attribute__((packed)) multiboot_acpi_t;
-
-// Memory range structure for available memory
-typedef struct memory_range {
-    uintptr_t start;
-    uintptr_t end;
-    struct memory_range* next;
-} memory_range_t;
 
 // Main multiboot2 parser structure
 typedef struct {
     // Copied multiboot2 data (all in higher half)
     multiboot_info_t* info;
-    const char* bootloader_name;
-    const char* command_line;
     multiboot_memory_map_t* memory_map;
     size_t memory_map_length;
-    
-    // Available memory ranges (excluding kernel)
-    memory_range_t ranges[MAX_MEMORY_RANGES];
-    memory_range_t* available_memory_head;
-    size_t available_memory_count;
-    
-    // Copy buffer management
-    uint8_t* data_buffer;
-    size_t buffer_size;
-    size_t buffer_used;
-    
-    // State
     int initialized;
 } multiboot_parser_t;
-
-// External kernel symbols
-extern uintptr_t KPHYS_START;
-extern uintptr_t KPHYS_END;
 
 // Core functions
 void multiboot_init(multiboot_parser_t* parser, void* mb_info, uint8_t* buffer, size_t buffer_size);
 
-// Information accessors
-const char* multiboot_bootloader(multiboot_parser_t* parser);
-const char* multiboot_cmdline(multiboot_parser_t* parser);
+// Memory map
 uint64_t multiboot_total_ram(multiboot_parser_t* parser, int measurementUnit);
-uint64_t multiboot_highest_addr(multiboot_parser_t* parser);
-
-// Memory management
-memory_range_t* multiboot_avail_mem(multiboot_parser_t* parser);
-size_t multiboot_avail_count(multiboot_parser_t* parser);
 int multiboot_mem_region(multiboot_parser_t* parser, size_t index, 
                                uintptr_t* start, uintptr_t* end, uint32_t* type);
-
-// Module access
-int multiboot_module_count(multiboot_parser_t* parser);
-multiboot_module_t* multiboot_module(multiboot_parser_t* parser, int index);
+bool multiboot_is_avail(multiboot_parser_t* parser, uint64_t start, uint64_t end);
+bool multiboot_hits_avail(multiboot_parser_t* parser, uint64_t start, uint64_t end);
 
 // Hardware information
 multiboot_framebuffer_t* multiboot_framebuffer(multiboot_parser_t* parser);
-multiboot_elf_sections_t* multiboot_elf_sections(multiboot_parser_t* parser);
 multiboot_acpi_t* multiboot_acpi_rsdp(multiboot_parser_t* parser);
 
-// Utilities
-void mb_kernel_range(uintptr_t* start, uintptr_t* end);
-int multiboot_page_used(multiboot_parser_t* parser, uintptr_t start, size_t page_size);
-
 // Debug output
-void mb_dump(multiboot_parser_t* parser);
 void multiboot_dump_mmap(multiboot_parser_t* parser);

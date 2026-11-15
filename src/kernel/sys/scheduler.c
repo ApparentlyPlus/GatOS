@@ -5,6 +5,7 @@
  */
 
 #include <kernel/sys/scheduler.h>
+#include <kernel/drivers/tty.h>
 #include <kernel/sys/timers.h>
 #include <kernel/sys/process.h>
 #include <kernel/sys/panic.h>
@@ -102,6 +103,39 @@ static void idle_thread_entry(void* arg) {
 }
 
 /*
+ * sched_fault - Kills the thread behind a ring 3 exception and schedules something else
+ */
+static cpu_context_t* sched_fault(cpu_context_t* ctx) {
+    if (!sched_on || !cur || !cur->process) return NULL;
+
+    char buf[256];
+    int len;
+    uint64_t vec = ctx->vector_number;
+
+    if (vec == INT_PAGE_FAULT) {
+        uint64_t cr2;
+        __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+        // null rip + instr fetch = thread fell off its entry point
+        if (cr2 == 0 && (ctx->error_code & 16)) {
+            len = ksnprintf(buf, sizeof(buf), "\n[Thread %u from %s (PID %u)] Returned from entry point (RIP: 0x%lx)\n",
+                        cur->tid, cur->process->name, cur->process->pid, ctx->iret_rip);
+        } else {
+            len = ksnprintf(buf, sizeof(buf), "\n[Thread %u from %s (PID %u)] Segmentation Fault at 0x%lx (RIP: 0x%lx)\n",
+                        cur->tid, cur->process->name, cur->process->pid, cr2, ctx->iret_rip);
+        }
+    } else {
+        len = ksnprintf(buf, sizeof(buf), "\n[Thread %u from %s (PID %u)] %s (Vector %lu) at RIP: 0x%lx\n",
+                        cur->tid, cur->process->name, cur->process->pid, exc_name(vec), vec, ctx->iret_rip);
+    }
+
+    if (cur->process->tty) tty_write(cur->process->tty, buf, (size_t)len);
+    LOGF("[USERSPACE FAULT] %s", buf + 1);
+
+    cur->state = T_DEAD;
+    return sched_schedule(ctx);
+}
+
+/*
  * sched_init - Initializes the scheduler and creates the idle thread
  */
 void sched_init(void) {
@@ -125,6 +159,7 @@ void sched_init(void) {
 
     avl_init(&sleep_tree, sleep_cmp);
     irq_register(INT_DEVICE_NOT_AVAILABLE, fpu_nm_handler);
+    irq_user_fault(sched_fault);
 
     // Allocate the per CPU scheduler stack
     sched_stack = kmalloc(KERNEL_STACK_SIZE);

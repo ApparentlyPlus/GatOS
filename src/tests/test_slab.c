@@ -171,16 +171,51 @@ static bool t_destroy_null(void) {
 }
 
 static bool t_cache_lim(void) {
-    /* Slab is dynamically allocated - verify stats accurately track many caches */
+    /* Fill every free slot of the cache table, the next create must fail */
     slab_stats_t before; slab_get_stats(&before);
-    int created = 0;
-    for (int i = 0; i < 8; i++) {
-        slab_cache_t* c = mk_cache("ts_lim", 32, 8);
-        if (c) created++;
-    }
+    int room = SLAB_MAX_CACHES - (int)before.cache_count;
+    TEST_ASSERT(room > 0 && room <= MAX_TR_CACHES);
+
+    for (int i = 0; i < room; i++) TEST_ASSERT(mk_cache("ts_lim", 32, 8) != NULL);
+    TEST_ASSERT(slab_cache_create("ts_lim_over", 32, 8) == NULL);
+
+    /* Destroying one frees its slot again */
+    slab_cache_destroy(tr_caches[--tr_n]);
+    TEST_ASSERT(mk_cache("ts_lim", 32, 8) != NULL);
+
     slab_stats_t after; slab_get_stats(&after);
-    TEST_ASSERT(after.cache_count == before.cache_count + (uint64_t)created);
-    /* tr_free cleans all registered caches */
+    TEST_ASSERT(after.cache_count == SLAB_MAX_CACHES);
+    return true;
+}
+
+static bool t_list_moves(void) {
+    slab_cache_t* c = mk_cache("ts_lst", 256, 8);
+    TEST_ASSERT(c != NULL);
+    void* objs[64]; int n = 0;
+    cache_stats_t st;
+
+    /* Fill the first slab, it has to land on the full list */
+    do {
+        TEST_ASSERT(n < 64);
+        TEST_ASSERT_STATUS(slab_alloc(c, &objs[n++]), SLAB_OK);
+        slab_cache_stats(c, &st);
+    } while (st.full_slabs == 0);
+    int cap = n;
+    TEST_ASSERT(st.slab_count == 1 && st.partial_slabs == 0 && st.empty_slabs == 0);
+
+    /* One free moves it to partial */
+    TEST_ASSERT_STATUS(slab_free(c, objs[--n]), SLAB_OK);
+    slab_cache_stats(c, &st);
+    TEST_ASSERT(st.partial_slabs == 1 && st.full_slabs == 0);
+
+    /* Spill into a second slab, then free everything: one empty slab stays, the other goes back */
+    while (n < cap + 1) TEST_ASSERT_STATUS(slab_alloc(c, &objs[n++]), SLAB_OK);
+    slab_cache_stats(c, &st);
+    TEST_ASSERT(st.slab_count == 2);
+    while (n) TEST_ASSERT_STATUS(slab_free(c, objs[--n]), SLAB_OK);
+    slab_cache_stats(c, &st);
+    TEST_ASSERT(st.slab_count == 1 && st.empty_slabs == 1 && st.partial_slabs == 0 && st.full_slabs == 0);
+    TEST_ASSERT(st.active_objects == 0);
     return true;
 }
 #pragma endregion
@@ -289,11 +324,8 @@ static bool t_dbl_free(void) {
     TEST_ASSERT(c != NULL);
     void* p = NULL;
     TEST_ASSERT_STATUS(slab_alloc(c, &p), SLAB_OK);
-    slab_free(c, p);
-    /* Second free: expect non-OK or at least no crash */
-    slab_status_t s2 = slab_free(c, p);
-    /* Any non-crash is acceptable; CORRUPTION is ideal */
-    (void)s2;
+    TEST_ASSERT_STATUS(slab_free(c, p), SLAB_OK);
+    TEST_ASSERT_STATUS(slab_free(c, p), SLAB_ERR_CORRUPTION);
     return true;
 }
 
@@ -589,6 +621,7 @@ void test_slab(void) {
     run_test("destroy_removes",         t_destroy_rm);
     run_test("destroy_null",            t_destroy_null);
     run_test("cache_limit",             t_cache_lim);
+    run_test("list_moves",              t_list_moves);
 
     /* Allocation / free */
     run_test("alloc_ok",                t_alloc_ok);

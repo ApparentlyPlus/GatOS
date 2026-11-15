@@ -32,7 +32,7 @@
 #include <tests/tests.h>
 #include <klibc/string.h>
 
-#define TOTAL_DBG 12
+#define TOTAL_DBG 13
 
 static uint8_t multiboot_buffer[8 * 1024];
 
@@ -60,21 +60,21 @@ void kernel_test(void* mb_info, char* KERNEL_VERSION) {
     }
 
 	// Memory management setup
+	unmap_identity();
 	reserve_tables(&multiboot);
-	cleanup_kpt(0x0, get_kend(false));
 	build_physmap();
 
 	// Run tests for each subsystem
 
 	// Initialize PMM before VMM since VMM needs to allocate memory for page tables
-	pmm_status_t pmm_status = pmm_init(0x0, PHYSMAP_V2P(get_physmap_end()), PAGE_SIZE);
+	pmm_status_t pmm_status = pmm_init(kmem->ram, kend_grow(&multiboot, pmm_map_size(kmem->ram)));
 	if(pmm_status != PMM_OK) {
 		QEMU_LOG("[PMM] Failed to initialize physical memory manager", TOTAL_DBG);
 		return;
 	}
 
-	// Exclude kernel image from the allocator before populating freelists
-	pmm_exclude_range(get_kstart(false), get_kend(false));
+	// Same as the real boot, nothing below KEND is handed out
+	pmm_exclude_range(0, kmem->kend);
 
 	// Populate freelists from firmware reported available regions
 	for (size_t i = 0; i < multiboot.memory_map_length; i++) {
@@ -100,7 +100,7 @@ void kernel_test(void* mb_info, char* KERNEL_VERSION) {
 	}
     QEMU_LOG("Slab Initialized (Tests deferred)", TOTAL_DBG);
 
-	vmm_status_t vmm_status = vmm_kernel_init(get_kend(true) + PAGE_SIZE, 0xFFFFFFFFFFFFF000);
+	vmm_status_t vmm_status = vmm_kernel_init(KERNEL_P2V(kmem->kend) + PAGE_SIZE, 0xFFFFFFFFFFFFF000);
 	if(vmm_status != VMM_OK){
         LOGF("[VMM] Failed to initialize virtual memory manager, error code: %d\n", vmm_status);
 		return;
@@ -137,6 +137,10 @@ void kernel_test(void* mb_info, char* KERNEL_VERSION) {
 
     // NOW run the tests in order
     
+    kprintf("Running Boot and Paging tests...\n");
+    test_boot();
+    QEMU_LOG("Boot Test Suite Completed", TOTAL_DBG);
+
     kprintf("Running Kernel Physical Memory Manager tests...\n");
     test_pmm();
     QEMU_LOG("PMM Test Suite Completed", TOTAL_DBG);

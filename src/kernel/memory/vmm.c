@@ -12,6 +12,7 @@
 #include <kernel/memory/slab.h>
 #include <kernel/memory/pmm.h>
 #include <kernel/memory/vmm.h>
+#include <arch/x86_64/cpu/interrupts.h>
 #include <kernel/sys/spinlock.h>
 #include <kernel/debug.h>
 #include <klibc/string.h>
@@ -1067,6 +1068,37 @@ void vmm_destroy(vmm_t* vmm_pub) {
 }
 
 /*
+ * vmm_fault - Page fault handler, backs lazy objects on their first touch
+ * Returns NULL for any other fault, so the dispatcher deals with it
+ */
+static cpu_context_t* vmm_fault(cpu_context_t* ctx) {
+    uint64_t cr2;
+    __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+
+    // The active address space first, then the kernel's
+    vmm_t* spaces[2] = { vmm_get_current(), vmm_kernel_get() };
+
+    for (int i = 0; i < 2; i++) {
+        if (!spaces[i]) continue;
+        vm_object* obj = vmm_find_mapped_object(spaces[i], (void*)cr2);
+        if (!obj || !(obj->flags & VM_FLAG_LAZY)) continue;
+
+        uint64_t phys;
+        if (pmm_alloc(PAGE_SIZE, &phys) != PMM_OK) return NULL;
+        zero_page((void*)PHYSMAP_P2V(phys));
+
+        vmm_status_t status = vmm_map_page(spaces[i], phys, (void*)align_down(cr2, PAGE_SIZE), obj->flags);
+        if (status == VMM_OK) return ctx;
+
+        // Already mapped means another CPU backed it first, which is fine
+        pmm_free(phys, PAGE_SIZE);
+        return status == VMM_ERR_ALREADY_MAPPED ? ctx : NULL;
+    }
+
+    return NULL;
+}
+
+/*
  * vmm_switch - Switch to a different address space
  */
 void vmm_switch(vmm_t* vmm_pub) {
@@ -1135,6 +1167,8 @@ vmm_status_t vmm_kernel_init(uintptr_t alloc_base, uintptr_t alloc_end) {
         LOGF("[VMM] Failed to create slab caches\n");
         return VMM_ERR_NO_MEMORY;
     }
+
+    irq_register(INT_PAGE_FAULT, vmm_fault);
 
     LOGF("[VMM] Kernel VMM initialized, managing 0x%lx - 0x%lx (%zu MiB)\n",
          alloc_base, alloc_end, (alloc_end - alloc_base) / MEASUREMENT_UNIT_MB);

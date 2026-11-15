@@ -14,6 +14,7 @@
 #include <stddef.h>
 
 #define MAX_TRACK 4096
+#define PG 4096UL
 typedef struct { uint64_t addr; size_t size; bool on; } pmtr_t;
 
 static pmtr_t tr[MAX_TRACK];
@@ -38,34 +39,25 @@ static void tr_free(void) {
         if (tr[i].on) { pmm_free(tr[i].addr, tr[i].size); tr[i].on = false; }
     tidx = 0;
 }
+
+static uint64_t free_bytes(void) {
+    pmm_stats_t s; pmm_get_stats(&s);
+    uint64_t total = 0;
+    for (int i = 0; i < PMM_MAX_ORDERS; i++) total += s.free_blocks[i] * (PG << i);
+    return total;
+}
 #pragma endregion
 
 #pragma region Invariants
 
 static bool t_initialized(void) {
     TEST_ASSERT(pmm_is_initialized());
+    TEST_ASSERT(pmm_managed_end() == align_down(kmem->ram, PG));
     return true;
 }
 
-static bool t_base_end(void) {
-    TEST_ASSERT(pmm_managed_end() > pmm_managed_base());
-    return true;
-}
-
-static bool t_sz_consistent(void) {
-    TEST_ASSERT(pmm_managed_size() == pmm_managed_end() - pmm_managed_base());
-    return true;
-}
-
-static bool t_min_pow2(void) {
-    uint64_t min = pmm_min_block_size();
-    TEST_ASSERT(min > 0);
-    TEST_ASSERT((min & (min - 1)) == 0); /* power of two */
-    return true;
-}
-
-static bool t_min_geq_pg(void) {
-    TEST_ASSERT(pmm_min_block_size() >= 4096ULL);
+static bool t_double_init(void) {
+    TEST_ASSERT_STATUS(pmm_init(pmm_managed_end(), 0), PMM_ERR_ALREADY_INIT);
     return true;
 }
 #pragma endregion
@@ -74,93 +66,122 @@ static bool t_min_geq_pg(void) {
 
 static bool t_alloc_ok(void) {
     tr_reset();
-    uint64_t a; size_t s = pmm_min_block_size();
-    TEST_ASSERT_STATUS(pmm_alloc(s, &a), PMM_OK);
-    tr_add(a, s);
-    tr_free(); return true;
+    uint64_t a;
+    TEST_ASSERT_STATUS(pmm_alloc(PG, &a), PMM_OK); tr_add(a, PG);
+    TEST_ASSERT(a + PG <= pmm_managed_end());
+    TEST_ASSERT(!pmm_is_free(a));
+    tr_free();
+    TEST_ASSERT(pmm_is_free(a));
+    return true;
 }
 
-static bool t_alloc_range(void) {
+static bool t_alloc_bad_args(void) {
+    uint64_t a;
+    TEST_ASSERT_STATUS(pmm_alloc(0, &a), PMM_ERR_INVALID);
+    TEST_ASSERT_STATUS(pmm_alloc(PG, NULL), PMM_ERR_INVALID);
+    TEST_ASSERT_STATUS(pmm_alloc(pmm_managed_end() * 2, &a), PMM_ERR_OOM);
+    return true;
+}
+
+static bool t_alloc_rounds_up(void) {
     tr_reset();
-    uint64_t a; size_t s = pmm_min_block_size();
-    TEST_ASSERT_STATUS(pmm_alloc(s, &a), PMM_OK); tr_add(a, s);
-    TEST_ASSERT(a >= pmm_managed_base());
-    TEST_ASSERT(a + s <= pmm_managed_end());
+    uint64_t a;
+    TEST_ASSERT_STATUS(pmm_alloc(PG + 1, &a), PMM_OK); tr_add(a, PG + 1);
+    TEST_ASSERT((a & (2 * PG - 1)) == 0);       // rounded to an 8 KiB block
+    TEST_ASSERT(!pmm_is_free(a + PG));          // and the second page is ours too
     tr_free(); return true;
 }
 
 static bool t_alloc_aligned(void) {
     tr_reset();
-    for (int i = 0; i < 5; i++) {
-        size_t s = pmm_min_block_size() << i;
+    for (int i = 0; i < 10; i++) {
+        size_t s = PG << i;
         uint64_t a;
-        if (pmm_alloc(s, &a) == PMM_ERR_OOM) break;
-        tr_add(a, s);
-        if (a & (s - 1)) {
-            LOGF("[FAIL] 0x%lx not aligned to 0x%lx\n", a, s);
-            tr_free(); return false;
-        }
+        TEST_ASSERT_STATUS(pmm_alloc(s, &a), PMM_OK); tr_add(a, s);
+        if (a & (s - 1)) { LOGF("[FAIL] 0x%lx not aligned to 0x%lx\n", a, s); tr_free(); return false; }
     }
     tr_free(); return true;
 }
 
 static bool t_alloc_uniq(void) {
     tr_reset();
-    uint64_t a, b; size_t s = pmm_min_block_size();
-    if (pmm_alloc(s, &a) != PMM_OK) return true; tr_add(a, s);
-    if (pmm_alloc(s, &b) != PMM_OK) { tr_free(); return true; } tr_add(b, s);
-    TEST_ASSERT(a != b);
-    bool overlap = (a < b + s && b < a + s);
-    TEST_ASSERT(!overlap);
+    uint64_t a[64];
+    for (int i = 0; i < 64; i++) { TEST_ASSERT_STATUS(pmm_alloc(PG, &a[i]), PMM_OK); tr_add(a[i], PG); }
+    for (int i = 0; i < 64; i++)
+        for (int j = i + 1; j < 64; j++)
+            if (a[i] == a[j]) { LOGF("[FAIL] 0x%lx handed out twice\n", a[i]); tr_free(); return false; }
     tr_free(); return true;
-}
-
-static bool t_free_ok(void) {
-    tr_reset();
-    uint64_t a; size_t s = pmm_min_block_size();
-    TEST_ASSERT_STATUS(pmm_alloc(s, &a), PMM_OK);
-    TEST_ASSERT_STATUS(pmm_free(a, s), PMM_OK);
-    return true;
 }
 #pragma endregion
 
 #pragma region Memory Access
 
-static bool t_mem_access(void) {
-    tr_reset();
-    uint64_t phys; size_t s = pmm_min_block_size();
-    if (pmm_alloc(s, &phys) != PMM_OK) return true; tr_add(phys, s);
-    volatile uint64_t* p = (volatile uint64_t*)PHYSMAP_P2V(phys);
-    uint64_t pat = 0xDEADBEEFCAFEBABEULL;
-    *p = pat;
-    TEST_ASSERT(*p == pat);
-    *p = 0;
-    tr_free(); return true;
-}
-
 static bool t_mem_pattern(void) {
     tr_reset();
-    uint64_t phys; size_t s = pmm_min_block_size();
-    if (pmm_alloc(s, &phys) != PMM_OK) return true; tr_add(phys, s);
+    uint64_t phys;
+    TEST_ASSERT_STATUS(pmm_alloc(PG, &phys), PMM_OK); tr_add(phys, PG);
     uint32_t* p = (uint32_t*)PHYSMAP_P2V(phys);
-    for (size_t i = 0; i < s / 4; i++) p[i] = (uint32_t)(i * 0x12345678u);
-    for (size_t i = 0; i < s / 4; i++) TEST_ASSERT(p[i] == (uint32_t)(i * 0x12345678u));
+    for (size_t i = 0; i < PG / 4; i++) p[i] = (uint32_t)(i * 0x12345678u);
+    for (size_t i = 0; i < PG / 4; i++) TEST_ASSERT(p[i] == (uint32_t)(i * 0x12345678u));
     tr_free(); return true;
 }
 #pragma endregion
 
-#pragma region Boundary Enforcement
+#pragma region Bad Frees
 
-static bool t_free_before_base(void) {
-    uint64_t base = pmm_managed_base();
-    size_t min = (size_t)pmm_min_block_size();
-    if (base > min)
-        TEST_ASSERT_STATUS(pmm_free(base - min, min), PMM_ERR_OUT_OF_RANGE);
+static bool t_free_after_end(void) {
+    TEST_ASSERT_STATUS(pmm_free(pmm_managed_end(), PG), PMM_ERR_OUT_OF_RANGE);
+    TEST_ASSERT_STATUS(pmm_free(pmm_managed_end() - PG, 2 * PG), PMM_ERR_OUT_OF_RANGE);
     return true;
 }
 
-static bool t_free_after_end(void) {
-    TEST_ASSERT_STATUS(pmm_free(pmm_managed_end(), (size_t)pmm_min_block_size()), PMM_ERR_OUT_OF_RANGE);
+static bool t_free_misaligned(void) {
+    tr_reset();
+    uint64_t a;
+    TEST_ASSERT_STATUS(pmm_alloc(4 * PG, &a), PMM_OK); tr_add(a, 4 * PG);
+    TEST_ASSERT_STATUS(pmm_free(a + PG, 2 * PG), PMM_ERR_NOT_ALIGNED);
+    tr_free(); return true;
+}
+
+static bool t_double_free(void) {
+    uint64_t a;
+    TEST_ASSERT_STATUS(pmm_alloc(PG, &a), PMM_OK);
+    TEST_ASSERT_STATUS(pmm_free(a, PG), PMM_OK);
+    TEST_ASSERT_STATUS(pmm_free(a, PG), PMM_ERR_DOUBLE_FREE);
+    TEST_ASSERT(pmm_verify_integrity());
+    return true;
+}
+
+static bool t_partial_double_free(void) {
+    // Free the top half of a block, then the whole block: the top half is already free
+    uint64_t a;
+    TEST_ASSERT_STATUS(pmm_alloc(2 * PG, &a), PMM_OK);
+    TEST_ASSERT_STATUS(pmm_free(a + PG, PG), PMM_OK);
+    TEST_ASSERT_STATUS(pmm_free(a, 2 * PG), PMM_ERR_DOUBLE_FREE);
+    TEST_ASSERT_STATUS(pmm_free(a, PG), PMM_OK);
+    TEST_ASSERT(pmm_is_free(a) && pmm_is_free(a + PG));
+    TEST_ASSERT(pmm_verify_integrity());
+    return true;
+}
+
+static bool t_fake_header(void) {
+    // An allocated page whose contents look exactly like a free header must not get merged
+    uint64_t a;
+    TEST_ASSERT_STATUS(pmm_alloc(2 * PG, &a), PMM_OK);
+
+    pmm_free_header_t* fake = (pmm_free_header_t*)PHYSMAP_P2V(a + PG);
+    fake->magic = 0xFEEDBEEF;
+    fake->order = 0;
+    fake->next_phys = UINT64_MAX;
+    fake->prev_phys = UINT64_MAX;
+
+    TEST_ASSERT_STATUS(pmm_free(a, PG), PMM_OK);
+    TEST_ASSERT(pmm_is_free(a));
+    TEST_ASSERT(!pmm_is_free(a + PG));
+    TEST_ASSERT(pmm_verify_integrity());
+
+    TEST_ASSERT_STATUS(pmm_free(a + PG, PG), PMM_OK);
+    TEST_ASSERT(pmm_verify_integrity());
     return true;
 }
 #pragma endregion
@@ -169,69 +190,67 @@ static bool t_free_after_end(void) {
 
 static bool t_buddy_split_merge(void) {
     tr_reset();
-    size_t min = (size_t)pmm_min_block_size();
-    size_t huge = min * 4;
     uint64_t base;
-    if (pmm_alloc(huge, &base) != PMM_OK) return true;
-    pmm_free(base, huge);
+    TEST_ASSERT_STATUS(pmm_alloc(4 * PG, &base), PMM_OK);
+    TEST_ASSERT_STATUS(pmm_free(base, 4 * PG), PMM_OK);
 
-    /* Alloc 4 min-blocks; they should come from the just-freed huge block */
+    // Splitting it back down into single pages
     uint64_t a[4];
-    bool any_fail = false;
-    for (int i = 0; i < 4; i++) {
-        if (pmm_alloc(min, &a[i]) != PMM_OK) { any_fail = true; break; }
-        tr_add(a[i], min);
-    }
-    if (any_fail) { tr_free(); return true; }
+    for (int i = 0; i < 4; i++) { TEST_ASSERT_STATUS(pmm_alloc(PG, &a[i]), PMM_OK); tr_add(a[i], PG); }
 
-    bool contiguous = true;
-    for (int i = 1; i < 4; i++)
-        if (a[i] != a[i-1] + min) { contiguous = false; break; }
-
-    /* Release all; should allow re-allocating the full huge block */
+    // Freeing all four must give the whole block back
     tr_free();
+    TEST_ASSERT(pmm_is_free(base));
+    uint64_t before = free_bytes();
     uint64_t back;
-    if (contiguous) {
-        if (pmm_alloc(huge, &back) == PMM_OK) {
-            pmm_free(back, huge);
-        } else {
-            LOGF("[FAIL] buddy merge failed\n"); return false;
-        }
-    }
+    TEST_ASSERT_STATUS(pmm_alloc(4 * PG, &back), PMM_OK);
+    TEST_ASSERT(free_bytes() == before - 4 * PG);
+    TEST_ASSERT_STATUS(pmm_free(back, 4 * PG), PMM_OK);
+    return true;
+}
+
+static bool t_sandwich(void) {
+    tr_reset();
+    uint64_t base;
+    TEST_ASSERT_STATUS(pmm_alloc(4 * PG, &base), PMM_OK);
+
+    // Free the pages out of order, the middle one has to merge with both sides
+    TEST_ASSERT_STATUS(pmm_free(base, PG), PMM_OK);
+    TEST_ASSERT_STATUS(pmm_free(base + 2 * PG, PG), PMM_OK);
+    TEST_ASSERT_STATUS(pmm_free(base + PG, PG), PMM_OK);
+    TEST_ASSERT(!pmm_is_free(base + 3 * PG));
+    TEST_ASSERT_STATUS(pmm_free(base + 3 * PG, PG), PMM_OK);
+
+    TEST_ASSERT(pmm_verify_integrity());
     return true;
 }
 #pragma endregion
 
 #pragma region Stats
 
-static bool t_stats_smoke(void) {
-    pmm_stats_t s; pmm_get_stats(&s);
-    /* Must not crash */
-    return true;
-}
-
-static bool t_stats_alloc_cnt(void) {
+static bool t_stats_counts(void) {
     pmm_stats_t s0; pmm_get_stats(&s0);
-    uint64_t a; size_t sz = (size_t)pmm_min_block_size();
-    if (pmm_alloc(sz, &a) != PMM_OK) return true;
+    uint64_t a;
+    TEST_ASSERT_STATUS(pmm_alloc(PG, &a), PMM_OK);
     pmm_stats_t s1; pmm_get_stats(&s1);
     TEST_ASSERT(s1.alloc_calls == s0.alloc_calls + 1);
-    pmm_free(a, sz);
+    TEST_ASSERT_STATUS(pmm_free(a, PG), PMM_OK);
+    pmm_stats_t s2; pmm_get_stats(&s2);
+    TEST_ASSERT(s2.free_calls == s1.free_calls + 1);
+    pmm_dump_stats();
     return true;
 }
 
-static bool t_stats_free_cnt(void) {
-    pmm_stats_t s0; pmm_get_stats(&s0);
-    uint64_t a; size_t sz = (size_t)pmm_min_block_size();
-    if (pmm_alloc(sz, &a) != PMM_OK) return true;
-    pmm_free(a, sz);
-    pmm_stats_t s1; pmm_get_stats(&s1);
-    TEST_ASSERT(s1.free_calls > s0.free_calls);
-    return true;
-}
-
-static bool t_stats_dump(void) {
-    pmm_dump_stats(); /* must not crash */
+static bool t_no_leak(void) {
+    tr_reset();
+    uint64_t before = free_bytes();
+    for (int i = 0; i < 200; i++) {
+        uint64_t a; size_t s = PG << (i % 5);
+        TEST_ASSERT_STATUS(pmm_alloc(s, &a), PMM_OK); tr_add(a, s);
+    }
+    TEST_ASSERT(free_bytes() < before);
+    tr_free();
+    TEST_ASSERT(free_bytes() == before);
     return true;
 }
 #pragma endregion
@@ -244,51 +263,21 @@ static bool t_verify_clean(void) {
 }
 
 static bool t_corrupt_detect(void) {
-    tr_reset();
-    uint64_t phys; size_t s = (size_t)pmm_min_block_size();
-    if (pmm_alloc(s, &phys) != PMM_OK) return true;
-    pmm_free(phys, s);
-    pmm_free_header_t* h = (pmm_free_header_t*)PHYSMAP_P2V(phys);
-    uint32_t saved = h->magic;
-    if (saved != 0xFEEDBEEF) return true; /* Skip if magic mismatch */
+    // Free only the top page of a 4 page block, its neighbor is still ours, so it can't merge
+    uint64_t base;
+    TEST_ASSERT_STATUS(pmm_alloc(4 * PG, &base), PMM_OK);
+    TEST_ASSERT_STATUS(pmm_free(base + 3 * PG, PG), PMM_OK);
+
+    pmm_free_header_t* h = (pmm_free_header_t*)PHYSMAP_P2V(base + 3 * PG);
+    TEST_ASSERT(h->magic == 0xFEEDBEEF);
     h->magic = 0xDEADDEAD;
     bool ok = pmm_verify_integrity();
-    h->magic = saved; /* Repair */
+    h->magic = 0xFEEDBEEF;
+
     TEST_ASSERT(!ok);
-    TEST_ASSERT(pmm_verify_integrity()); /* Repaired */
-    return true;
-}
-#pragma endregion
+    TEST_ASSERT(pmm_verify_integrity());
 
-#pragma region Reserved Range
-
-static bool t_reserved(void) {
-    tr_reset();
-    size_t huge = 1024 * 1024;
-    uint64_t base;
-    TEST_ASSERT_STATUS(pmm_alloc(huge, &base), PMM_OK);
-    TEST_ASSERT_STATUS(pmm_free(base, huge), PMM_OK);
-
-    uint64_t rs = base + 256 * 1024;
-    uint64_t re = base + 512 * 1024;
-    TEST_ASSERT_STATUS(pmm_mark_reserved(rs, re), PMM_OK);
-
-    uint64_t frag;
-    if (pmm_alloc(256 * 1024, &frag) == PMM_OK) {
-        tr_add(frag, 256 * 1024);
-        bool bad = (frag >= rs && frag < re);
-        TEST_ASSERT(!bad);
-    }
-    tr_free(); return true;
-}
-
-static bool t_mark_free(void) {
-    /* Just test it doesn't crash and returns something sensible */
-    uint64_t base = pmm_managed_base();
-    /* Call on a very small already-free region - implementation must handle */
-    pmm_status_t s = pmm_populate(base, base); /* zero-size edge */
-    /* Any non-crash result is acceptable */
-    (void)s;
+    for (int i = 0; i < 3; i++) TEST_ASSERT_STATUS(pmm_free(base + i * PG, PG), PMM_OK);
     return true;
 }
 #pragma endregion
@@ -297,46 +286,40 @@ static bool t_mark_free(void) {
 
 static bool t_order_churn(void) {
     tr_reset();
-    size_t min = (size_t)pmm_min_block_size();
     for (int i = 0; i < 100; i++) {
-        size_t s = (i % 2 == 0) ? min : min * 4;
+        size_t s = (i % 2 == 0) ? PG : PG * 4;
         uint64_t a;
-        if (pmm_alloc(s, &a) == PMM_OK) {
-            tr_add(a, s);
-            uint32_t* p = (uint32_t*)PHYSMAP_P2V(a);
-            *p = (uint32_t)s;
-        }
+        TEST_ASSERT_STATUS(pmm_alloc(s, &a), PMM_OK); tr_add(a, s);
+        *(uint32_t*)PHYSMAP_P2V(a) = (uint32_t)s;
+
         if (i % 10 == 0) {
             for (int j = 0; j < tidx; j += 2) {
-                if (tr[j].on) {
-                    uint32_t* p = (uint32_t*)PHYSMAP_P2V(tr[j].addr);
-                    if (*p != (uint32_t)tr[j].size) { LOGF("[FAIL] churn corruption\n"); tr_free(); return false; }
-                    pmm_free(tr[j].addr, tr[j].size);
-                    tr[j].on = false;
+                if (!tr[j].on) continue;
+                if (*(uint32_t*)PHYSMAP_P2V(tr[j].addr) != (uint32_t)tr[j].size) {
+                    LOGF("[FAIL] churn corruption\n"); tr_free(); return false;
                 }
+                TEST_ASSERT_STATUS(pmm_free(tr[j].addr, tr[j].size), PMM_OK);
+                tr[j].on = false;
             }
         }
     }
     TEST_ASSERT(pmm_verify_integrity());
     tr_free(); return true;
 }
-#pragma endregion
-
-#pragma region All Orders Ladder
 
 static bool t_all_orders(void) {
     tr_reset();
-    uint64_t min = pmm_min_block_size();
-    uint64_t max = pmm_managed_size();
-    for (uint64_t s = min; s < max / 2; s <<= 1) {
+    uint64_t max = pmm_managed_end();
+    for (uint64_t s = PG; s < max / 8; s <<= 1) {
         uint64_t a;
-        if (pmm_alloc((size_t)s, &a) == PMM_OK) {
-            tr_add(a, (size_t)s);
-            if (a & (s - 1)) { LOGF("[FAIL] order %llu not aligned\n", s); tr_free(); return false; }
-        } else break;
+        if (pmm_alloc((size_t)s, &a) != PMM_OK) break;
+        tr_add(a, (size_t)s);
+        if (a & (s - 1)) { LOGF("[FAIL] order %lu not aligned\n", s); tr_free(); return false; }
     }
+    TEST_ASSERT(tidx >= 10);
     for (int i = tidx - 1; i >= 0; i--) {
-        if (tr[i].on) { pmm_free(tr[i].addr, tr[i].size); tr[i].on = false; }
+        TEST_ASSERT_STATUS(pmm_free(tr[i].addr, tr[i].size), PMM_OK);
+        tr[i].on = false;
     }
     tidx = 0;
     TEST_ASSERT(pmm_verify_integrity());
@@ -344,58 +327,31 @@ static bool t_all_orders(void) {
 }
 #pragma endregion
 
-#pragma region Exhaustion Stability
+#pragma region Exhaustion
 
 static bool t_exhaustion(void) {
+    // Drain everything in big blocks, nothing may land in the kernel or below it
     tr_reset();
-    size_t s = (size_t)pmm_min_block_size();
+    uint64_t before = free_bytes();
+    uint64_t kend = kmem->kend;
+
+    for (int o = PMM_MAX_ORDERS - 1; o >= 0; o--) {
+        uint64_t s = PG << o, a;
+        while (tidx < MAX_TRACK && pmm_alloc((size_t)s, &a) == PMM_OK) {
+            tr_add(a, (size_t)s);
+            if (a < kend) { LOGF("[FAIL] 0x%lx is below KEND (0x%lx)\n", a, kend); tr_free(); return false; }
+        }
+    }
+
     uint64_t a;
-    while (tidx < MAX_TRACK) {
-        if (pmm_alloc(s, &a) == PMM_ERR_OOM) break;
-        tr_add(a, s);
-    }
-    /* Verify integrity while exhausted */
+    TEST_ASSERT_STATUS(pmm_alloc(PG, &a), PMM_ERR_OOM);
+    TEST_ASSERT(free_bytes() == 0);
     TEST_ASSERT(pmm_verify_integrity());
+
     tr_free();
-    /* After freeing, at least one more alloc must succeed */
-    TEST_ASSERT_STATUS(pmm_alloc(s, &a), PMM_OK);
-    pmm_free(a, s);
+    TEST_ASSERT(free_bytes() == before);
+    TEST_ASSERT(pmm_verify_integrity());
     return true;
-}
-#pragma endregion
-
-#pragma region Sandwich Coalescing
-
-static bool t_sandwich(void) {
-    tr_reset();
-    size_t sz = (size_t)pmm_min_block_size();
-    size_t big = sz * 4;
-    uint64_t base;
-    if (pmm_alloc(big, &base) != PMM_OK) return true;
-    pmm_free(base, big);
-
-    uint64_t a, b, c, d;
-    if (pmm_alloc(sz,&a)!=PMM_OK||pmm_alloc(sz,&b)!=PMM_OK||
-        pmm_alloc(sz,&c)!=PMM_OK||pmm_alloc(sz,&d)!=PMM_OK) {
-        tr_free(); return true;
-    }
-    tr_add(a,sz); tr_add(b,sz); tr_add(c,sz); tr_add(d,sz);
-
-    bool contig = (b==a+sz && c==b+sz && d==c+sz);
-    if (!contig) { tr_free(); return true; }
-
-    pmm_free(a,sz); tr[0].on=false;
-    pmm_free(c,sz); tr[2].on=false;
-    pmm_free(b,sz); tr[1].on=false; /* triggers merge */
-
-    uint64_t merged;
-    if (pmm_alloc(sz*2, &merged) != PMM_OK) {
-        LOGF("[FAIL] coalesce: can't re-alloc merged block\n");
-        tr[3].on=false; pmm_free(d,sz);
-        return false;
-    }
-    tr_add(merged, sz*2);
-    tr_free(); return true;
 }
 #pragma endregion
 
@@ -418,32 +374,27 @@ void test_pmm(void) {
     LOGF("\n--- BEGIN PMM TEST ---\n");
 
     run_test("initialized",                   t_initialized);
-    run_test("base < end",                    t_base_end);
-    run_test("size = end - base",             t_sz_consistent);
-    run_test("min_block is power of 2",       t_min_pow2);
-    run_test("min_block >= 4096",             t_min_geq_pg);
-    run_test("alloc: PMM_OK",                 t_alloc_ok);
-    run_test("alloc: within managed range",   t_alloc_range);
+    run_test("init: second call rejected",    t_double_init);
+    run_test("alloc: PMM_OK + in range",      t_alloc_ok);
+    run_test("alloc: bad arguments",          t_alloc_bad_args);
+    run_test("alloc: rounds up to a block",   t_alloc_rounds_up);
     run_test("alloc: naturally aligned",      t_alloc_aligned);
-    run_test("alloc: unique non-overlapping", t_alloc_uniq);
-    run_test("free: PMM_OK",                  t_free_ok);
-    run_test("mem: read/write access",        t_mem_access);
+    run_test("alloc: unique pages",           t_alloc_uniq);
     run_test("mem: pattern persistence",      t_mem_pattern);
-    run_test("free: before base → error",     t_free_before_base);
     run_test("free: after end → error",       t_free_after_end);
+    run_test("free: misaligned → error",      t_free_misaligned);
+    run_test("free: double free caught",      t_double_free);
+    run_test("free: partial double free",     t_partial_double_free);
+    run_test("free: fake header not merged",  t_fake_header);
     run_test("buddy: split + merge",          t_buddy_split_merge);
-    run_test("stats: smoke (no crash)",       t_stats_smoke);
-    run_test("stats: alloc_calls increments", t_stats_alloc_cnt);
-    run_test("stats: free_calls increments",  t_stats_free_cnt);
-    run_test("stats: dump no crash",          t_stats_dump);
+    run_test("buddy: sandwich coalesce",      t_sandwich);
+    run_test("stats: counters",               t_stats_counts);
+    run_test("stats: no leaked bytes",        t_no_leak);
     run_test("integrity: clean",              t_verify_clean);
     run_test("integrity: detects corruption", t_corrupt_detect);
-    run_test("mark_reserved_range",           t_reserved);
-    run_test("mark_free_range (edge)",        t_mark_free);
     run_test("order churn stress",            t_order_churn);
     run_test("all orders ladder",             t_all_orders);
-    run_test("exhaustion + recovery",         t_exhaustion);
-    run_test("sandwich coalesce",             t_sandwich);
+    run_test("exhaustion: nothing below KEND",t_exhaustion);
 
     LOGF("--- END PMM TEST ---\n");
     LOGF("PMM Test Results: %d/%d\n\n", npass, ntests);

@@ -7,7 +7,6 @@
 #include <klibc/stdio.h>
 #include <kernel/drivers/serial.h>
 #include <kernel/sys/spinlock.h>
-#include <kernel/misc.h>
 #include <klibc/string.h>
 #include <stddef.h>
 #include <stdarg.h>
@@ -32,17 +31,9 @@ void QEMU_LOG(const char* msg, int total) {
  * QEMU_GENERIC_LOG - Debug function to klog messages to qemu serial without counter
  */
 void QEMU_GENERIC_LOG(const char* msg) {
-    char buf[128];
-    char* ptr = buf;
-
-    size_t msg_len = kstrlen(msg);
-    kmemcpy(ptr, msg, msg_len);
-    ptr += msg_len;
-
-    *ptr++ = '\n';
-    *ptr = '\0';
-
+    char buf[256];
     bool flags = spinlock_acquire(&log_lock);
+    ksnprintf(buf, sizeof(buf), "%s\n", msg);
     serial_write(buf);
     spinlock_release(&log_lock, flags);
 }
