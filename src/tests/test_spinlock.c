@@ -11,8 +11,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-static int ntests = 0;
-static int npass = 0;
+static suite_t suite;
 
 /* Read RFLAGS.IF */
 static inline bool irq_on(void) {
@@ -322,7 +321,7 @@ static bool t_churn_8x5k(void) {
     for (int i = 0; i < CL; i++) if (held[i]) spinlock_release(&locks[i], flags[i]);
     for (int i = 0; i < CL; i++) {
         if (spinlock_is_locked(&locks[i])) {
-            LOGF("[FAIL] lock %d still held post-churn ", i);
+            LOGF("lock %d still held post-churn\n", i);
             return false;
         }
     }
@@ -354,7 +353,7 @@ static bool t_try_churn(void) {
         }
         /* If try failed it means something is wrong (single-threaded) */
         else {
-            LOGF("[FAIL] try_acquire failed in single-threaded churn iter %d ", i);
+            LOGF("try_acquire failed in single-threaded churn iter %d\n", i);
             return false;
         }
     }
@@ -366,17 +365,12 @@ static bool t_try_churn(void) {
 #pragma region Runner
 
 static void run_test(const char* name, bool (*fn)(void)) {
-    ntests++;
-    LOGF("[TEST] %-40s ", name);
-    if (fn()) { npass++; LOGF("[PASS]\n"); }
-    else { LOGF("[FAIL]\n"); }
+    test_begin(name);
+    test_end(&suite, fn());
 }
 
 void test_spinlock(void) {
-    ntests = 0;
-    npass = 0;
-
-    LOGF("\n--- BEGIN SPINLOCK TEST ---\n");
+    suite_begin(&suite, "Spinlocks");
 
     run_test("Init: locked==0",              t_init_zero);
     run_test("Init: name set",               t_init_name);
@@ -384,41 +378,26 @@ void test_spinlock(void) {
     run_test("Acquire: sets locked",         t_acq_sets);
     run_test("Release: clears locked",       t_rel_clears);
     run_test("is_locked accuracy",           t_is_locked);
-    run_test("IRQ acquire (enabled→off)",    t_irq_acq_en);
-    run_test("IRQ acquire (disabled→off)",   t_irq_acq_dis);
+    run_test("IRQ acquire (enabled->off)",    t_irq_acq_en);
+    run_test("IRQ acquire (disabled->off)",   t_irq_acq_dis);
     run_test("IRQ release restores ON",      t_irq_rel_on);
     run_test("IRQ release restores OFF",     t_irq_rel_off);
-    run_test("IRQ alternating sequence ×5",  t_irq_alt);
+    run_test("IRQ alternating sequence x5",  t_irq_alt);
     run_test("try_acquire: free succeeds",   t_try_free);
     run_test("try_acquire: held fails",      t_try_held);
     run_test("try_acquire: was_enabled=T",   t_try_was_on);
     run_test("try_acquire: was_enabled=F",   t_try_was_off);
     run_test("try_fail: IRQ unchanged",      t_try_fail_irq);
-    run_test("try_fail → release → retry",   t_try_retry);
+    run_test("try_fail -> release -> retry",   t_try_retry);
     run_test("Two locks independent",        t_two_ind);
     run_test("Three locks independent",      t_three_ind);
-    run_test("Sequential reuse ×100",        t_seq_100);
-    run_test("Sequential reuse ×1000",       t_seq_1k);
-    run_test("Sequential IRQ state ×100",    t_seq_irq);
-    run_test("Churn: 8 locks × 5000 iters",  t_churn_8x5k);
+    run_test("Sequential reuse x100",        t_seq_100);
+    run_test("Sequential reuse x1000",       t_seq_1k);
+    run_test("Sequential IRQ state x100",    t_seq_irq);
+    run_test("Churn: 8 locks x 5000 iters",  t_churn_8x5k);
     run_test("Churn: all 16 free after",     t_churn_free);
-    run_test("try_acquire churn ×500",       t_try_churn);
+    run_test("try_acquire churn x500",       t_try_churn);
 
-    LOGF("--- END SPINLOCK TEST ---\n");
-    LOGF("Spinlock Test Results: %d/%d\n\n", npass, ntests);
-
-    #ifdef TEST_BUILD
-    #include <kernel/drivers/console.h>
-    #include <klibc/stdio.h>
-    if (npass != ntests) {
-        console_set_color(CONSOLE_COLOR_RED, CONSOLE_COLOR_BLACK);
-        kprintf("[-] Some spinlock tests failed (%d/%d passed).\n", npass, ntests);
-        console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
-    } else {
-        console_set_color(CONSOLE_COLOR_GREEN, CONSOLE_COLOR_BLACK);
-        kprintf("[+] All spinlock tests passed! (%d/%d)\n", npass, ntests);
-        console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
-    }
-    #endif
+    suite_end(&suite);
 }
 #pragma endregion

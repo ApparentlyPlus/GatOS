@@ -60,21 +60,18 @@ const char* exc_name(uint64_t vec)
  */
 static void panic_log(const char* msg, cpu_context_t* ctx)
 {
-    LOGF("\n*** KERNEL PANIC ***\n");
-    LOGF("REASON: %s\n", msg);
-    if (ctx) {
-        LOGF("%s (#%lu)  ERR=0x%lx  RIP=0x%016lx\n",
-             exc_name(ctx->vector_number),
-             ctx->vector_number,
-             ctx->error_code,
-             ctx->iret_rip);
-        if (ctx->vector_number == INT_PAGE_FAULT) {
-            uint64_t cr2;
-            __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
-            LOGF("CR2 (fault addr): 0x%016lx\n", cr2);
-        }
+    LOGF("KERNEL PANIC: %s\n", msg);
+    if (!ctx) return;
+
+    log_indent(1);
+    LOGF("%s (#%lu), error 0x%lx, rip 0x%016lx\n",
+         exc_name(ctx->vector_number), ctx->vector_number, ctx->error_code, ctx->iret_rip);
+    if (ctx->vector_number == INT_PAGE_FAULT) {
+        uint64_t cr2;
+        __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+        LOGF("fault address 0x%016lx\n", cr2);
     }
-    LOGF("********************\n");
+    log_indent(-1);
 }
 
 /*

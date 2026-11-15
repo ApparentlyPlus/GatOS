@@ -400,22 +400,21 @@ void pmm_dump_stats(void) {
 
     bool flags = spinlock_acquire(&pmm_lock);
 
-    LOGF("\n=== PMM Statistics ===\n");
-    LOGF("Managed range: [0x0 - 0x%lx) (%lu MiB), max order %u\n",
-           range_end, range_end / MEASUREMENT_UNIT_MB, max_order);
-    LOGF("Allocations: %lu  Frees: %lu  Coalesces: %lu  Corruptions: %lu\n",
-           stats.alloc_calls, stats.free_calls, stats.coalesce_success, stats.corruption_detected);
-
     uint64_t free_bytes = 0;
-    LOGF("Order  Size         Free Blocks\n");
-    for (uint32_t o = 0; o <= max_order; o++) {
-        if (!stats.free_blocks[o]) continue;
-        free_bytes += stats.free_blocks[o] * order_to_size(o);
-        LOGF("%-5u  0x%-9lx  %-5lu\n", o, order_to_size(o), stats.free_blocks[o]);
-    }
+    for (uint32_t o = 0; o <= max_order; o++) free_bytes += stats.free_blocks[o] * order_to_size(o);
 
-    LOGF("Free: %lu KiB of %lu KiB\n", free_bytes / MEASUREMENT_UNIT_KB, range_end / MEASUREMENT_UNIT_KB);
-    LOGF("======================\n");
+    LOGF("PMM\n");
+    log_indent(1);
+    LOGF("managing  0x0 - 0x%lx (%lu MiB, max order %u)\n", range_end, range_end / MEASUREMENT_UNIT_MB, max_order);
+    LOGF("free      %lu KiB of %lu KiB\n", free_bytes / MEASUREMENT_UNIT_KB, range_end / MEASUREMENT_UNIT_KB);
+    LOGF("calls     %lu allocs, %lu frees, %lu merges\n", stats.alloc_calls, stats.free_calls, stats.coalesce_success);
+    if (stats.corruption_detected) LOGF("errors    %lu corrupt blocks seen\n", stats.corruption_detected);
+
+    LOGF("free blocks\n");
+    log_indent(1);
+    for (uint32_t o = 0; o <= max_order; o++)
+        if (stats.free_blocks[o]) LOGF("order %-2u %8lu KiB  x%lu\n", o, order_to_size(o) / MEASUREMENT_UNIT_KB, stats.free_blocks[o]);
+    log_indent(-2);
     spinlock_release(&pmm_lock, flags);
 }
 
@@ -464,7 +463,7 @@ bool pmm_verify_integrity(void) {
         ok = false;
     }
 
-    LOGF(ok ? "[PMM] All checks passed\n" : "[PMM] FAILED - integrity compromised!\n");
+    if (!ok) LOGF("[PMM] Integrity check failed\n");
     spinlock_release(&pmm_lock, flags);
     return ok;
 }

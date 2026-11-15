@@ -13,8 +13,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-static int ntests = 0;
-static int npass = 0;
+static suite_t suite;
 
 #pragma region Init / Destroy
 
@@ -631,16 +630,12 @@ static bool t_cycle(void) {
 #pragma region Runner
 
 static void run_test(const char* name, bool (*fn)(void)) {
-    ntests++;
-    LOGF("[TEST] %-40s ", name);
-    if (fn()) { npass++; LOGF("[PASS]\n"); }
-    else { LOGF("[FAIL]\n"); }
+    test_begin(name);
+    test_end(&suite, fn());
 }
 
 void test_tty(void) {
-    ntests = 0;
-    npass = 0;
-    LOGF("\n--- BEGIN TTY SUBSYSTEM TEST ---\n");
+    suite_begin(&suite, "TTY");
 
     run_test("create: not null",              t_create_nn);
     run_test("create: fields zero",           t_create_fields);
@@ -693,21 +688,6 @@ void test_tty(void) {
     run_test("switch: no crash",              t_switch);
     run_test("cycle: no crash",               t_cycle);
 
-    LOGF("--- END TTY SUBSYSTEM TEST ---\n");
-    LOGF("TTY Test Results: %d/%d\n\n", npass, ntests);
-
-    #ifdef TEST_BUILD
-    #include <kernel/drivers/console.h>
-    #include <klibc/stdio.h>
-    if (npass != ntests) {
-        console_set_color(CONSOLE_COLOR_RED, CONSOLE_COLOR_BLACK);
-        kprintf("[-] Some TTY tests failed (%d/%d passed).\n", npass, ntests);
-        console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
-    } else {
-        console_set_color(CONSOLE_COLOR_GREEN, CONSOLE_COLOR_BLACK);
-        kprintf("[+] All TTY tests passed! (%d/%d)\n", npass, ntests);
-        console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
-    }
-    #endif
+    suite_end(&suite);
 }
 #pragma endregion

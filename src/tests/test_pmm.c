@@ -19,8 +19,7 @@ typedef struct { uint64_t addr; size_t size; bool on; } pmtr_t;
 
 static pmtr_t tr[MAX_TRACK];
 static int tidx = 0;
-static int ntests = 0;
-static int npass = 0;
+static suite_t suite;
 
 #pragma region Tracker
 
@@ -98,7 +97,7 @@ static bool t_alloc_aligned(void) {
         size_t s = PG << i;
         uint64_t a;
         TEST_ASSERT_STATUS(pmm_alloc(s, &a), PMM_OK); tr_add(a, s);
-        if (a & (s - 1)) { LOGF("[FAIL] 0x%lx not aligned to 0x%lx\n", a, s); tr_free(); return false; }
+        if (a & (s - 1)) { LOGF("0x%lx not aligned to 0x%lx\n", a, s); tr_free(); return false; }
     }
     tr_free(); return true;
 }
@@ -109,7 +108,7 @@ static bool t_alloc_uniq(void) {
     for (int i = 0; i < 64; i++) { TEST_ASSERT_STATUS(pmm_alloc(PG, &a[i]), PMM_OK); tr_add(a[i], PG); }
     for (int i = 0; i < 64; i++)
         for (int j = i + 1; j < 64; j++)
-            if (a[i] == a[j]) { LOGF("[FAIL] 0x%lx handed out twice\n", a[i]); tr_free(); return false; }
+            if (a[i] == a[j]) { LOGF("0x%lx handed out twice\n", a[i]); tr_free(); return false; }
     tr_free(); return true;
 }
 #pragma endregion
@@ -296,7 +295,7 @@ static bool t_order_churn(void) {
             for (int j = 0; j < tidx; j += 2) {
                 if (!tr[j].on) continue;
                 if (*(uint32_t*)PHYSMAP_P2V(tr[j].addr) != (uint32_t)tr[j].size) {
-                    LOGF("[FAIL] churn corruption\n"); tr_free(); return false;
+                    LOGF("churn corruption\n"); tr_free(); return false;
                 }
                 TEST_ASSERT_STATUS(pmm_free(tr[j].addr, tr[j].size), PMM_OK);
                 tr[j].on = false;
@@ -314,7 +313,7 @@ static bool t_all_orders(void) {
         uint64_t a;
         if (pmm_alloc((size_t)s, &a) != PMM_OK) break;
         tr_add(a, (size_t)s);
-        if (a & (s - 1)) { LOGF("[FAIL] order %lu not aligned\n", s); tr_free(); return false; }
+        if (a & (s - 1)) { LOGF("order %lu not aligned\n", s); tr_free(); return false; }
     }
     TEST_ASSERT(tidx >= 10);
     for (int i = tidx - 1; i >= 0; i--) {
@@ -339,7 +338,7 @@ static bool t_exhaustion(void) {
         uint64_t s = PG << o, a;
         while (tidx < MAX_TRACK && pmm_alloc((size_t)s, &a) == PMM_OK) {
             tr_add(a, (size_t)s);
-            if (a < kend) { LOGF("[FAIL] 0x%lx is below KEND (0x%lx)\n", a, kend); tr_free(); return false; }
+            if (a < kend) { LOGF("0x%lx is below KEND (0x%lx)\n", a, kend); tr_free(); return false; }
         }
     }
 
@@ -358,20 +357,15 @@ static bool t_exhaustion(void) {
 #pragma region Runner
 
 static void run_test(const char* name, bool (*fn)(void)) {
-    ntests++;
-    LOGF("[TEST] %-40s ", name);
-    if (!pmm_verify_integrity()) { LOGF("[SKIP] (PMM corrupted)\n"); return; }
+    test_begin(name);
+    if (!pmm_verify_integrity()) { test_skip(&suite, "PMM corrupted"); return; }
     bool pass = fn();
-    if (tidx > 0) { LOGF("[WARN] leak (cleaning) ... "); tr_free(); }
-    if (pass) { npass++; LOGF("[PASS]\n"); }
-    else { LOGF("[FAIL]\n"); }
+    if (tidx > 0) { tr_free(); }
+    test_end(&suite, pass);
 }
 
 void test_pmm(void) {
-    ntests = 0;
-    npass = 0;
-
-    LOGF("\n--- BEGIN PMM TEST ---\n");
+    suite_begin(&suite, "Physical memory manager");
 
     run_test("initialized",                   t_initialized);
     run_test("init: second call rejected",    t_double_init);
@@ -381,8 +375,8 @@ void test_pmm(void) {
     run_test("alloc: naturally aligned",      t_alloc_aligned);
     run_test("alloc: unique pages",           t_alloc_uniq);
     run_test("mem: pattern persistence",      t_mem_pattern);
-    run_test("free: after end → error",       t_free_after_end);
-    run_test("free: misaligned → error",      t_free_misaligned);
+    run_test("free: after end -> error",       t_free_after_end);
+    run_test("free: misaligned -> error",      t_free_misaligned);
     run_test("free: double free caught",      t_double_free);
     run_test("free: partial double free",     t_partial_double_free);
     run_test("free: fake header not merged",  t_fake_header);
@@ -396,21 +390,6 @@ void test_pmm(void) {
     run_test("all orders ladder",             t_all_orders);
     run_test("exhaustion: nothing below KEND",t_exhaustion);
 
-    LOGF("--- END PMM TEST ---\n");
-    LOGF("PMM Test Results: %d/%d\n\n", npass, ntests);
-
-    #ifdef TEST_BUILD
-    #include <kernel/drivers/console.h>
-    #include <klibc/stdio.h>
-    if (npass != ntests) {
-        console_set_color(CONSOLE_COLOR_RED, CONSOLE_COLOR_BLACK);
-        kprintf("[-] Some PMM tests failed (%d/%d passed).\n", npass, ntests);
-        console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
-    } else {
-        console_set_color(CONSOLE_COLOR_GREEN, CONSOLE_COLOR_BLACK);
-        kprintf("[+] All PMM tests passed! (%d/%d)\n", npass, ntests);
-        console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
-    }
-    #endif
+    suite_end(&suite);
 }
 #pragma endregion

@@ -78,8 +78,7 @@ typedef struct {
 #define MAX_TRACK 1024
 static htrace_t track[MAX_TRACK];
 static int tidx = 0;
-static int ntests = 0;
-static int npass = 0;
+static suite_t suite;
 #pragma endregion
 
 #pragma region Tracker
@@ -510,7 +509,7 @@ static bool t_multi_ind(void) {
         uint8_t* b = (uint8_t*)ptrs[i];
         for (size_t j = 0; j < sizes[i]; j++) {
             if (b[j] != (uint8_t)i) {
-                LOGF("[FAIL] corruption at alloc %d byte %zu\n", i, j);
+                LOGF("corruption at alloc %d byte %zu\n", i, j);
                 return false;
             }
         }
@@ -539,7 +538,7 @@ static bool t_stress_churn(void) {
             kmemset(pool[idx], (uint8_t)idx, sz);
         } else {
             if (*(uint8_t*)pool[idx] != (uint8_t)idx) {
-                LOGF("[FAIL] stress corruption idx %d\n", idx);
+                LOGF("stress corruption idx %d\n", idx);
                 return false;
             }
             kfree(pool[idx]);
@@ -556,20 +555,15 @@ static bool t_stress_churn(void) {
 #pragma region Runner
 
 static void run_test(const char* name, bool (*fn)(void)) {
-    ntests++;
-    LOGF("[TEST] %-40s ", name);
+    test_begin(name);
     heap_kernel_get(); /* force init */
     bool pass = fn();
-    if (tidx > 0) { LOGF("[WARN] leak (cleaning) ... "); tr_free(); }
-    if (pass) { npass++; LOGF("[PASS]\n"); }
-    else { LOGF("[FAIL]\n"); }
+    if (tidx > 0) { tr_free(); }
+    test_end(&suite, pass);
 }
 
 void test_heap(void) {
-    ntests = 0;
-    npass = 0;
-
-    LOGF("\n--- BEGIN HEAP MANAGER TEST ---\n");
+    suite_begin(&suite, "Kernel heap");
 
     run_test("init: already init",            t_init_already);
     run_test("get: not null",                 t_get_nn);
@@ -584,7 +578,7 @@ void test_heap(void) {
     run_test("free(NULL): no crash",          t_free_null);
     run_test("free: double-free safe",        t_dbl_free);
     run_test("calloc: zeroed memory",         t_calloc_zero);
-    run_test("calloc: overflow → NULL",       t_calloc_ovf);
+    run_test("calloc: overflow -> NULL",       t_calloc_ovf);
     run_test("calloc(0,N): safe",             t_calloc_zero_n);
     run_test("realloc(NULL,N): = malloc",     t_realloc_null_malloc);
     run_test("realloc(p,0): = free",          t_realloc_zero_free);
@@ -608,21 +602,6 @@ void test_heap(void) {
     run_test("multi-alloc independence",      t_multi_ind);
     run_test("stress churn (3000 iters)",     t_stress_churn);
 
-    LOGF("--- END HEAP MANAGER TEST ---\n");
-    LOGF("Heap Test Results: %d/%d\n\n", npass, ntests);
-
-    #ifdef TEST_BUILD
-    #include <kernel/drivers/console.h>
-    #include <klibc/stdio.h>
-    if (npass != ntests) {
-        console_set_color(CONSOLE_COLOR_RED, CONSOLE_COLOR_BLACK);
-        kprintf("[-] Some heap tests failed (%d/%d passed).\n", npass, ntests);
-        console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
-    } else {
-        console_set_color(CONSOLE_COLOR_GREEN, CONSOLE_COLOR_BLACK);
-        kprintf("[+] All heap tests passed! (%d/%d)\n", npass, ntests);
-        console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
-    }
-    #endif
+    suite_end(&suite);
 }
 #pragma endregion

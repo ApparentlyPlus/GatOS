@@ -1246,58 +1246,40 @@ void heap_dump(heap_t* heap) {
 
     bool lock_flags = spinlock_acquire(&heap->lock);
 
-    LOGF("\n=== HEAP DUMP ===\n");
-    LOGF("Heap at %p (magic: 0x%x, is_kernel: %d)\n", heap, heap->magic,
-         heap->is_kernel);
-    LOGF("Total size: %zu bytes across %zu arenas\n", heap->current_size,
-         heap->arena_count);
-    LOGF("Allocated: %zu bytes in %zu blocks\n", heap->total_allocated,
-         heap->allocation_count);
-    LOGF("Free: %zu bytes\n", heap->total_free);
+    LOGF("%s heap at %p\n", heap->is_kernel ? "Kernel" : "User", heap);
+    log_indent(1);
+    LOGF("size      %zu bytes across %zu arenas\n", heap->current_size, heap->arena_count);
+    LOGF("used      %zu bytes in %zu blocks\n", heap->total_allocated, heap->allocation_count);
+    LOGF("free      %zu bytes\n", heap->total_free);
 
-    LOGF("\nArenas:\n");
-    arena_t* a = heap->arenas;
     int arena_num = 0;
-
-    while (a) {
+    for (arena_t* a = heap->arenas; a; a = a->next, arena_num++) {
         if (!arena_validate(a)) {
-            LOGF("  [CORRUPTED ARENA]\n");
+            LOGF("[corrupted arena]\n");
             break;
         }
 
-        LOGF("  [%d] 0x%lx - 0x%lx (size: %zu, free: %zu, used: %zu)\n",
-             arena_num, a->start, a->end, a->size, a->total_free,
-             a->total_allocated);
-
-        uintptr_t current_addr = a->start;
-        int block_num = 0;
+        LOGF("arena %d   0x%lx - 0x%lx (%zu bytes, %zu free, %zu used)\n",
+             arena_num, a->start, a->end, a->size, a->total_free, a->total_allocated);
+        log_indent(1);
 
         // only print first few blocks so the klog doesn't explode
-        while (current_addr < a->end && block_num < 10) {
+        uintptr_t current_addr = a->start;
+        int block_num = 0;
+        for (; current_addr < a->end && block_num < 10; block_num++) {
             blk_hdr_t* block = (blk_hdr_t*)current_addr;
-
             if (!heap_validate_blk(block)) {
-                LOGF("      [CORRUPTED BLOCK]\n");
+                LOGF("[corrupted block]\n");
                 break;
             }
-
-            LOGF("      Block %d: %s, size=%zu\n", block_num,
-                 block->magic == BLOCK_MAGIC_FREE ? "FREE" : "USED",
-                 block->size);
-
+            LOGF("block %-2d  %s %zu bytes\n", block_num,
+                 block->magic == BLOCK_MAGIC_FREE ? "free" : "used", block->size);
             current_addr += block->total_size;
-            block_num++;
         }
-
-        if (current_addr < a->end) {
-            LOGF("      ... (more blocks)\n");
-        }
-
-        a = a->next;
-        arena_num++;
+        if (current_addr < a->end) LOGF("...\n");
+        log_indent(-1);
     }
-
-    LOGF("=================\n");
+    log_indent(-1);
     spinlock_release(&heap->lock, lock_flags);
 }
 

@@ -162,13 +162,6 @@ static inline bool validate_free_obj(slab_free_obj_t* obj) {
 }
  
 /*
- * b2kb - Convert bytes to kilobytes with 2 decimal places
- */
-static uint64_t b2kb(uint64_t bytes) {
-    return (bytes * 100ULL) / 1024ULL;
-}
-
-/*
  * b2mb - Convert bytes to megabytes with 2 decimal places
  */
 static uint64_t b2mb(uint64_t bytes) {
@@ -718,6 +711,19 @@ void slab_get_stats(slab_stats_t* out_stats) {
 }
 
 /*
+ * stats_locked - The allocator wide numbers (list lock held)
+ */
+static void stats_locked(void) {
+    uint64_t mib = b2mb(stats.total_pmm_bytes);
+    LOGF("Slab allocator\n");
+    log_indent(1);
+    LOGF("caches    %lu of %d\n", stats.cache_count, SLAB_MAX_CACHES);
+    LOGF("slabs     %lu (%lu.%02lu MiB from the PMM)\n", stats.total_slabs, mib / 100ULL, mib % 100ULL);
+    if (stats.corruption_detected) LOGF("errors    %lu corruptions caught\n", stats.corruption_detected);
+    log_indent(-1);
+}
+
+/*
  * slab_dump_stats - print global stats to klog
  */
 void slab_dump_stats(void) {
@@ -727,16 +733,7 @@ void slab_dump_stats(void) {
         spinlock_release(&slab_list_lock, flags);
         return;
     }
-
-    uint64_t total_pmm_mib = b2mb(stats.total_pmm_bytes);
-
-    LOGF("\n=== Slab Allocator Statistics ===\n");
-    LOGF("Total slabs: %lu\n", stats.total_slabs);
-    LOGF("Total PMM bytes: %lu (%lu.%02lu MiB)\n", stats.total_pmm_bytes,
-         total_pmm_mib / 100ULL, total_pmm_mib % 100ULL);
-    LOGF("Active caches: %lu (dynamic allocation)\n", stats.cache_count);
-    LOGF("Corruption events: %lu\n", stats.corruption_detected);
-    LOGF("=================================\n");
+    stats_locked();
     spinlock_release(&slab_list_lock, flags);
 }
 
@@ -748,33 +745,19 @@ void slab_cache_dump(slab_cache_t* cache) {
 
     bool flags = spinlock_acquire(&cache->lock);
 
-    LOGF("\n=== Slab Cache: %s ===\n", cache->name);
-    LOGF("User object size: %zu bytes\n", cache->user_size);
-    LOGF("Total object size: %zu bytes (align: %zu)\n", cache->obj_size,
-         cache->align);
-    LOGF("Cache ID: %u\n", cache->cache_id);
-    LOGF("\nStatistics:\n");
-    LOGF("  Total allocations: %lu\n", cache->stats.total_allocs);
-    LOGF("  Total frees:       %lu\n", cache->stats.total_frees);
-    LOGF("  Active objects:    %lu\n", cache->stats.active_objects);
-    LOGF("  Slab count:        %lu\n", cache->stats.slab_count);
-    LOGF("  Empty slabs:       %lu\n", cache->stats.empty_slabs);
-    LOGF("  Partial slabs:     %lu\n", cache->stats.partial_slabs);
-    LOGF("  Full slabs:        %lu\n", cache->stats.full_slabs);
+    uint64_t total = cache->stats.slab_count * PAGE_SIZE;
+    uint64_t used = cache->stats.active_objects * cache->obj_size;
+    uint64_t pct = ratio_to_tenths(used, total);
 
-    uint64_t total_bytes = cache->stats.slab_count * PAGE_SIZE;
-    uint64_t used_bytes = cache->stats.active_objects * cache->obj_size;
-    uint64_t total_kib = b2kb(total_bytes);
-    uint64_t used_kib = b2kb(used_bytes);
-    uint64_t utilization_tenths = ratio_to_tenths(used_bytes, total_bytes);
-
-    LOGF("\nMemory usage:\n");
-    LOGF("  Total:        %lu bytes (%lu.%02lu KiB)\n", total_bytes,
-         total_kib / 100ULL, total_kib % 100ULL);
-    LOGF("  Used:         %lu bytes (%lu.%02lu KiB)\n", used_bytes,
-         used_kib / 100ULL, used_kib % 100ULL);
-    LOGF("  Utilization:  %lu.%01lu%%\n", utilization_tenths / 10ULL, utilization_tenths % 10ULL);
-    LOGF("========================\n");
+    LOGF("cache %s (id %u)\n", cache->name, cache->cache_id);
+    log_indent(1);
+    LOGF("objects   %zu bytes, %zu with header (align %zu)\n", cache->user_size, cache->obj_size, cache->align);
+    LOGF("calls     %lu allocs, %lu frees, %lu live\n",
+         cache->stats.total_allocs, cache->stats.total_frees, cache->stats.active_objects);
+    LOGF("slabs     %lu (%lu empty, %lu partial, %lu full)\n", cache->stats.slab_count,
+         cache->stats.empty_slabs, cache->stats.partial_slabs, cache->stats.full_slabs);
+    LOGF("memory    %lu of %lu bytes used (%lu.%01lu%%)\n", used, total, pct / 10ULL, pct % 10ULL);
+    log_indent(-1);
 
     spinlock_release(&cache->lock, flags);
 }
@@ -787,35 +770,20 @@ void slab_dump_all_caches(void) {
         return;
     }
 
-    uint64_t total_pmm_mib = b2mb(stats.total_pmm_bytes);
+    stats_locked();
+    log_indent(1);
+    if (!caches) LOGF("no caches\n");
 
-    LOGF("\n=== Slab Allocator Statistics ===\n");
-    LOGF("Total slabs: %lu\n", stats.total_slabs);
-    LOGF("Total PMM bytes: %lu (%lu.%02lu MiB)\n", stats.total_pmm_bytes,
-         total_pmm_mib / 100ULL, total_pmm_mib % 100ULL);
-    LOGF("Active caches: %lu (dynamic allocation)\n", stats.cache_count);
-    LOGF("Corruption events: %lu\n", stats.corruption_detected);
-    LOGF("=================================\n");
-    LOGF("\n");
-
-    slab_cache_t* cache = caches;
-    if (!cache) {
-        LOGF("No caches created\n");
-        spinlock_release(&slab_list_lock, flags);
-        return;
-    }
-
-    while (cache) {
+    for (slab_cache_t* cache = caches; cache; cache = cache->next) {
         if (!cache_validate(cache)) {
             LOGF("[SLAB ERROR] Corrupted cache in list\n");
             break;
         }
-
-        // list lock is held; dump acquires cache lock - safe because order is list -> cache
+        // list lock is held and dump takes the cache lock, safe because the order is list -> cache
         slab_cache_dump(cache);
-        LOGF("\n");
-        cache = cache->next;
     }
+
+    log_indent(-1);
     spinlock_release(&slab_list_lock, flags);
 }
 
@@ -830,7 +798,6 @@ bool slab_verify_integrity(void) {
         return false;
     }
 
-    LOGF("[SLAB VERIFY] Checking slab allocator integrity...\n");
     bool all_ok = true;
 
     slab_cache_t* cache = caches;
@@ -953,11 +920,7 @@ bool slab_verify_integrity(void) {
         }
     }
 
-    if (all_ok) {
-        LOGF("[SLAB VERIFY] All checks passed (%d caches)\n", cache_count);
-    } else {
-        LOGF("[SLAB VERIFY] FAILED - integrity compromised!\n");
-    }
+    if (!all_ok) LOGF("[SLAB VERIFY] Integrity check failed\n");
 
     spinlock_release(&slab_list_lock, list_flags);
     return all_ok;

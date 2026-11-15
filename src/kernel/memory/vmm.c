@@ -1650,32 +1650,23 @@ void vmm_dump(vmm_t* vmm_pub) {
 
     bool lock_flags = spinlock_acquire(&vmm->lock);
 
-    LOGF("\n=== VMM Dump ===\n");
-    LOGF("VMM at %p (magic: 0x%x, is_kernel: %d)\n", vmm, vmm->magic,
-         vmm->is_kernel);
-    LOGF("Alloc range: 0x%lx - 0x%lx (size: 0x%lx)\n", vmm->public.alloc_base,
-         vmm->public.alloc_end, vmm->public.alloc_end - vmm->public.alloc_base);
-    LOGF("Page table root (phys): 0x%lx\n", vmm->public.pt_root);
-    LOGF("\nVM Objects:\n");
+    LOGF("%s VMM at %p\n", vmm->is_kernel ? "Kernel" : "User", vmm);
+    log_indent(1);
+    LOGF("range     0x%lx - 0x%lx\n", vmm->public.alloc_base, vmm->public.alloc_end);
+    LOGF("root      0x%lx (phys)\n", vmm->public.pt_root);
 
-    avl_node_t* it = avl_min(&vmm->vma_tree);
     int count = 0;
-
-    while (it) {
+    for (avl_node_t* it = avl_min(&vmm->vma_tree); it; it = avl_next(it), count++) {
         vmo_ext* current = AVL_ENTRY(it, vmo_ext, vma_node);
         if (!vm_object_validate(current)) {
-            LOGF("[CORRUPTED OBJECT AT INDEX %d]\n", count);
+            LOGF("[corrupted object at index %d]\n", count);
             break;
         }
-        LOGF("  [%d] base=0x%016lx, length=0x%08lx, flags=0x%02lx", count,
+        LOGF("object %-3d 0x%016lx  0x%08lx bytes  flags 0x%02lx\n", count,
              current->public.base, current->public.length, current->public.flags);
-        count++;
-        it = avl_next(it);
     }
-
-    if (count == 0) LOGF("  (no objects)\n");
-    LOGF("Total objects: %d\n", count);
-    LOGF("================\n");
+    if (count == 0) LOGF("no objects\n");
+    log_indent(-1);
 
     spinlock_release(&vmm->lock, lock_flags);
 }
@@ -1770,7 +1761,6 @@ bool vmm_verify_integrity(vmm_t* vmm_pub) {
 
     bool lock_flags = spinlock_acquire(&vmm->lock);
 
-    LOGF("[VMM VERIFY] Checking VMM at %p\n", vmm);
 
     if (!vmm_validate(vmm)) {
         spinlock_release(&vmm->lock, lock_flags);
@@ -1841,7 +1831,6 @@ bool vmm_verify_integrity(vmm_t* vmm_pub) {
         count++;
     }
 
-    LOGF("[VMM VERIFY] All checks passed (%d objects)\n", count);
     spinlock_release(&vmm->lock, lock_flags);
     return true;
 }

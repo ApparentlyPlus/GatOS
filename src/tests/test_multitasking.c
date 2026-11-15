@@ -21,8 +21,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-static int ntests = 0;
-static int npass = 0;
+static suite_t suite;
 
 #pragma region Helpers
 
@@ -529,18 +528,13 @@ static bool t_sys_abi(void) {
 #pragma region Runner
 
 static void run_test(const char* name, bool (*fn)(void)) {
-    ntests++;
-    LOGF("[TEST] %-40s ", name);
+    test_begin(name);
     bool pass = fn();
-    if (pass) { npass++; LOGF("[PASS]\n"); }
-    else { LOGF("[FAIL]\n"); }
+    test_end(&suite, pass);
 }
 
 void test_multitasking(void) {
-    ntests = 0;
-    npass = 0;
-
-    LOGF("\n--- BEGIN MULTITASKING TEST ---\n");
+    suite_begin(&suite, "Multitasking");
 
     run_test("sched_active is true",          t_sched_active);
     run_test("sched_current not null",        t_sched_nn);
@@ -584,21 +578,6 @@ void test_multitasking(void) {
     run_test("thread_create_bootstrap",       t_bootstrap);
     run_test("syscall keeps non-ABI regs",    t_sys_abi);
 
-    LOGF("--- END MULTITASKING TEST ---\n");
-    LOGF("Multitasking Test Results: %d/%d\n\n", npass, ntests);
-
-    #ifdef TEST_BUILD
-    #include <kernel/drivers/console.h>
-    #include <klibc/stdio.h>
-    if (npass != ntests) {
-        console_set_color(CONSOLE_COLOR_RED, CONSOLE_COLOR_BLACK);
-        kprintf("[-] Multitasking tests failed (%d/%d passed).\n", npass, ntests);
-        console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
-    } else {
-        console_set_color(CONSOLE_COLOR_GREEN, CONSOLE_COLOR_BLACK);
-        kprintf("[+] Multitasking tests passed! (%d/%d)\n", npass, ntests);
-        console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
-    }
-    #endif
+    suite_end(&suite);
 }
 #pragma endregion

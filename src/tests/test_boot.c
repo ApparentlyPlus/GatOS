@@ -15,8 +15,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-static int ntests = 0;
-static int npass = 0;
+static suite_t suite;
 
 extern uint64_t isr_stubs[IDT_SIZE];
 
@@ -135,18 +134,13 @@ static bool t_idt_dpl(void) {
 #pragma region Runner
 
 static void run_test(const char* name, bool (*fn)(void)) {
-    ntests++;
-    LOGF("[TEST] %-40s ", name);
+    test_begin(name);
     bool pass = fn();
-    if (pass) { npass++; LOGF("[PASS]\n"); }
-    else { LOGF("[FAIL]\n"); }
+    test_end(&suite, pass);
 }
 
 void test_boot(void) {
-    ntests = 0;
-    npass = 0;
-
-    LOGF("\n--- BEGIN BOOT TEST ---\n");
+    suite_begin(&suite, "Boot and paging");
 
     run_test("identity map removed",          t_identity_gone);
     run_test("physmap aliases kernel memory", t_physmap_alias);
@@ -156,21 +150,6 @@ void test_boot(void) {
     run_test("idt: IST only on #DF and #PF",  t_idt_ist);
     run_test("idt: DPL 3 only on #BP and #DB",t_idt_dpl);
 
-    LOGF("--- END BOOT TEST ---\n");
-    LOGF("Boot Test Results: %d/%d\n\n", npass, ntests);
-
-    #ifdef TEST_BUILD
-    #include <kernel/drivers/console.h>
-    #include <klibc/stdio.h>
-    if (npass != ntests) {
-        console_set_color(CONSOLE_COLOR_RED, CONSOLE_COLOR_BLACK);
-        kprintf("[-] Some boot tests failed (%d/%d passed).\n", npass, ntests);
-        console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
-    } else {
-        console_set_color(CONSOLE_COLOR_GREEN, CONSOLE_COLOR_BLACK);
-        kprintf("[+] All boot tests passed! (%d/%d)\n", npass, ntests);
-        console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
-    }
-    #endif
+    suite_end(&suite);
 }
 #pragma endregion

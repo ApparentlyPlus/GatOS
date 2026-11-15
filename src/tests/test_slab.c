@@ -14,8 +14,7 @@
 
 #pragma region Harness
 
-static int ntests = 0;
-static int npass = 0;
+static suite_t suite;
 
 /* Caches registered during a test (for cleanup) */
 #define MAX_TR_CACHES 16
@@ -35,13 +34,11 @@ static void tr_free(void) {
 }
 
 static void run_test(const char* name, bool (*fn)(void)) {
-    ntests++;
-    LOGF("[TEST] %-40s ", name);
-    if (!slab_is_initialized()) { LOGF("[SKIP] (slab not init)\n"); return; }
+    test_begin(name);
+    if (!slab_is_initialized()) { test_skip(&suite, "slab not init"); return; }
     bool pass = fn();
-    if (tr_n > 0) { LOGF("[WARN] leak (cleaning) ... "); tr_free(); }
-    if (pass) { npass++; LOGF("[PASS]\n"); }
-    else { LOGF("[FAIL]\n"); }
+    if (tr_n > 0) { tr_free(); }
+    test_end(&suite, pass);
 }
 #pragma endregion
 
@@ -599,10 +596,7 @@ static bool t_recreate(void) {
 #pragma region Runner
 
 void test_slab(void) {
-    ntests = 0;
-    npass = 0;
-
-    LOGF("--- BEGIN SLAB ALLOCATOR TEST ---\n");
+    suite_begin(&suite, "Slab allocator");
 
     /* Init / shutdown */
     run_test("is_initialized",          t_is_init);
@@ -666,21 +660,6 @@ void test_slab(void) {
     run_test("stress_batch_free_rev",   t_batch_rev);
     run_test("realloc_pattern",         t_recreate);
 
-    LOGF("--- END SLAB ALLOCATOR TEST ---\n");
-    LOGF("Slab Test Results: %d/%d\n\n", npass, ntests);
-
-    #ifdef TEST_BUILD
-    #include <kernel/drivers/console.h>
-    #include <klibc/stdio.h>
-    if (npass != ntests) {
-        console_set_color(CONSOLE_COLOR_RED, CONSOLE_COLOR_BLACK);
-        kprintf("[-] Some Slab tests failed (%d/%d passed).\n", npass, ntests);
-        console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
-    } else {
-        console_set_color(CONSOLE_COLOR_GREEN, CONSOLE_COLOR_BLACK);
-        kprintf("[+] All Slab tests passed! (%d/%d)\n", npass, ntests);
-        console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
-    }
-    #endif
+    suite_end(&suite);
 }
 #pragma endregion

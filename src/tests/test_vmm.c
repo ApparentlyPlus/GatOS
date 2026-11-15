@@ -24,8 +24,7 @@ typedef struct { ttype_t type; vmm_t* vmm; void* addr; size_t sz; bool on; } vmt
 #define MT 2048
 static vmtr_t tr[MT];
 static int tidx = 0;
-static int ntests = 0;
-static int npass = 0;
+static suite_t suite;
 
 #pragma region Tracker
 
@@ -342,7 +341,7 @@ static bool t_pt_nx_data(void) {
     TEST_ASSERT(pte_flags(v->pt_root, p, &fl));
     /* NX bit is bit 63 of the raw PTE (separate from low 12 flag bits) */
     (void)fl; /* We log only; NX depends on EFER.NXE being set */
-    LOGF("[INFO] data-pg flags=0x%lx ", fl);
+    LOGF("data page flags 0x%lx\n", fl);
     tr_free(); return true;
 }
 
@@ -364,7 +363,7 @@ static bool t_pt_nx_exec(void) {
                 uint64_t pte = pt[PT_INDEX(p)];
                 if (pte & PAGE_PRESENT) {
                     bool nx = !!(pte & (1ULL << 63));
-                    if (nx) { LOGF("[FAIL] NX set on exec page "); tr_free(); return false; }
+                    if (nx) { LOGF("NX set on exec page\n"); tr_free(); return false; }
                 }
             }
         }
@@ -395,7 +394,7 @@ static bool t_kern_persist(void) {
     tr_reset();
     vmm_t* u = vmm_create(USER_BASE, USER_END); tr_vmm(u);
     /* Kernel variable must be mapped in the user VMM's table */
-    uint64_t kvar = (uint64_t)&ntests;
+    uint64_t kvar = (uint64_t)&suite;
     TEST_ASSERT(pte_present(u->pt_root, (void*)kvar));
     tr_free(); return true;
 }
@@ -564,7 +563,7 @@ static bool t_frag(void) {
     for (int i = 0; i < 64; i++) {
         void* p;
         if (vmm_alloc(v, PG, VM_FLAG_WRITE, NULL, &p) != VMM_OK) {
-            LOGF("[FAIL] OOM during fragmentation refill ");
+            LOGF("OOM during fragmentation refill\n");
             tr_free(); return false;
         }
         tr_alloc(v, p, PG);
@@ -588,7 +587,7 @@ static bool t_dirty_reuse(void) {
     tr_alloc(v, p2, PG);
     uint64_t phys2; vmm_get_physical(v, p2, &phys2);
     if (phys2 == phys) {
-        LOGF("[INFO] reused phys 0x%lx ", phys);
+        LOGF("reused phys 0x%lx ", phys);
         /* Warn only; not a hard failure */
     }
     tr_free(); return true;
@@ -625,7 +624,7 @@ static bool t_swiss_cheese(void) {
     uint64_t free1 = 0;
     for (int i = 0; i < PMM_MAX_ORDERS; i++) free1 += s1.free_blocks[i] * (1ULL<<i) * 4096;
     if (free0 > free1 && (free0 - free1) > (uint64_t)(HOLES * PG)) {
-        LOGF("[FAIL] swiss cheese: %lu bytes leaked\n", free0 - free1);
+        LOGF("swiss cheese: %lu bytes leaked\n", free0 - free1);
         return false;
     }
     return true;
@@ -635,20 +634,15 @@ static bool t_swiss_cheese(void) {
 #pragma region Runner
 
 static void run_test(const char* name, bool (*fn)(void)) {
-    ntests++;
-    LOGF("[TEST] %-40s ", name);
-    if (!vmm_verify_integrity(vmm_kernel_get())) { LOGF("[SKIP] (VMM corrupted)\n"); return; }
+    test_begin(name);
+    if (!vmm_verify_integrity(vmm_kernel_get())) { test_skip(&suite, "VMM corrupted"); return; }
     bool pass = fn();
-    if (tidx > 0) { LOGF("[WARN] leak (cleaning) ... "); tr_free(); }
-    if (pass) { npass++; LOGF("[PASS]\n"); }
-    else { LOGF("[FAIL]\n"); }
+    if (tidx > 0) { tr_free(); }
+    test_end(&suite, pass);
 }
 
 void test_vmm(void) {
-    ntests = 0;
-    npass = 0;
-
-    LOGF("\n--- BEGIN VMM TEST ---\n");
+    suite_begin(&suite, "Virtual memory manager");
 
     run_test("kernel_get: not null",           t_kern_nn);
     run_test("kernel: alloc base/end valid",   t_kern_base_end);
@@ -660,11 +654,11 @@ void test_vmm(void) {
     run_test("alloc+free: cycle",              t_alloc_cycle);
     run_test("alloc: multi unique addrs",      t_alloc_uniq);
     run_test("alloc_at: exact address",        t_alloc_at_exact);
-    run_test("alloc_at: unaligned → error",    t_alloc_at_unalign);
-    run_test("alloc_at: overlap → error",      t_alloc_at_overlap);
+    run_test("alloc_at: unaligned -> error",    t_alloc_at_unalign);
+    run_test("alloc_at: overlap -> error",      t_alloc_at_overlap);
     run_test("resize: grow",                   t_resize_grow);
     run_test("resize: shrink",                 t_resize_shrink);
-    run_test("resize: collision → OOM",        t_resize_collision);
+    run_test("resize: collision -> OOM",        t_resize_collision);
     run_test("protect: remove write",          t_prot_rm_wr);
     run_test("protect: add write",             t_prot_add_wr);
     run_test("mmio: physical match",           t_mmio_map);
@@ -679,7 +673,7 @@ void test_vmm(void) {
     run_test("context switch",                 t_ctx_switch);
     run_test("vmm_get_current not null",       t_get_current);
     run_test("check_buffer: valid range",      t_buf_valid);
-    run_test("check_buffer: NULL → false",     t_buf_null);
+    run_test("check_buffer: NULL -> false",     t_buf_null);
     run_test("check_buffer: zero size",        t_buf_zero_sz);
     run_test("check_buffer: wrong flags",      t_buf_bad_flags);
     run_test("check_buffer: partial unmap",    t_buf_partial_unmap);
@@ -694,21 +688,6 @@ void test_vmm(void) {
     run_test("vmm_stats: smoke",               t_stats_smoke);
     run_test("swiss cheese destroy",           t_swiss_cheese);
 
-    LOGF("--- END VMM TEST ---\n");
-    LOGF("VMM Test Results: %d/%d\n\n", npass, ntests);
-
-    #ifdef TEST_BUILD
-    #include <kernel/drivers/console.h>
-    #include <klibc/stdio.h>
-    if (npass != ntests) {
-        console_set_color(CONSOLE_COLOR_RED, CONSOLE_COLOR_BLACK);
-        kprintf("[-] Some VMM tests failed (%d/%d passed).\n", npass, ntests);
-        console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
-    } else {
-        console_set_color(CONSOLE_COLOR_GREEN, CONSOLE_COLOR_BLACK);
-        kprintf("[+] All VMM tests passed! (%d/%d)\n", npass, ntests);
-        console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
-    }
-    #endif
+    suite_end(&suite);
 }
 #pragma endregion
