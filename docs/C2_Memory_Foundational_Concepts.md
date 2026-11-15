@@ -28,7 +28,7 @@ For example, if the CPU instructs, "read the byte at address `0x1000`," the memo
 >[!IMPORTANT]
 >This is a simplified explanation. In reality, modern systems are more complex:
 >* **Caching:** The CPU first checks its high-speed caches. If the data is found there (a cache hit), it avoids a slower access to main physical memory.
->* **Memory Management Unit (MMU):** The CPU does not output physical addresses directly. Instead, it outputs *virtual addresses**. A hardware component called the MMU translates these virtual addresses into physical addresses on-the-fly. This is the foundation of modern memory management.
+>* **Memory Management Unit (MMU):** The CPU does not output physical addresses directly. Instead, it outputs *virtual addresses\**. A hardware component called the MMU translates these virtual addresses into physical addresses on-the-fly. This is the foundation of modern memory management.
 >* **Burst Transfers:** Modern memory systems transfer data in blocks (bursts) rather than single bytes for efficiency.
 >
 > **We will talk about virtual addresses in depth later on in this document.*
@@ -141,7 +141,7 @@ Instead of requiring that a program's code and data be stored in contiguous bloc
 
 The key insight is that **any page can be placed into any available frame**. Because all pages and frames are the same size, the problem of external fragmentation is completely eliminated. There is no need to find a contiguous block of memory for a large segment; the OS can simply find any free frames, wherever they are located.
 
-### Intutive Breakdown
+### Intuitive Breakdown
 
 Are you confused? Don't be! It’s really simple! **Paging just introduces a table of mappings.** That's it!
 
@@ -510,14 +510,14 @@ Remember the toolchain from the last chapter? We chose GRUB as our bootloader be
 
 That means GatOS starts out in **32-bit protected mode**, so we can focus on writing assembly there instead of mucking around with real mode. Now think back to the linker script we broke down: it linked everything at `KERNEL_VIRTUAL_BASE`. To quote myself:
 
-> * The kernel is **linked to run at a high virtual address** (`KERNEL_VIRTUAL_BASE = 0xFFFFFFFF80000000`), but the bootloader actually loads it at a lower **physical address** (`KPHYS_START = 0x10000`).
+> * The kernel is **linked to run at a high virtual address** (`KERNEL_VIRTUAL_BASE = 0xFFFFFFFF80000000`), but the bootloader actually loads it at a lower **physical address** (`KPHYS_START = 0x100000`).
 > * The `AT()` directive tells the linker:
 >
 >   > “Place this section in the binary at this **physical load address**, but reference it in the code using this **virtual address**.”
 > * Example (`.boot` section):
 >
->   * **Virtual Address (VMA):** `0xFFFFFFFF80010000`
->   * **Physical Load Address (LMA):** `0x10000`
+>   * **Virtual Address (VMA):** `0xFFFFFFFF80100000`
+>   * **Physical Load Address (LMA):** `0x100000`
 >
 > This separation lets the kernel start executing at its physical address, then seamlessly continue at its virtual address once paging kicks in.
 
@@ -525,8 +525,8 @@ So everything is *loaded* at low addresses but *linked* at high addresses. In pr
 
 ```
 SYMBOL TABLE:
-ffffffff80010000 l       .boot  0000000000000000 header_start
-ffffffff80010018 l       .boot  0000000000000000 header_end
+ffffffff80100000 l       .boot  0000000000000000 header_start
+ffffffff80100030 l       .boot  0000000000000000 header_end
 ...
 ```
 
@@ -546,14 +546,14 @@ sub eax, 0x123456789ABCDEF0
 
 NASM will just error out — the constant doesn’t fit. So… oops? What the hell? How in the world do we actually subtract `KERNEL_VIRTUAL_BASE`?
 
-Well, that’s why we chose the **GNU Assembler (GAS)** over **NASM**. Yours truly told you why that coice would eventually pay off :) 
+Well, that’s why we chose the **GNU Assembler (GAS)** over **NASM**. Yours truly told you why that choice would eventually pay off :) 
 
 Since GAS is integrated with the C preprocessor, we can just include C headers and let macros do the heavy lifting for us.
 
 For example, in [`paging.h`](/src/arch/x86_64/memory/paging.h):
 
 ```c
-#define KERNEL_VIRTUAL_BASE 0xFFFFFFFF80000000
+#include <arch/x86_64/memory/layout.h> // KERNEL_VIRTUAL_BASE lives here
 
 #ifdef __ASSEMBLER__
 
@@ -572,7 +572,7 @@ For example, in [`paging.h`](/src/arch/x86_64/memory/paging.h):
 And then in assembly (`.S` file):
 
 ```as
-#include <paging.h>
+#include <arch/x86_64/memory/paging.h>
 
 .intel_syntax noprefix
 
@@ -596,7 +596,7 @@ As mentioned earlier in this document, GatOS preallocates page tables to map the
 
 The kernel's own range, `[KPHYS_START, KPHYS_END]`, resides within this first gigabyte of physical memory.
 
-Also rememeber how I mentioned that this `1GB` fixed mapping gives a lot of leeway for GatOS to handle memory? Well, you're about to see why.
+Also remember how I mentioned that this `1GB` fixed mapping gives a lot of leeway for GatOS to handle memory? Well, you're about to see why.
 
 >[!NOTE]
 > For clarity, the range `[KERNEL_VIRTUAL_BASE + KPHYS_START, KERNEL_VIRTUAL_BASE + KPHYS_END]` will be referred to as `[KVIRT_START, KVIRT_END]`.

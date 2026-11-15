@@ -8,9 +8,9 @@ This chapter focuses on establishing the essential utilities our kernel needs to
 
 2. **klibc**: A brief look at the introduction of `string.c`.
 
-3. **Multiboot2 Parsing**: Updating the parsing section to reflect how `multiboot2.c` now safely relocates the parsed data into a preallocated higher-half buffer (`multiboot_buffer`).
+3. **Multiboot2 Parsing**: How `multiboot2.c` parses the Multiboot2 struct and safely relocates its data into a preallocated higher-half buffer (`multiboot_buffer`).
 
-4. **Paging Cleanup**: Updating the identity unmapping section to reflect the new `cleanup_kpt` and `unmap_identity` logic.
+4. **Paging Cleanup**: Removing the identity map we set up in Chapter 3, using `cleanup_kpt` (and, for the curious, `unmap_identity`).
 
 Once we have these core utilities in place, we'll be ready for the next major step: in Chapter 5, we'll explore paging from a higher level perspective and construct the **physmap**, reserving and setting up the necessary page tables to map all of physical RAM into virtual memory.
 
@@ -430,7 +430,7 @@ LOGF("[PAGING] Reserved physmap tablespace (%d MiB)\n", table_bytes / MEASUREMEN
 
 ### Dumping the Page Table Structure
 
-The last utility, `QEMU_DUMP_PML4`, provides a recursive walk of the kernel's paging hierarchy.
+The last utility, `QEMU_DUMP_PML4`, provides a recursive walk of the kernel's paging hierarchy. This one lives in [`paging.c`](/src/arch/x86_64/memory/paging.c) instead of `debug.c`, since it pokes at the page tables directly.
 
 ```c
 void QEMU_DUMP_PML4(void);
@@ -558,12 +558,12 @@ Both `KVIRT_START`/`KVIRT_END` and their physical counterparts `KPHYS_START`/`KP
 > [!NOTE]
 > From this point forward, we'll just refer to **`KEND`** as a general concept. Whether it's `KPHYS_END` or `KVIRT_END` doesn't really matter — both point to the same boundary, just seen from different perspectives (physical vs virtual).
 
-To make this clean and maintainable, it's best to **wrap these linker symbols** inside `paging.h` and `paging.c`. That way, the rest of the kernel always queries `KEND` through the wrapper functions. This has two benefits:
+To make this clean and maintainable, it's best to **wrap these linker symbols** behind a few small getters. That way, the rest of the kernel always queries `KEND` through the wrapper functions. This has two benefits:
 
 1. Other parts of the code automatically get the *current* value of `KEND` (even after tweaks).
 2. All adjustments happen in one place (`paging.c`), keeping the rest of the codebase simple and safe.
 
-In this light, we expose 4 new functions in `paging.h`:
+In this light, we expose 4 new functions. They're tiny, so they're just `static inline` helpers in [`layout.h`](/src/arch/x86_64/memory/layout.h) (which `paging.h` includes):
 
 ```c
 uint64_t get_kstart(bool virtual);
@@ -573,12 +573,15 @@ uint64_t get_linker_kstart(bool virtual);
 
 extern uintptr_t KPHYS_END;
 extern uintptr_t KPHYS_START;
+
+extern uint64_t KSTART;
+extern uint64_t KEND;
 ```
 
 At first glance, this might look redundant — why do we need both "normal" and "linker" getters? Let's break it down.
 
 * **`get_kstart` / `get_kend`**
-  These return the *current* kernel boundaries. They are backed by the static variables `KSTART` and `KEND`, which may be updated at runtime. For example, when GatOS builds the physmap, it shifts `KEND` forward to make room for new page tables. Calling these functions ensures you always get the *latest, adjusted values*.
+  These return the *current* kernel boundaries. They are backed by two variables, `KSTART` and `KEND`. Both live in `paging.c`, start out as the linker values, and can be changed at runtime. For example, when GatOS builds the physmap, it shifts `KEND` forward to make room for new page tables. Calling these functions ensures you always get the *latest, adjusted values*.
 
 * **`get_linker_kstart` / `get_linker_kend`**
   These return the *original values* defined by the linker symbols. In other words, they give you the "linker" kernel range as it was at boot time, untouched by runtime adjustments. These are useful when you need the baseline, fixed reference points for the kernel's location.
@@ -590,7 +593,7 @@ This dual system gives us flexibility:
 * Use **linker values** when you need to reference the kernel's fixed layout.
 * Use **current values** when you want the runtime-adjusted state (after physmap expansion).
 
-By centralizing this logic in `paging.c`, the rest of the kernel doesn't need to worry about linker symbols, runtime tweaks, or physical/virtual conversions. Everything just calls these wrappers and gets the correct answer for the current context.
+By keeping all of this in one place (getters in `layout.h`, and `paging.c` being the only one that ever moves `KEND`), the rest of the kernel doesn't need to worry about linker symbols, runtime tweaks, or physical/virtual conversions. Everything just calls these wrappers and gets the correct answer for the current context.
 
 ### The Parser
 
@@ -598,7 +601,7 @@ At boot, the multiboot structure is placed in lower memory, and we can access it
 
 To handle this safely, the kernel first parses the multiboot structure in its original, lower-half form. After parsing, each pointer inside the structure is translated to its higher-half equivalent, and all relevant data is copied into a **preallocated buffer** reserved within the kernel's address space. Since this buffer resides in the higher half (inside the kernel range), the information remains accessible even after the lower half is unmapped.
 
-This buffer is declared in [`kmain.c`](/src/kernel/kmain.c):
+This buffer is declared at file scope, right next to the code that boots the kernel. For now, that's `kmain.c`. (If you go looking in the current source, the whole init sequence has since moved to [`bootstrap.c`](/src/kernel/bootstrap.c), so look there instead.)
 
 ```c
 static uint8_t multiboot_buffer[8 * 1024]; // 8KB should be more than enough
@@ -702,7 +705,7 @@ After `cleanup_kpt`, `PML4[0]` and `PDPT[0]` are already zeroed. But if you want
 
 ```c
 void unmap_identity(void) {
-    int64_t* PML4 = getPML4();
+    uint64_t* PML4 = getPML4();
     uint64_t* PDPT = PML4 + PAGE_ENTRIES * PREALLOC_PML4s;
     PML4[0] = 0;
     PDPT[0] = 0;
@@ -724,8 +727,8 @@ static uint8_t multiboot_buffer[8 * 1024];
 
 void kernel_main(void* mb_info) {
 	// Init serial
-	serial_init_port(COM1_PORT);
-	serial_init_port(COM2_PORT);
+	serial_init_port(SERIAL_COM1);
+	serial_init_port(SERIAL_COM2);
 	QEMU_LOG("Kernel main reached, normal assembly boot succeeded", TOTAL_DBG);
 
 	// Multiboot comes next since we need to parse the memory map and other info before we can safely initialize memory management

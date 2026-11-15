@@ -6,9 +6,6 @@ The plan for this chapter is to map all of physical memory into a dedicated regi
 
 Starting from this chapter, I will be assuming knowledge of everything the docs have covered so far. This means bootstrapping, linkage, higher half, virtual memory, etc. Therefore, I will not be holding the reader's hand, as I have been doing in the past chapters. I am treating you as a fellow OS dev! Be proud!
 
->[!NOTE]
->Most of what's discussed in this chapter, along with a few concepts we covered earlier, is implemented in the branch [`refactor`](https://github.com/ApparentlyPlus/GatOS/tree/refactor).
-
 
 ## What is the Physmap?
 
@@ -17,11 +14,13 @@ The physmap is a direct, linear mapping of all available physical memory into th
 Linux uses the same idea, commonly referred to as the **direct mapping of all physical memory**. On x86-64, Linux reserves a large region of the higher-half kernel space starting at `PAGE_OFFSET` (usually `0xFFFF880000000000`) where every physical frame is mapped linearly. For example, physical address `0x1000` might be accessible at virtual address `0xFFFF880000001000`. This covers all normal RAM, while special mappings (I/O memory, highmem, vmalloc, etc.) are placed in separate regions of the kernel address space.
 
 >[!CAUTION]
-> `KERNEL_VIRTUAL_BASE = 0xFFFFFFFF80000000` **is different from** `PHYSMAP_VIRTUAL_BASE = 0xFFFF880000000000`. 
+> `KERNEL_VIRTUAL_BASE = 0xFFFFFFFF80000000` **is different from** `PHYSMAP_VIRTUAL_BASE = 0xFFFF800000000000`. 
 >
 >However, they are both located in the higher half of the canonical address space. As a result, they are completely inaccessible to userspace programs, which operate exclusively in the lower half.
 >
-> The gap between the physmap base and the kernel base is approximately **122,878 GiB (~122 TiB)** of virtual address space. This vast separation ensures that the physmap region can accommodate any realistic amount of physical memory without ever overlapping with the kernel’s virtual space.
+> Careful, this is NOT Linux's `0xFFFF880000000000` from above. GatOS puts the physmap right at the start of the higher half.
+>
+> The gap between the physmap base and the kernel base is approximately **131,070 GiB (~128 TiB)** of virtual address space. This vast separation ensures that the physmap region can accommodate any realistic amount of physical memory without ever overlapping with the kernel’s virtual space.
 >
 > In practice, this guarantees that the physmap remains both **consistently accessible** and **safely isolated** within high memory.
 
@@ -76,7 +75,7 @@ These correspond directly to hardware-defined bits in the x86-64 page table entr
 * `PAGE_PRESENT`: Marks the page as present in memory; required for valid mappings.
 * `PAGE_WRITABLE`: Allows writes to the page (otherwise it's read-only).
 * `PAGE_USER`: Grants access from user-space (otherwise kernel-only).
-* `PAGE_PWT` / `PAGE_PCD`: Write-through and cache-disable. Combined, they mark a range as uncacheable, which is important for MMIO regions like the framebuffer where you want writes to reach the hardware rather than sit in a cache line.
+* `PAGE_PWT` / `PAGE_PCD`: Write-through and cache-disable. Combined, they mark a range as uncacheable, which is important for MMIO regions like the framebuffer where you want writes to reach the hardware rather than sit in a cache line. (Technically, that's a lie. These two bits are an index into a CPU table called the PAT. We'll abuse that later for the framebuffer.)
 * `PAGE_HUGE`: When set at the PD level, the entry maps 2 MiB directly instead of pointing to a PT. We will use this for the framebuffer mapping.
 * `PAGE_NO_EXECUTE`: Disables instruction fetches from this page (NX bit).
 
@@ -105,10 +104,10 @@ GatOS also declares a few other important constants:
 Finally, `paging.h` also defines some measurement unit helpers:
 
 ```c
-#define MEASUREMENT_UNIT_BYTES  1
-#define MEASUREMENT_UNIT_KB     1024
-#define MEASUREMENT_UNIT_MB     1024*1024
-#define MEASUREMENT_UNIT_GB     1024*1024*1024
+#define MEASUREMENT_UNIT_BYTES  (1)
+#define MEASUREMENT_UNIT_KB     (1024)
+#define MEASUREMENT_UNIT_MB     (1024*1024)
+#define MEASUREMENT_UNIT_GB     (1024*1024*1024)
 ```
 
 These are purely for readability when calculating memory sizes.
@@ -188,7 +187,7 @@ Initializing `physmap` to zero ensures that all fields start in a clean, predict
 >
 >They must still be mapped into **virtual memory** if we want to interact with them, but they should be treated carefully. Caching, permissions, and access patterns differ from normal RAM, and incorrect handling can lead to undefined behavior.
 >
->You can think of MMIO as special addresses that need to be mapped to be interacted with, but are NOT actual memory. They are hardware! Therefore, we also learn that the virtual adress space is not *just* for memory, but for other devices too!
+>You can think of MMIO as special addresses that need to be mapped to be interacted with, but are NOT actual memory. They are hardware! Therefore, we also learn that the virtual address space is not *just* for memory, but for other devices too!
 
 ## Reserving the Required Tablespace
 
@@ -205,7 +204,7 @@ uintptr_t align_up(uintptr_t val, uintptr_t align) {
 }
 ```
 
-This helper function rounds a value `val` up to the nearest multiple of `align`. We use it to ensure that both physical memory totals and reserved table space are aligned to page boundaries (`4KB`). Alignment is critical because x86-64 page tables and pages must always start on properly aligned addresses.
+This helper function (a `static inline` in [`layout.h`](/src/arch/x86_64/memory/layout.h) these days, because pretty much every subsystem uses it) rounds a value `val` up to the nearest multiple of `align`. We use it to ensure that both physical memory totals and reserved table space are aligned to page boundaries (`4KB`). Alignment is critical because x86-64 page tables and pages must always start on properly aligned addresses.
 
 
 ### Calculating RAM and Pages
@@ -390,7 +389,7 @@ kmemset((void*)physmap.tables_base, 0,
      2 + physmap.total_kernel_PTs) * PAGE_SIZE);
 ```
 
-We zero out the entire reserved tables region to ensure a clean starting point for the new mappings. Notice the `2 + physmap.total_kernel_PTs` term — that's the kernel tables (the one `KPDPT` and one `KPD` make up the `2`, plus the `KPTs`), which live in the same reserved block and must be cleared too. This region is accesible because it is within that 1GB preallocated boundary. Otherwise, we would page fault here. `physmap.tables_base` points to the new `KEND`, so right after our kernel's *linker* defined region.
+We zero out the entire reserved tables region to ensure a clean starting point for the new mappings. Notice the `2 + physmap.total_kernel_PTs` term — that's the kernel tables (the one `KPDPT` and one `KPD` make up the `2`, plus the `KPTs`), which live in the same reserved block and must be cleared too. This region is accessible because it is within that 1GB preallocated boundary. Otherwise, we would page fault here. `physmap.tables_base` points to the new `KEND`, so right after our kernel's *linker* defined region.
 
 ### Filling Page Tables (PTs)
 
@@ -424,7 +423,7 @@ if (physmap.fb_phys && physmap.fb_phys >= physmap.total_RAM) {
         uint64_t end2m  = (fb_end + 0x1FFFFF) & ~(uint64_t)(0x1FFFFF);
         for (uint64_t pa2m = base2m; pa2m < end2m; pa2m += 0x200000)
             fb_pd[(pa2m >> 21) & 0x1FF] =
-                pa2m | (PAGE_PRESENT | PAGE_WRITABLE | PAGE_HUGE | PAGE_PWT | PAGE_PCD);
+                pa2m | (PAGE_PRESENT | PAGE_WRITABLE | PAGE_HUGE | fb_cache_flags());
         PDPTs[0][pdpt_s] = KERNEL_V2P(fb_pd) | (PAGE_PRESENT | PAGE_WRITABLE);
     }
 }
@@ -434,13 +433,59 @@ if (physmap.fb_phys && physmap.fb_phys >= physmap.total_RAM) {
 
 * We compute the PDPT index range the framebuffer spans. If the entire framebuffer fits within a single 1 GiB PDPT region (`pdpt_s == pdpt_e`), we can cover it with a single PD — that's `fb_pd`.
 * We round the framebuffer down and up to 2 MiB boundaries, then write one `PAGE_HUGE` entry per 2 MiB chunk into `fb_pd`. Each of those entries maps 2 MiB directly without a PT level beneath it, which is what `PAGE_HUGE` means at the PD layer.
-* `PAGE_PWT | PAGE_PCD` disable caching entirely. A framebuffer is MMIO — writes must reach the display hardware, not stall in a cache line.
+* `fb_cache_flags()` decides how the framebuffer gets cached. It's MMIO, so our writes have to actually reach the display, and normal caching would let them sit around in a cache line. We'll look at what it returns in a second.
 * We wire the relevant `PDPTs[0]` entry to point to `fb_pd`.
 
-If the framebuffer happens to fall inside RAM (unusual, but possible on some embedded platforms), the PT loop already mapped it and we just go back to fix the cache attributes on those entries to make them uncacheable.
+If the framebuffer happens to fall inside RAM (unusual, but possible on some embedded platforms), the PT loop already mapped it and we just go back and apply `fb_cache_flags()` to those 4 KiB entries too.
+
+### Write-Combining the Framebuffer (PAT)
+
+The easy way to keep the framebuffer out of the cache is `PAGE_PWT | PAGE_PCD`, which makes it fully uncacheable. GatOS used to do exactly that. It works fine, but it's slow. Every single pixel write becomes its own trip over the bus, and redrawing a 1080p screen is about two million pixel writes.
+
+What we want instead is **write-combining (WC)**. Writes still skip the cache, but the CPU can collect a bunch of them in a buffer and send them out together in one burst. We almost never *read* from the framebuffer, so this is perfect for it.
+
+Problem is, there's no `PAGE_WRITE_COMBINE` bit. Enter the **Page Attribute Table (PAT)**. Remember `IA32_EFER` from Chapter 3, the model specific register (MSR) we flipped to enable long mode? The PAT is another MSR, and it holds 8 "memory type" entries, each one describing a way memory can be cached.
+
+And remember that lie from earlier? `PWT` and `PCD` (plus a third `PAT` bit we don't use) don't really mean "write-through" and "cache-disable". Together, they form an index into this table:
+
+| PAT index | PTE bits | Default type |
+| --- | --- | --- |
+| 0 | none | Write-back (normal RAM) |
+| 1 | `PWT` | Write-through |
+| 2 | `PCD` | Uncacheable, mostly (don't worry about it) |
+| 3 | `PWT \| PCD` | Uncacheable |
+
+So we just overwrite an entry we don't need. GatOS never uses write-through, so entry 1 gets turned into write-combining:
+
+```c
+static void pat_init(void) {
+    uint32_t a, b, c, d;
+    cpuid(1, 0, &a, &b, &c, &d);
+    if (!(d & (1u << 16))) return;   // No PAT support, keep the defaults
+
+    uint64_t pat = read_msr(MSR_PAT);
+    pat &= ~(0xFFULL << 8);          // Clear entry 1
+    pat |= (0x01ULL << 8);           // 0x01 = write-combining
+    write_msr(MSR_PAT, pat);
+    patwc = true;
+}
+
+static inline uint64_t fb_cache_flags(void) {
+    return patwc ? PAGE_PWT : (PAGE_PWT | PAGE_PCD);
+}
+```
+
+`cpuid`, `read_msr` and `write_msr` are tiny C wrappers around the `cpuid`, `rdmsr` and `wrmsr` instructions we already used in Chapter 3. Nothing new there.
+
+`pat_init` runs right at the start of `build_physmap`. If CPUID says the CPU has a PAT (leaf 1, bit 16 of `EDX`), we patch entry 1 and set `patwc`. From then on, anything mapped with *only* `PAGE_PWT` is write-combining. No PAT? `fb_cache_flags` falls back to good old uncacheable. Slower, but it works everywhere.
+
+Normal RAM uses entry 0, so it's untouched. Entry 3 stays uncacheable for actual device registers.
+
+>[!CAUTION]
+> Don't go using WC for everything now. Since the CPU is allowed to hold writes back and send them out in batches, they don't necessarily reach the hardware when (or in the order) you wrote them. For pixels, who cares. For a device where you write a command and then immediately read back an answer, that's a recipe for a very bad time.
 
 >[!TIP]
->Keeep an eye out for this `fb_pd` variable. 
+>Keep an eye out for this `fb_pd` variable. 
 >
 >Here's a little trivia for you: A framebuffer spans the entire screen. If we do NOT know what screen our kernel will run on, how can we map it into virtual memory? We need a number of page tables that we cannot know at compile time. A 720p display framebuffer is much smaller than a 4k framebuffer, and mapping either of them requires certain page tables.
 >
@@ -583,14 +628,14 @@ The alternative would be to pull the same trick we did with physmap: use that 1G
 
 ## Putting It All Together
 
-With all the pieces in place, here is the relevant slice of `kernel_main` as it stands today:
+With all the pieces in place, here is the relevant slice of `kernel_main` as of this chapter:
 
 ```c
 static uint8_t multiboot_buffer[8 * 1024];
 
 void kernel_main(void* mb_info) {
-    serial_init_port(COM1_PORT);
-    serial_init_port(COM2_PORT);
+    serial_init_port(SERIAL_COM1);
+    serial_init_port(SERIAL_COM2);
     QEMU_LOG("Kernel main reached, normal assembly boot succeeded", TOTAL_DBG);
 
     multiboot_parser_t multiboot = {0};
@@ -615,5 +660,8 @@ void kernel_main(void* mb_info) {
 ```
 
 This version of `kernel_main` ties together all previous steps: the multiboot structure is parsed and relocated into the higher half before we strip the identity map, `reserve_tables` claims the virtual space for the new page tables, `cleanup_kpt` removes everything we no longer need, and `build_physmap` constructs the final address space layout.
+
+>[!NOTE]
+> Heads up if you're comparing this to the actual source: it moved. The whole init sequence now lives in `kernel_bootstrap()` in [`bootstrap.c`](/src/kernel/bootstrap.c), and `kmain.c` just calls it. You'll also spot an `idt_init()` right before the multiboot parsing. That's next chapter's business.
 
 Next chapter? Interrupts, Panics, and Spinlocks. Stay tuned!

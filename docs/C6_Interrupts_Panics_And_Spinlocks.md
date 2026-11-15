@@ -35,7 +35,7 @@ The second category is **hardware interrupts**. These are signals sent to the CP
 
 In both cases, the mechanism is the same: the CPU pauses whatever it was doing and transfers control to a function the operating system has registered in advance. The critical word is *pauses*. An interrupt can fire between any two instructions, at any point in the call stack, completely invisible to the code that was running. The handler executes, and then, if everything goes right, execution resumes exactly where it left off, as if nothing happened.
 
-This is a remarkably powerful mechanism. It is also the source of an entire class of subtle bugs, which is why spinlocks are the first topic of this chapter.
+This is a remarkably powerful mechanism. It is also the source of an entire class of subtle bugs, which is why spinlocks are the first thing we build in this chapter, right after a bit more interrupt theory.
 
 ## Interrupt Vectors and the IDT
 
@@ -1033,6 +1033,11 @@ static void crash_scroll(void) {
 }
 ```
 
+>[!NOTE]
+> There's a catch with this `crash_scroll`. To move everything up a row, `kmemmove` has to *read* the old pixels back from the framebuffer first. Remember the PAT business from Chapter 5? Framebuffer memory is write-combining (or uncacheable), and reading from it is painfully slow. On a big screen, that adds up fast.
+>
+> The current GatOS gets around this with a *shadow* of the crash screen in plain RAM, one 32-bit cell per character holding the glyph and its colors. Scrolling reads from the shadow and only redraws the cells that changed, so the framebuffer is never read at all. The shadow needs memory, though, and we don't have an allocator yet. So it gets allocated later, once the PMM is up (`con_crash_shadow_init`, next chapter). Panic before that, and `crash_scroll` just wipes the screen and starts again from the top. Ugly, but it works.
+
 `con_crash_clear` fills the framebuffer with the background color and resets the cursor to the top-left:
 
 ```c
@@ -1182,12 +1187,12 @@ GatOS has been permanently locked down.
 
 ## Putting It All Together
 
-Here is the section of `kmain.c` that this chapter describes, with the reasoning made explicit:
+Here is the slice of the init sequence that this chapter describes, with the reasoning made explicit (it used to be in `kmain.c`, now it's `kernel_bootstrap()` in [`bootstrap.c`](/src/kernel/bootstrap.c)):
 
 ```c
 // Serial: zero dependencies, works before everything else
-serial_init_port(COM1_PORT);
-serial_init_port(COM2_PORT);
+serial_init_port(SERIAL_COM1);
+serial_init_port(SERIAL_COM2);
 QEMU_LOG("Kernel main reached, normal assembly boot succeeded", TOTAL_DBG);
 
 // IDT before anything that could fault
@@ -1206,7 +1211,7 @@ build_physmap();
 console_init(&multiboot);
 QEMU_LOG("Initialized console", TOTAL_DBG);
 
-// From here, panacking halts with a red screen and extra information, rather than a silent reset
+// From here, panicking halts with a red screen and extra information, rather than a silent reset
 ```
 
 Each step makes the next step debuggable. 

@@ -46,7 +46,7 @@ To understand how it works, you first need to understand why the PMM is **the re
 
 To manage physical pages, the PMM must read and write data into them directly. But physical addresses cannot be dereferenced by the CPU after the identity map is gone. 
 
-Since we are now operating exlcusively in the higher half, we have built the physmap for this exact reason: since it maps physical (low) address `X` to virtual (high) address `PHYSMAP_VIRTUAL_BASE + X`, the PMM can reach any physical page through the physmap.
+Since we are now operating exclusively in the higher half, we have built the physmap for this exact reason: since it maps physical (low) address `X` to virtual (high) address `PHYSMAP_VIRTUAL_BASE + X`, the PMM can reach any physical page through the physmap.
 
 This is the key idea: the PMM uses the physmap **internally** to access physical pages, but its external interface deals exclusively in physical addresses. When it allocates a page, it returns the physical address (**not** the physmap virtual address) using `PHYSMAP_V2P`.
 
@@ -117,11 +117,13 @@ It does this through several interlocking responsibilities: handling the page ta
 
 But this is all very hard to intuit until you get into the nitty gritty. I won't go into too much detail right now (there will be a dedicated chapter to the VMM itself) but for now, just know that a VMM manages any virtual memory region you instruct it to, low or high.
 
-To make this concrete: say we tell a VMM to manage the range `0x0 – 0x10000` and then call `vmm_alloc(4)`. The VMM asks the slab allocator for a physical address for that 4-byte allocation, and let's say the slab returns physical `0x3740`. It then needs to map virtual `0x0` to physical `0x3740`. 
+To make this concrete: say we tell a VMM to manage the range `0x0 – 0x10000` and then call `vmm_alloc(4)`. The VMM only deals in whole pages, so our 4 bytes get rounded up to a full 4 KiB page. It asks the PMM for a physical frame, and let's say the PMM hands back `0x3000`. Now the VMM needs to map virtual `0x0` to physical `0x3000`. 
 
-But `0x0` has no page tables backing it yet, so the VMM walks the hierarchy from the PML4 downward, and at every null entry it finds, it asks the PMM for a fresh page to use as a new table (always through `PHYSMAP_P2V`). Once the hierarchy is fully populated downstream, it writes the final mapping so that virtual `0x0` resolves to physical `0x3740`.
+But `0x0` has no page tables backing it yet, so the VMM walks the hierarchy from the PML4 downward, and at every null entry it finds, it asks the PMM for a fresh page to use as a new table (always through `PHYSMAP_P2V`). Once the hierarchy is fully populated downstream, it writes the final mapping so that virtual `0x0` resolves to physical `0x3000`.
 
-From that point on, any access to virtual `0x0` transparently reaches physical `0x3740` — the VMM has done its job. 
+From that point on, any access to virtual `0x0` transparently reaches physical `0x3000`. The VMM has done its job. 
+
+Wait, so where's the slab in all of this? Well, the VMM also has to *remember* everything it mapped: which ranges, which flags, what physical memory backs them. That bookkeeping is a pile of small structs, and small structs are the slab's whole thing. (And if you're wondering how a 4-byte allocation ever avoids eating a full page, that's what the heap is for. We'll get there.)
 
 To take it a step further, each VMM tracks its own page tables through its own metadata. This gives us a very important property: we can swap multiple VMMs in and out.
 
@@ -854,7 +856,7 @@ static slab_cache_t* slab_alloc_cache_struct(void) {
 }
 ```
 
-For now, the `slab_cache_t` structure itself is backed by a PMM allocation. This is wasteful, because `sizeof(slab_cache_t)` is much less than `4KB`, so most of that page goes unused. This is exactly the kind of inefficiency the Slab allocator is designed to eliminate for other structures. The irony is that we cannot use the Slab allocator to back the Slab allocator's own cache structures without a bootstrapping problem. Once the heap is online in the next chapter, cache structures can move there.
+For now, the `slab_cache_t` structure itself is backed by a PMM allocation. This is wasteful, because `sizeof(slab_cache_t)` is much less than `4KB`, so most of that page goes unused. This is exactly the kind of inefficiency the Slab allocator is designed to eliminate for other structures. The irony is that we cannot use the Slab allocator to back the Slab allocator's own cache structures without a bootstrapping problem. You could move them to the heap once it's online. GatOS doesn't bother. There can only ever be 16 caches (`SLAB_MAX_CACHES`), so the worst case is 16 wasted pages, aka 64 KiB.
 
 >[!NOTE]
 >This is a classic bootstrapping problem in OS development. You need an allocator to build the data structures that describe the allocator. The typical solution is to have a simpler, less efficient allocator for bootstrapping, then transition to the real allocator once it is self-sufficient. GatOS uses PMM allocations for the Slab's own metadata during early boot, which is slightly wasteful (much less so than using the PMM for everything, of course) but correct.
@@ -1229,5 +1231,7 @@ QEMU_LOG("Initialized slab allocator", TOTAL_DBG);
 Each step enables the next. The physmap (Chapter 5) was a prerequisite for the PMM. The PMM is a prerequisite for the Slab. The Slab is a prerequisite for the VMM. Spinlocks (Chapter 6) were a prerequisite for all three — without them, concurrent access would corrupt every data structure we just built.
 
 You can also appreciate now why the crash console needed no allocator at all. It was built before any of this existed, operating on nothing but a framebuffer pointer and a handful of static variables. This chapter's entire infrastructure was built *on top of* that guarantee. If something in the PMM initialization fails, `panic` fires and the crash console shows you exactly where and why. No heap, no slab, no VMM required.
+
+Okay, one tiny asterisk. Right after the PMM is populated, the init sequence calls `con_crash_shadow_init()`, which borrows a handful of pages from the PMM for the crash console's scroll shadow (that note back in Chapter 6). It's purely a speed thing. If the shadow isn't there, the crash console falls back to clearing the screen instead of scrolling, and carries on.
 
 In the next chapter, you better strap in, because we are going straight for the boss fight. We are in a position to explain, motivate, and build the most complex subsystem in kernel dev, and it's none other than the VMM.

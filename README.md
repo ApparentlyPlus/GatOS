@@ -141,7 +141,7 @@ Every allocator sits in a strict layer above the one below it, and each is initi
 | Layer | Notes |
 |---|---|
 | **Physmap** | The entirety of physical RAM is mapped at a fixed virtual base, so the kernel can touch any physical page without temporary mappings. |
-| **PMM** | Physical page **buddy allocator** with power-of-two free lists across 32 orders, upward coalescing on free, and a magic-tagged header on every free block so corruption is caught rather than propagated. It is also firmware-aware, meaning the kernel image, firmware regions and MMIO holes are registered as exclusion ranges *before* the free lists are ever populated. |
+| **PMM** | Physical page **buddy allocator** with power-of-two free lists across 32 orders, upward coalescing on free, and a magic-tagged header on every free block so corruption is caught rather than propagated. It is also firmware-aware, meaning the kernel image is registered as an exclusion range *before* the free lists are ever populated, and only regions the firmware reports as available RAM are ever handed to it, so firmware regions and MMIO holes never make it into the free lists. |
 | **Slab** | Named object caches for hot fixed-size structures, carving PMM pages into objects instead of burning a full page on a 64-byte allocation. Tracks partial/full/empty slabs per cache. |
 | **VMM** | Per-address-space page table root plus a sorted list of VM objects. Flags cover write/exec/user, device memory (`VM_FLAG_DEVICE`), foreign physical ranges the VMM must never free (`VM_FLAG_FOREIGN`), and lazily-backed regions (`VM_FLAG_LAZY`). |
 | **Demand paging** | `VM_FLAG_LAZY` regions are backed on first touch. The `#PF` handler checks the faulting process's address space first, falls back to the kernel's, allocates and zeroes a page, and returns. User stacks and `mmap` regions cost nothing until actually used. |
@@ -208,7 +208,7 @@ Currently exposed syscalls:
 
 * A **live kernel dashboard** on `CTRL+SHIFT+ESC`: CPU brand and feature list, current power draw in watts, CPU utilisation, physical memory usage and fragmentation, heap and slab statistics, and a scaled table of every process and thread with its state, rendered to fit whatever the framebuffer gives it.
 * A **crash console** that owns a separate shadow buffer sized at boot, so a panic can render a full red-screen report, including reason, decoded exception, error code, faulted address with a decoded access/mode/cause breakdown, `RIP`/`CS`/`RSP`/`SS` and expanded `RFLAGS`, and still scroll back through it instead of dumping one screen and dying.
-* `QEMU_LOG()` and `LOGF()` for serial-side tracing, plus dump helpers like `QEMU_DUMP_PMT` and companion host scripts in [`docs/tools/`](./docs/tools/) that parse a raw page-table dump into something readable.
+* `QEMU_LOG()` and `LOGF()` for serial-side tracing, plus dump helpers like `QEMU_DUMP_PML4` and companion host scripts in [`docs/tools/`](./docs/tools/) that parse a raw page-table dump into something readable.
 
 ### Libraries
 
@@ -427,7 +427,7 @@ QEMU_LOG("Memory manager initialized", TOTAL_DBG);
 QEMU_LOG("Ready to handle interrupts", TOTAL_DBG);
 ```
 
-You can also use all functions defined in `debug.h`, such as `QEMU_DUMP_PMT` for example, which dumps your page table structure in QEMU. There are companion scripts under [`docs/tools/`](./docs/tools/) for parsing those dumps into something a human can read.
+You can also use the other functions defined in `debug.h`, as well as `QEMU_DUMP_PML4` from `paging.c`, which dumps your page table structure in QEMU. There are companion scripts under [`docs/tools/`](./docs/tools/) for parsing those dumps into something a human can read.
 
 
 ## Documentation

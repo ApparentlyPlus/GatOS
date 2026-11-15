@@ -36,6 +36,10 @@ Here's GatOS's GRUB configuration (`grub.cfg`):
 set timeout=0
 set default=0
 
+set gfxmode=auto
+set gfxpayload=keep
+insmod all_video
+
 menuentry "GatOS" {
     multiboot2 /boot/kernel.bin
     boot
@@ -46,12 +50,17 @@ This configuration does several important things:
 
 - `set timeout=0` - Immediately boots the default entry without showing a menu
 - `set default=0` - Selects the first menu entry as default
+- `set gfxmode=auto` - Lets GRUB pick a graphics mode the firmware supports
+- `set gfxpayload=keep` - Keeps that graphics mode alive when control is handed to the kernel, instead of dropping back to text mode
+- `insmod all_video` - Loads every video driver GRUB has, so it can actually set up a framebuffer on both BIOS and UEFI machines
 - `menuentry "GatOS"` - Creates a boot menu entry labeled "GatOS"
 - `multiboot2 /boot/kernel.bin` - Loads our kernel using the Multiboot2 protocol
 - `boot` - Executes the loaded kernel
 
 >[!NOTE]
 > GatOS ships *along with GRUB*, meaning that GRUB comes pre-packaged with GatOS inside the final ISO image. 
+
+You might be wondering what the three `gfx`/`video` lines are doing there. They're for the framebuffer, which we'll ask GRUB for in a minute. Ignore them for now.
 
 ## The Multiboot2 Header
 
@@ -130,8 +139,8 @@ header_start:
     .short 5    # type: framebuffer
     .short 0    # flags (not optional)
     .long 20    # size of this tag
-    .long 0     # preferred width  (0 = any)
-    .long 0     # preferred height (0 = any)
+    .long 1920  # preferred width
+    .long 1080  # preferred height
     .long 0     # preferred depth  (0 = any)
     .align 8
 
@@ -153,7 +162,14 @@ Think of it as a canvas. You draw pixels onto this canvas, and the hardware auto
 
 ## What about the framebuffer tag then?
 
-This tag is a polite request to GRUB: "please set up a linear framebuffer for us." By setting width, height, and depth all to zero, we're leaving the choice entirely to the bootloader and we'll take whatever the firmware already has configured. GRUB will fulfil the request and populate a framebuffer info tag in the Multiboot2 information structure, giving us the framebuffer's physical address, width, height, pitch, and bits-per-pixel.
+This tag is a polite request to GRUB: "please set up a linear framebuffer for us, 1920×1080 if you can." Depth is left at zero, so GRUB picks that one itself.
+
+Note the "if you can". GRUB treats these numbers as a wish. If the firmware can't do 1080p, you get some other mode it *can* do, and the kernel just has to deal with it. So GatOS never assumes 1080p anywhere. It always reads the real resolution back from the Multiboot2 struct.
+
+>[!NOTE]
+> For a while, all three values were zero ("whatever, you pick"). That works too, you just have less say in what you end up with.
+
+GRUB will fulfil the request and populate a framebuffer info tag in the Multiboot2 information structure, giving us the framebuffer's physical address, width, height, pitch, and bits-per-pixel.
 
 Why does this matter? In a few chapters, we'll use this information to build a proper pixel-level display console. No VGA text mode, no 80×25 character grid — a real linear framebuffer that we can draw to freely. Getting GRUB to hand us the address is the first step, and this tag is where that process starts.
 
@@ -223,7 +239,7 @@ mov esp, offset KERNEL_STACK_TOP
 >[!CAUTION]
 > *That should be it, right?* **No, this is completely wrong.** 
 >
->In the previous chapter, we covered how **all of our symbols** are *linked* at Higher Half addresses (i.e. `0xFFFFFFFF80000000` onward) but are *loaded* in lower half addresses (i.e. `0x10000` onward).
+>In the previous chapter, we covered how **all of our symbols** are *linked* at Higher Half addresses (i.e. `0xFFFFFFFF80000000` onward) but are *loaded* in lower half addresses (i.e. `0x100000` onward).
 >
 > The program thinks that `KERNEL_STACK_TOP` is a symbol somewhere in the higher half, and if we move a pointer to it inside `esp`, we'd be overflowing a 32-bit register with a 64-bit value. This would end up setting the stack incorrectly, and our kernel would crash before it even started.
 
@@ -232,10 +248,10 @@ The solution to this problem was presented in the last section of the previous c
 >[!NOTE]
 > The `offset` keyword is used here to get the address of the `KERNEL_STACK_TOP` symbol rather than its value. This ensures we're loading the pointer to the stack's top location into the `esp` register.
 
-GatOS defines the following macros in [`paging.h`](/src/arch/x86_64/memory/paging.h):
+GatOS defines the following macros in [`paging.h`](/src/arch/x86_64/memory/paging.h). (`KERNEL_VIRTUAL_BASE` itself is in [`layout.h`](/src/arch/x86_64/memory/layout.h), together with every other hardcoded address in the kernel.)
 
 ```c
-#define KERNEL_VIRTUAL_BASE 0xFFFFFFFF80000000
+#include <arch/x86_64/memory/layout.h> // #define KERNEL_VIRTUAL_BASE 0xFFFFFFFF80000000
 
 #ifdef __ASSEMBLER__
 
@@ -271,7 +287,7 @@ start:
 
 With the stack correctly set up, we can now create as many functions as we want and call them from inside `start`.
 
-# Error Handling
+## Error Handling
 
 We're about to perform a series of critical checks in our 32-bit assembly code to set up the transition to long mode. Since any failure during this process would be catastrophic, we need a way to handle errors gracefully. This means implementing an error function that we can call when something goes wrong.
 
@@ -755,7 +771,12 @@ gdt64_code_segment = . - gdt64
 gdt64_pointer:
 	.word . - gdt64 - 1         # limit (size of GDT - 1)
 	.long KERNEL_V2P(gdt64)     # base address of GDT (32-bit)
+gdt64_virt_pointer:
+	.word . - gdt64 - 1         # limit (size of GDT - 1)
+	.quad gdt64                 # base address of GDT (64-bit, higher half)
 ```
+
+Yes, that's two pointers to the same GDT. No, it's not a typo. Forget about `gdt64_virt_pointer` for now, we'll need it once we're in 64-bit land.
 
 ### Understanding the 64-bit GDT Structure
 
@@ -932,6 +953,8 @@ Back in our 32-bit `boot32.S`, we perform all the previous steps discussed to ju
 
 .global start
 .global PML4
+.global gdt64_code_segment
+.global gdt64_virt_pointer
 
 .extern long_mode_start
 .extern KERNEL_STACK_TOP
@@ -999,6 +1022,7 @@ We've successfully jumped to 64-bit mode, but we're still executing from low mem
 
 .global long_mode_start
 .extern kernel_main
+.extern gdt64_virt_pointer
 
 .section .text
 .code64
@@ -1033,6 +1057,8 @@ upper_memory:
     mov ds, rax
     mov es, rax
 
+    lgdt [gdt64_virt_pointer]
+
     pushq 0x8
     movabs rax, offset .transition_to_c
     push rax
@@ -1045,7 +1071,9 @@ upper_memory:
     movabs rax, offset kernel_main
     call rax
 
+.halt:
     hlt
+    jmp .halt
 ```
 
 ### Step-by-Step Breakdown
@@ -1094,7 +1122,24 @@ upper_memory:
 - **Stack relocation**: Moves the stack from physical to virtual address space
 - **Function calls**: Ensures return addresses and local variables use virtual addresses
 
-#### 5. Far Return to Establish Code Segment
+#### 5. Reloading the GDT from the Higher Half
+
+```asm
+lgdt [gdt64_virt_pointer]
+```
+
+Remember that second GDT pointer from earlier? Here's where we need it.
+
+Back in `boot32.S`, we loaded the GDT through `gdt64_pointer`, which holds the GDT's *physical* address. We had no choice, the higher half wasn't mapped yet. Thing is, `lgdt` doesn't copy the GDT anywhere. Remember the GDTR register from Chapter 2? `lgdt` just stores the GDT's address in there, and the CPU goes back to that address every time it needs a segment descriptor. That happens a lot more than you'd think. The far return right below this, for example, loads `CS`, so the CPU has to read the GDT to do it.
+
+Next chapter, we nuke the identity map. Leave the GDTR as is, and it now points to an address that isn't mapped anymore. The next time the CPU goes looking for a descriptor, it touches an unmapped address, and we know what that means from Chapter 2: a page fault. And since the CPU needs the GDT to even *handle* a fault properly, things fall apart very, very quickly.
+
+>[!NOTE]
+> How exactly things fall apart (it involves faults while handling faults) is a topic of its own. We'll see it in Chapter 6, when we talk about interrupts.
+
+So while both mappings are still around, we reload the GDTR with `gdt64_virt_pointer`. It's the exact same table, we're just pointing at it through its higher half address.
+
+#### 6. Far Return to Establish Code Segment
 
 ```asm
 pushq 0x8
@@ -1108,17 +1153,19 @@ This clever sequence performs a far return to reload CS:
 - **Push target address** (`.transition_to_c` with virtual addressing)
 - **`retfq`** performs far return, loading CS with the selector and jumping to the virtual address
 
-#### 6. Final Handoff to C Code
+#### 7. Final Handoff to C Code
 
 ```asm
 .transition_to_c:
     movabs rax, offset kernel_main
     call rax
+.halt:
     hlt
+    jmp .halt
 ```
 - **Kernel entry**: Call our main C kernel function with proper virtual addressing
 - **Boot information**: RDI still contains the Multiboot info pointer passed from our 32-bit stub.
-- **Halt fallback**: If kernel_main returns (which it shouldn't), halt the system
+- **Halt fallback**: If kernel_main returns (which it shouldn't), halt the system. Why a loop? `hlt` doesn't stop the CPU forever. It sleeps until something wakes it up (an interrupt, which we'll meet in Chapter 6), and then it carries on with whatever comes after the `hlt`. Here, that's garbage. The loop just puts it straight back to sleep.
 
 ### Why This Complex Dance?
 
@@ -1126,6 +1173,7 @@ This multi-stage transition ensures:
 
 - **Clean segment state**: All segment registers are properly initialized
 - **Proper stack operation**: The stack pointer uses virtual addresses before we make function calls
+- **GDT stays reachable**: The GDTR points at the GDT's higher half address, so unmapping the low half later doesn't break it
 - **Correct code execution**: The far return ensures we're fully in the higher-half address space
 - **C compatibility**: The C kernel receives parameters correctly and can use normal pointer arithmetic
 
@@ -1135,7 +1183,7 @@ After this sequence completes, we're fully operating in our higher-half kernel e
 
 After completing the complex transition to higher-half memory, we finally arrive at the destination we've been working toward: handing control over to our main C kernel. This is where the assembly bootstrapping ends and the high-level kernel initialization begins.
 
-GatOS's `kernel_main` function is defined in [`main.c`](/src/impl/kernel/main.c) with a straightforward signature:
+GatOS's `kernel_main` function is defined in [`kmain.c`](/src/kernel/kmain.c) with a straightforward signature:
 
 ```c
 void kernel_main(void* mb_info) {
