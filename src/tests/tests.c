@@ -89,10 +89,6 @@ void kernel_test(void* mb_info, char* KERNEL_VERSION) {
     
     QEMU_LOG("PMM Initialized (Tests deferred)", TOTAL_DBG);
 
-    // gdt_init reloads GS, which zeroes GS_BASE, so cpu_init has to come after it
-    gdt_init();
-    cpu_init();
-
 	slab_status_t slab_status = slab_init();
 	if(slab_status != SLAB_OK){
         LOGF("[Slab] Failed to initialize slab allocator, error code: %d\n", slab_status);
@@ -106,6 +102,9 @@ void kernel_test(void* mb_info, char* KERNEL_VERSION) {
 		return;
 	}
     QEMU_LOG("VMM Initialized (Tests deferred)", TOTAL_DBG);
+
+    gdt_init();
+    cpu_init();
 
     // Initialize kernel heap so we can use kmalloc for console instances
 	heap_status_t heap_status = heap_kernel_init();

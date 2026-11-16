@@ -5,6 +5,9 @@
  */
 
 #include <arch/x86_64/memory/paging.h>
+#include <arch/x86_64/cpu/interrupts.h>
+#include <arch/x86_64/cpu/cpu.h>
+#include <arch/x86_64/cpu/msr.h>
 #include <kernel/memory/pmm.h>
 #include <kernel/memory/vmm.h>
 #include <kernel/debug.h>
@@ -62,6 +65,29 @@ static bool pte_present(uint64_t root, void* virt) {
     if (!(e & PAGE_PRESENT)) return false;
     uint64_t* pt = (uint64_t*)PHYSMAP_P2V(PT_ENTRY_ADDR(e));
     return !!(pt[PT_INDEX(virt)] & PAGE_PRESENT);
+}
+
+static bool pte_raw(uint64_t root, void* virt, uint64_t* out) {
+    uint64_t* pml4 = (uint64_t*)PHYSMAP_P2V(root);
+    uint64_t e = pml4[PML4_INDEX(virt)];
+    if (!(e & PAGE_PRESENT)) return false;
+    uint64_t* pdpt = (uint64_t*)PHYSMAP_P2V(PT_ENTRY_ADDR(e));
+    e = pdpt[PDPT_INDEX(virt)];
+    if (!(e & PAGE_PRESENT)) return false;
+    uint64_t* pd = (uint64_t*)PHYSMAP_P2V(PT_ENTRY_ADDR(e));
+    e = pd[PD_INDEX(virt)];
+    if (!(e & PAGE_PRESENT)) return false;
+    uint64_t* pt = (uint64_t*)PHYSMAP_P2V(PT_ENTRY_ADDR(e));
+    *out = pt[PT_INDEX(virt)];
+    return (*out & PAGE_PRESENT) != 0;
+}
+
+static bool cpu_nx(void) {
+    uint32_t a, b, c, d;
+    cpuid(0x80000000, 0, &a, &b, &c, &d);
+    if (a < 0x80000001) return false;
+    cpuid(0x80000001, 0, &a, &b, &c, &d);
+    return d & (1u << 20);
 }
 
 static bool pte_flags(uint64_t root, void* virt, uint64_t* f) {
@@ -337,11 +363,14 @@ static bool t_pt_nx_data(void) {
     tr_reset();
     vmm_t* v = vmm_kernel_get(); void* p;
     TEST_ASSERT_STATUS(vmm_alloc(v, PG, VM_FLAG_WRITE, NULL, &p), VMM_OK); tr_alloc(v,p,PG);
-    uint64_t fl;
-    TEST_ASSERT(pte_flags(v->pt_root, p, &fl));
-    /* NX bit is bit 63 of the raw PTE (separate from low 12 flag bits) */
-    (void)fl; /* We log only; NX depends on EFER.NXE being set */
-    LOGF("data page flags 0x%lx\n", fl);
+    uint64_t pte;
+    TEST_ASSERT(pte_raw(v->pt_root, p, &pte));
+
+    // vmm_kernel_init turns NX on by itself, whether or not cpu_init ran before it
+    if (cpu_nx()) {
+        TEST_ASSERT(read_msr(MSR_EFER) & EFER_NXE);
+        TEST_ASSERT(pte & PAGE_NO_EXECUTE);
+    }
     tr_free(); return true;
 }
 
@@ -514,6 +543,50 @@ static bool t_lazy_after(void) {
     TEST_ASSERT(pte_present(v->pt_root, p));
     TEST_ASSERT(*q == 0x1234ABCD);
     tr_free(); return true;
+}
+
+static bool t_fault_backs(void) {
+    tr_reset();
+    vmm_t* v = vmm_kernel_get(); void* p;
+    TEST_ASSERT_STATUS(vmm_alloc(v, PG * 2, VM_FLAG_WRITE | VM_FLAG_LAZY, NULL, &p), VMM_OK); tr_alloc(v,p,PG*2);
+    void* second = (uint8_t*)p + PG + 8;
+    TEST_ASSERT(vmm_handle_fault((uintptr_t)second, PF_WRITE));
+    TEST_ASSERT(pte_present(v->pt_root, (uint8_t*)p + PG));
+    TEST_ASSERT(!pte_present(v->pt_root, p));
+    tr_free(); return true;
+}
+
+static bool t_fault_protection(void) {
+    tr_reset();
+    vmm_t* v = vmm_kernel_get(); void* p;
+    TEST_ASSERT_STATUS(vmm_alloc(v, PG, VM_FLAG_LAZY, NULL, &p), VMM_OK); tr_alloc(v,p,PG);
+
+    // A read brings the page in read only, then a write to it is a protection fault
+    TEST_ASSERT(vmm_handle_fault((uintptr_t)p, 0));
+    TEST_ASSERT(!vmm_handle_fault((uintptr_t)p, PF_PRESENT | PF_WRITE));
+    uint64_t fl;
+    TEST_ASSERT(pte_flags(v->pt_root, p, &fl));
+    TEST_ASSERT(!(fl & PAGE_WRITABLE));
+    tr_free(); return true;
+}
+
+static bool t_fault_user_on_kernel(void) {
+    tr_reset();
+    vmm_t* v = vmm_kernel_get(); void* p;
+    TEST_ASSERT_STATUS(vmm_alloc(v, PG, VM_FLAG_WRITE | VM_FLAG_LAZY, NULL, &p), VMM_OK); tr_alloc(v,p,PG);
+    TEST_ASSERT(!vmm_handle_fault((uintptr_t)p, PF_USER | PF_WRITE));
+    TEST_ASSERT(!pte_present(v->pt_root, p));
+    tr_free(); return true;
+}
+
+static bool t_fault_miss(void) {
+    tr_reset();
+    vmm_t* v = vmm_kernel_get(); void* p;
+    TEST_ASSERT_STATUS(vmm_alloc(v, PG, VM_FLAG_WRITE, NULL, &p), VMM_OK); tr_alloc(v,p,PG);
+    TEST_ASSERT_STATUS(vmm_free(v, p), VMM_OK); tr_reset();
+    TEST_ASSERT(!vmm_handle_fault((uintptr_t)p, PF_WRITE));
+    TEST_ASSERT(!pte_present(v->pt_root, p));
+    return true;
 }
 #pragma endregion
 
@@ -814,7 +887,7 @@ void test_vmm(void) {
     run_test("map_range + unmap_range",        t_map_unmap_range);
     run_test("PT: kernel flags (RW, !US)",     t_pt_kern_flags);
     run_test("PT: user flags (US)",            t_pt_user_flags);
-    run_test("PT: NX data page (info)",        t_pt_nx_data);
+    run_test("PT: NX set on data page",        t_pt_nx_data);
     run_test("PT: NX clear exec page",         t_pt_nx_exec);
     run_test("isolation: different phys",      t_isolation);
     run_test("kernel persistence in user VMM", t_kern_persist);
@@ -829,6 +902,10 @@ void test_vmm(void) {
     run_test("find_mapped_object: miss=NULL",  t_find_miss);
     run_test("lazy: not mapped before access", t_lazy_before);
     run_test("lazy: mapped after access",      t_lazy_after);
+    run_test("fault: backs only the faulting page", t_fault_backs);
+    run_test("fault: protection fault refused", t_fault_protection);
+    run_test("fault: user on kernel refused",   t_fault_user_on_kernel);
+    run_test("fault: no object refused",        t_fault_miss);
     run_test("OOM: small VMM exhausted",       t_oom_small);
     run_test("PT cleanup after free",          t_pt_cleanup);
     run_test("fragmentation refill",           t_frag);

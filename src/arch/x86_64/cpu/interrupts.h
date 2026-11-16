@@ -87,6 +87,11 @@ typedef struct
 
 #define INT_SPURIOUS_INTERRUPT  255  // Spurious Interrupt Vector
 
+// Page fault error code bits
+#define PF_PRESENT  (1 << 0)  // The page was mapped, so it's a protection fault
+#define PF_WRITE    (1 << 1)
+#define PF_USER     (1 << 2)  // Raised in ring 3
+
 // Useful for loops and bounds checking
 #define INT_FIRST_EXCEPTION      0
 #define INT_LAST_EXCEPTION       31

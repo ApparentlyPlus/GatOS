@@ -857,7 +857,7 @@ Good. The fun stuff begins here.
 
 Back in Chapter 3, we asked GRUB for a linear framebuffer by including the framebuffer tag in our Multiboot2 header. GRUB fulfilled that request and populated the framebuffer info in the Multiboot2 information structure, giving us the framebuffer's physical address, width, height, pitch, and bits-per-pixel. We preserved all of that during multiboot parsing in Chapter 4.
 
-In Chapter 5, we built the physmap: a direct linear mapping of every physical address into virtual space starting at `PHYSMAP_VIRTUAL_BASE`. One of the things the physmap covers is the framebuffer's physical address via the `fb_pd` huge-page mapping we set up.
+In Chapter 5, we built the physmap: a direct linear mapping of every physical address into virtual space starting at `PHYSMAP_VIRTUAL_BASE`. One of the things the physmap covers is the framebuffer itself, since we stretched the physmap until it reached the framebuffer's physical address.
 
 This means we can now derive a virtual address for the framebuffer simply by adding `PHYSMAP_VIRTUAL_BASE` to its physical address. That is exactly what `console_init` does:
 
@@ -1012,7 +1012,7 @@ void con_crash_printf(const char* fmt, ...) {
 
 The entire crash console depends on exactly three things: the `fb` pointer set by `console_init`, the glyph data baked into the kernel image at compile time and always accessible, and `PHYSMAP_P2V` having produced a valid virtual address. All three are true the moment `console_init` returns. Nothing else in the kernel needs to be functional.
 
-This mirrors the philosophy behind the static `fb_pd` array from Chapter 5. A single 4KB BSS-allocated page directory was enough to map any framebuffer at any resolution, with no runtime allocation required. 
+This mirrors the philosophy behind the physmap stretch from Chapter 5. A few extra `2MB` entries, written once at boot, were enough to make any framebuffer at any resolution reachable, with no runtime allocation required. 
 
 Here, a handful of static integers and a direct framebuffer pointer are enough to render a crash screen that will always work, regardless of how broken the rest of the kernel is. When you are building the lowest layers of a system, independence from everything else is worth more than elegance.
 

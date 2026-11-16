@@ -1,7 +1,7 @@
 /*
  * vmm.c - Virtual Memory Manager Implementation
  *
- * Each vmm_t owns a page table and a vm_object list. Pass NULL to most functions for the
+ * Each vmm_t owns a page table and a tree of vm_objects. Pass NULL to most functions for the
  * kernel VMM. This was hell to write :D
  *
  * Author: u/ApparentlyPlus
@@ -9,6 +9,7 @@
 
 #include <arch/x86_64/memory/paging.h>
 #include <arch/x86_64/cpu/cpu.h>
+#include <arch/x86_64/cpu/msr.h>
 #include <kernel/memory/slab.h>
 #include <kernel/memory/pmm.h>
 #include <kernel/memory/vmm.h>
@@ -723,34 +724,43 @@ void vmm_destroy(vmm_t* vmm_pub) {
 }
 
 /*
- * vmm_fault - Page fault handler, backs lazy objects on their first touch
- * Returns NULL for any other fault, so the dispatcher deals with it
+ * vmm_handle_fault - Backs the lazy page at addr, and err is the page fault error code (PF_*)
  */
-static cpu_context_t* vmm_fault(cpu_context_t* ctx) {
-    uint64_t cr2;
-    __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+bool vmm_handle_fault(uintptr_t addr, uint64_t err) {
+    // A page that is already there would fault again the moment we return
+    if (err & PF_PRESENT) return false;
 
     // The active address space first, then the kernel's
     vmm_t* spaces[2] = { vmm_get_current(), vmm_kernel_get() };
 
     for (int i = 0; i < 2; i++) {
         if (!spaces[i]) continue;
-        vm_object* obj = vmm_find_mapped_object(spaces[i], (void*)cr2);
+        vm_object* obj = vmm_find_mapped_object(spaces[i], (void*)addr);
         if (!obj || !(obj->flags & VM_FLAG_LAZY)) continue;
+        if ((err & PF_USER) && !(obj->flags & VM_FLAG_USER)) return false;
 
         uint64_t phys;
-        if (pmm_alloc(PAGE_SIZE, &phys) != PMM_OK) return NULL;
+        if (pmm_alloc(PAGE_SIZE, &phys) != PMM_OK) return false;
         zero_page((void*)PHYSMAP_P2V(phys));
 
-        vmm_status_t status = vmm_map_page(spaces[i], phys, (void*)align_down(cr2, PAGE_SIZE), obj->flags);
-        if (status == VMM_OK) return ctx;
+        vmm_status_t status = vmm_map_page(spaces[i], phys, (void*)align_down(addr, PAGE_SIZE), obj->flags);
+        if (status == VMM_OK) return true;
 
         // Already mapped means another CPU backed it first, which is fine
         pmm_free(phys, PAGE_SIZE);
-        return status == VMM_ERR_ALREADY_MAPPED ? ctx : NULL;
+        return status == VMM_ERR_ALREADY_MAPPED;
     }
 
-    return NULL;
+    return false;
+}
+
+/*
+ * vmm_fault - Page fault handler
+ */
+static cpu_context_t* vmm_fault(cpu_context_t* ctx) {
+    uint64_t cr2;
+    __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+    return vmm_handle_fault(cr2, ctx->error_code) ? ctx : NULL;
 }
 
 /*
@@ -789,8 +799,12 @@ vmm_status_t vmm_kernel_init(uintptr_t alloc_base, uintptr_t alloc_end) {
         return VMM_ERR_NOT_INIT;
     }
 
-    if(cpu_has_feature(CF_NX)){
-        cpu_enable_feature(CF_NX);
+    // cpu_init hasn't run yet, so cpu_has_feature would say no
+    uint32_t a, b, c, d;
+    cpuid(0x80000000, 0, &a, &b, &c, &d);
+    if (a >= 0x80000001) {
+        cpuid(0x80000001, 0, &a, &b, &c, &d);
+        if (d & (1u << 20)) write_msr(MSR_EFER, read_msr(MSR_EFER) | EFER_NXE);
     }
 
     // Kernel VMM is allocated from PMM directly for a stable physical address

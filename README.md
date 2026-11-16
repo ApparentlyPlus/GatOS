@@ -446,6 +446,7 @@ The writeups are structured as chapters, and currently run to roughly **50,000 w
 | [C5](./docs/C5_The_Physmap.md) | The physmap |
 | [C6](./docs/C6_Interrupts_Panics_And_Spinlocks.md) | Interrupts, panics and spinlocks |
 | [C7](./docs/C7_PMM_And_Slab.md) | The PMM and the slab allocator |
+| [C8](./docs/C8_The_Virtual_Memory_Manager.md) | The virtual memory manager |
 
 Please note that the documentation is NOT complete as of now. There will be a total of 15 chapters to cover the entirety of GatOS' internals, so this is roughly halfway there.
 

@@ -95,6 +95,10 @@ vmm_status_t vmm_map_range(vmm_t* vmm, uint64_t phys, void* virt, size_t length,
 vmm_status_t vmm_unmap_range(vmm_t* vmm, void* virt, size_t length);
 vmm_status_t vmm_resize(vmm_t* vmm_pub, void* addr, size_t new_length);
 
+// Page Faults
+
+bool vmm_handle_fault(uintptr_t addr, uint64_t err);
+
 // Protection & Permissions
 
 vmm_status_t vmm_protect(vmm_t* vmm, void* addr, size_t new_flags);
