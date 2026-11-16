@@ -7,6 +7,7 @@
 #pragma once
 
 #include <arch/x86_64/cpu/interrupts.h>
+#include <arch/x86_64/cpu/cpu.h>
 #include <kernel/memory/vmm.h>
 #include <kernel/memory/heap.h>
 #include <kernel/drivers/tty.h>
@@ -44,7 +45,9 @@ typedef struct thread {
     void* ustack;           // Virtual address of the user stack
     uint64_t fs_base;       // Thread Local Storage base
 
-    uint8_t fpu[512] __attribute__((aligned(16))); // FPU/SSE/AVX state
+    // FPU/SSE/AVX state
+    uint8_t* fpu;
+    uint8_t fpu_raw[FPU_AREA_SIZE + FPU_AREA_ALIGN - 16] __attribute__((aligned(16)));
 
     uint64_t wake_at;       // Timestamp for waking up
     avl_node_t sleep_node;  // AVL tree node for sleep queue

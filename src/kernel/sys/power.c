@@ -186,6 +186,15 @@ void power_rapl_init(void) {
         LOGF("[POWER] Intel RAPL ready. ESU=%u\n", rapl_esu);
 
     } else if (is_amd) {
+        // Same idea as Intel's leaf 6 check, the MSR #GPs when it isn't there (KVM doesn't emulate it)
+        uint32_t a, b, c, d;
+        cpuid(0x80000000, 0, &a, &b, &c, &d);
+        if (a >= 0x80000007) cpuid(0x80000007, 0, &a, &b, &c, &d);
+        else d = 0;
+        if (!(d & (1u << 14))) {
+            LOGF("[POWER] RAPL not advertised by CPUID.80000007H (AMD).\n");
+            return;
+        }
         uint64_t unit_msr = read_msr(MSR_AMD_ENERGY_UNIT);
         rapl_esu = (uint32_t)((unit_msr >> 8) & 0x1F);
         rapl_vendor = RAPL_AMD;

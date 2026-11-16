@@ -201,7 +201,7 @@ A **Double Fault** (Interrupt Vector 8) occurs when the CPU encounters a second 
 * Resolution: The CPU gives up on the first handler and tries to call a specialized Double Fault Handler. Kernel developers often use a separate, known good stack (via the Task State Segment or Interrupt Stack Table) for this handler to ensure it can run even if the main kernel stack is blown.
 
 >[!NOTE]
->We will talk about the Task State Segment (TSS) and the Interrupt Stack Table (IST) in later chapters, specifically when we set up userspace.
+>We will talk about the Task State Segment (TSS) and the Interrupt Stack Table (IST) later, the IST in this chapter and the TSS in Chapter 9, when the GDT moves to C.
 
 A **Triple Fault** is the final stage of failure where the CPU encounters an exception while trying to invoke the Double Fault handler.
 

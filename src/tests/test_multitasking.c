@@ -11,6 +11,8 @@
 #include <kernel/memory/heap.h>
 #include <kernel/memory/vmm.h>
 #include <arch/x86_64/cpu/gdt.h>
+#include <arch/x86_64/cpu/cpu.h>
+#include <arch/x86_64/cpu/msr.h>
 #include <arch/x86_64/memory/layout.h>
 #include <arch/x86_64/memory/paging.h>
 #include <kernel/drivers/tty.h>
@@ -259,6 +261,90 @@ static bool t_kt_arg(void) {
     process_destroy(p);
     return true;
 }
+
+static bool t_kt_fpu_align(void) {
+    process_t* p = process_create("t_ktfpu", NULL);
+    thread_t* t = thread_create(p, "kt_fpu", kentry, NULL, false, 0);
+    TEST_ASSERT(((uintptr_t)t->fpu & (FPU_AREA_ALIGN - 1)) == 0);
+    TEST_ASSERT(t->fpu >= t->fpu_raw);
+    TEST_ASSERT(t->fpu + FPU_AREA_SIZE <= t->fpu_raw + sizeof(t->fpu_raw));
+    process_destroy(p);
+    return true;
+}
+
+#pragma endregion
+
+#pragma region FPU
+
+static uint8_t fpu_live[FPU_AREA_SIZE] __attribute__((aligned(FPU_AREA_ALIGN)));
+static uint8_t fpu_test[FPU_AREA_SIZE] __attribute__((aligned(FPU_AREA_ALIGN)));
+
+/*
+ * The live registers belong to whoever owns the FPU, so each test saves them first, borrows the
+ * FPU with interrupts off and puts everything back, TS included
+ */
+static bool fpu_borrow(uint64_t* cr0) {
+    bool irq = intr_save();
+    *cr0 = read_cr0();
+    __asm__ volatile("clts" ::: "memory");
+    fpu_save(fpu_live);
+    return irq;
+}
+
+static void fpu_return(bool irq, uint64_t cr0) {
+    fpu_restore(fpu_live);
+    write_cr0(cr0);
+    intr_restore(irq);
+}
+
+static bool t_fpu_fresh(void) {
+    process_t* p = process_create("t_fpufresh", NULL);
+    thread_t* t = thread_create(p, "kt_fresh", kentry, NULL, false, 0);
+
+    uint64_t cr0;
+    bool irq = fpu_borrow(&cr0);
+    uint32_t mxcsr = 0;
+    uint16_t fcw = 0;
+    fpu_restore(t->fpu);
+    __asm__ volatile("stmxcsr %0" : "=m"(mxcsr));
+    __asm__ volatile("fnstcw %0" : "=m"(fcw));
+    fpu_return(irq, cr0);
+
+    TEST_ASSERT(mxcsr == 0x1F80);
+    TEST_ASSERT(fcw == 0x037F);
+    process_destroy(p);
+    return true;
+}
+
+static bool t_fpu_roundtrip(void) {
+    // With AVX on, the top 16 bytes live in the YMM upper half that fxsave never saw
+    bool avx = cpu_is_feature_enabled(CF_AVX);
+    uint64_t in[4] = { 0x1111111111111111, 0x2222222222222222, 0x3333333333333333, 0x4444444444444444 };
+    uint64_t out[4] = { 0 };
+
+    uint64_t cr0;
+    bool irq = fpu_borrow(&cr0);
+    if (avx) {
+        __asm__ volatile("vmovdqu %0, %%ymm0" :: "m"(in) : "memory");
+        fpu_save(fpu_test);
+        __asm__ volatile("vpxor %%ymm0, %%ymm0, %%ymm0" ::: "memory");
+        fpu_restore(fpu_test);
+        __asm__ volatile("vmovdqu %%ymm0, %0" : "=m"(out) :: "memory");
+    } else {
+        __asm__ volatile("movdqu %0, %%xmm0" :: "m"(in) : "memory");
+        fpu_save(fpu_test);
+        __asm__ volatile("pxor %%xmm0, %%xmm0" ::: "memory");
+        fpu_restore(fpu_test);
+        __asm__ volatile("movdqu %%xmm0, %0" : "=m"(out) :: "memory");
+        out[2] = in[2];
+        out[3] = in[3];
+    }
+    fpu_return(irq, cr0);
+
+    for (int i = 0; i < 4; i++) TEST_ASSERT(out[i] == in[i]);
+    return true;
+}
+
 #pragma endregion
 
 #pragma region User Thread
@@ -554,6 +640,15 @@ static bool t_sys_abi(void) {
     TEST_ASSERT(r == (1ull << 63));
     return true;
 }
+
+static bool t_sys_fmask(void) {
+    // ring 3 must not be able to carry TF or AC into the syscall handler
+    uint64_t mask = read_msr(MSR_FMASK);
+    TEST_ASSERT(mask & (1 << 8));
+    TEST_ASSERT(mask & (1 << 9));
+    TEST_ASSERT(mask & (1 << 18));
+    return true;
+}
 #pragma endregion
 
 #pragma region Runner
@@ -591,6 +686,9 @@ void test_multitasking(void) {
     run_test("kthread: CS = KERNEL_CS",       t_kt_cs);
     run_test("kthread: SS = KERNEL_DS",       t_kt_ss);
     run_test("kthread: RDI = arg",            t_kt_arg);
+    run_test("kthread: FPU area 64B aligned", t_kt_fpu_align);
+    run_test("fpu: fresh area is reset state",t_fpu_fresh);
+    run_test("fpu: save/restore round trip",  t_fpu_roundtrip);
     run_test("uthread: not null",             t_ut_nn);
     run_test("uthread: ustack not null",      t_ut_stk);
     run_test("uthread: context not null",     t_ut_ctx);
@@ -609,6 +707,7 @@ void test_multitasking(void) {
     run_test("tty output: writer waits turn", t_out_contend);
     run_test("thread_create_bootstrap",       t_bootstrap);
     run_test("syscall keeps non-ABI regs",    t_sys_abi);
+    run_test("syscall masks TF, IF and AC",   t_sys_fmask);
 
     suite_end(&suite);
 }

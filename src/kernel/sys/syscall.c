@@ -45,8 +45,15 @@ void syscall_init(void) {
 
     write_msr(MSR_LSTAR, (uint64_t)syscall_entry);
 
-    // FMASK MSR - RFLAGS to clear on syscall. We clear IF (bit 9), DF (bit 10).
-    write_msr(MSR_FMASK, 0x200 | 0x400);
+    /* Author's Note:
+     *
+     * IF (bit 9) and DF (bit 10), plus everything ring 3 can set with popf that would hurt us here:
+     *
+     * TF (bit 8) would single-step the first kernel instruction while rsp is still the user's
+     * AC (bit 18) would switch SMAP off for the whole syscall
+     * NT (bit 14) would make an iretq fault
+     */ 
+    write_msr(MSR_FMASK, 0x100 | 0x200 | 0x400 | 0x4000 | 0x40000);
 
     LOGF("[SYSCALL] Syscall interface initialized.\n");
 }

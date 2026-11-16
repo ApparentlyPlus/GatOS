@@ -78,6 +78,13 @@ void write_cr4(uint64_t val);
 uint64_t read_xcr0(void);
 void write_xcr0(uint64_t value);
 
+// 512 bytes of fxsave layout, the 64 byte XSAVE header, then 256 bytes of YMM upper halves
+#define FPU_AREA_SIZE   832
+#define FPU_AREA_ALIGN  64  // xsave faults on anything less
+
+void fpu_save(void* area);
+void fpu_restore(const void* area);
+
 /*
  * smap_allow - Allows access to supervisor mode pages
  */

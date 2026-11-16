@@ -68,7 +68,7 @@ static cpu_context_t* fpu_nm_handler(cpu_context_t* ctx) {
 
     if (!cur) {
         if (fpu_owner) {
-            __asm__ volatile("fxsave %0" : "=m"(fpu_owner->fpu));
+            fpu_save(fpu_owner->fpu);
             fpu_owner = NULL;
         }
         return ctx;
@@ -76,8 +76,8 @@ static cpu_context_t* fpu_nm_handler(cpu_context_t* ctx) {
 
     if (fpu_owner != cur) {
         if (fpu_owner)
-            __asm__ volatile("fxsave %0" : "=m"(fpu_owner->fpu));
-        __asm__ volatile("fxrstor %0" :: "m"(cur->fpu));
+            fpu_save(fpu_owner->fpu);
+        fpu_restore(cur->fpu);
         fpu_owner = cur;
     }
     return ctx;

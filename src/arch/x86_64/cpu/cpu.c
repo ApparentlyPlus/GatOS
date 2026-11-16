@@ -8,9 +8,13 @@
 #include <arch/x86_64/cpu/msr.h>
 #include <kernel/debug.h>
 #include <klibc/string.h>
+#include <kernel/sys/panic.h>
 
 static cpu_info_t cpuinfo;
 cpu_local_t cpu_local = {0};
+
+// Set once AVX is on
+static bool use_xsave = false;
 
 /*
  * cpuid - Execute the CPUID instruction with given EAX and ECX inputs
@@ -91,6 +95,28 @@ void write_xcr0(uint64_t value)
 }
 
 /*
+ * fpu_save - Saves the FPU/SSE/AVX registers into a FPU_AREA_ALIGN aligned area
+ */
+void fpu_save(void* area)
+{
+    if (use_xsave)
+        __asm__ volatile("xsave (%0)" :: "r"(area), "a"(0xFFFFFFFF), "d"(0xFFFFFFFF) : "memory");
+    else
+        __asm__ volatile("fxsave (%0)" :: "r"(area) : "memory");
+}
+
+/*
+ * fpu_restore - Loads registers saved by fpu_save
+ */
+void fpu_restore(const void* area)
+{
+    if (use_xsave)
+        __asm__ volatile("xrstor (%0)" :: "r"(area), "a"(0xFFFFFFFF), "d"(0xFFFFFFFF) : "memory");
+    else
+        __asm__ volatile("fxrstor (%0)" :: "r"(area) : "memory");
+}
+
+/*
  * cpu_init - Initialize CPU information by querying CPUID and MSRs
  */
 void cpu_init(void)
@@ -127,6 +153,7 @@ void cpu_init(void)
 
     if (max_basic >= 7) {
         cpuid(7, 0, &a, &b, &c, &d);
+        if (b & (1 << 5)) cpuinfo.features |= CF_AVX2;
         if (b & (1 << 7)) cpuinfo.features |= CF_SMEP;
         if (b & (1 << 20)) cpuinfo.features |= CF_SMAP;
     }
@@ -152,12 +179,18 @@ void cpu_init(void)
 
     cpuinfo.core_count = 1;
 
+    // Leaf 0xB lists the topology levels (SMT, then core). EBX of the core level counts every
+    // logical processor in the package. Subleaf 0 is the SMT level, which only counts one core's.
     if (max_basic >= 0x0B) {
-        cpuid(0x0B, 0, &a, &b, &c, &d);
-        if (b) cpuinfo.core_count = b;
+        for (uint32_t lvl = 0; lvl < 8; lvl++) {
+            cpuid(0x0B, lvl, &a, &b, &c, &d);
+            uint32_t type = (c >> 8) & 0xFF;
+            if (type == 0) break;
+            if (type == 2 && b) cpuinfo.core_count = b;
+        }
     } else if (max_basic >= 0x04) {
         cpuid(0x04, 0, &a, &b, &c, &d);
-        cpuinfo.core_count = ((b >> 26) & 0x3F) + 1;
+        cpuinfo.core_count = ((a >> 26) & 0x3F) + 1;
     }
 
     // SSE is enabled at boot time (it's a requirement for GatOS to work)
@@ -297,6 +330,12 @@ bool cpu_enable_feature(cpu_feature_t feature)
             xcr0 |= (1 << 0) | (1 << 1); // enable x87 and SSE
             xcr0 |= (1 << 2); // enable AVX state
             write_xcr0(xcr0);
+
+            // With XCR0 set, CPUID 0xD reports how big an xsave of the enabled state is
+            uint32_t a, b, c, d;
+            cpuid(0x0D, 0, &a, &b, &c, &d);
+            if (b > FPU_AREA_SIZE) panic("FPU state doesn't fit FPU_AREA_SIZE");
+            use_xsave = true;
             return true;
 
         case CF_NX:
@@ -355,10 +394,11 @@ bool cpu_is_feature_enabled(cpu_feature_t feature)
 
         case CF_AVX:
         case CF_AVX2:
+            // xgetbv is #UD until CR4.OSXSAVE is set, so that has to be checked first
             cr4 = read_cr4();
+            if (!(cr4 & (1 << 18))) return false;
             xcr0 = read_xcr0();
-            return ((cr4 & (1 << 18)) &&
-                    (xcr0 & (1 << 0)) && (xcr0 & (1 << 1)) && (xcr0 & (1 << 2)));
+            return (xcr0 & (1 << 0)) && (xcr0 & (1 << 1)) && (xcr0 & (1 << 2));
 
         case CF_NX:
             efer = read_msr(MSR_EFER);

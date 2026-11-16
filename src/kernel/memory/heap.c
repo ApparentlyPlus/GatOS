@@ -624,6 +624,9 @@ static void split_block(heap_t* heap, blk_hdr_t* block, size_t size) {
     // if the original was free, reinsert the (now smaller) block too
     if (was_in_free_list) {
         freelist_insert(heap, block);
+    } else {
+        // A used block's tail can land right before a free block, and free neighbors always merge
+        coalesce_blocks(heap, new_block);
     }
 }
 

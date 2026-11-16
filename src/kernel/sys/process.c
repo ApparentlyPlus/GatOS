@@ -173,6 +173,7 @@ static thread_t* thread_new(process_t* process, const char* name, thread_state_t
     thread->tid = next_tid++;
     thread->process = process;
     thread->state = state;
+    thread->fpu = (uint8_t*)(((uintptr_t)thread->fpu_raw + FPU_AREA_ALIGN - 1) & ~(uintptr_t)(FPU_AREA_ALIGN - 1));
     kstrncpy(thread->name, name, MAX_THREAD_NAME - 1);
     return thread;
 }
@@ -276,10 +277,7 @@ thread_t* thread_create_bootstrap(process_t* process, const char* name) {
     thread_t* thread = thread_new(process, name, T_RUNNING);
     if (!thread) return NULL;
 
-    __asm__ volatile (
-        "fxsave %0 \n"
-        : "=m"(thread->fpu)
-    );
+    fpu_save(thread->fpu);
 
     thread_link(thread);
 

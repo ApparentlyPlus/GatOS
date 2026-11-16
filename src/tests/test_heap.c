@@ -243,6 +243,24 @@ static bool t_realloc_hole(void) {
     TEST_ASSERT(b[0] == 0x11 && b[63] == 0x11);
     tr_free(); return true;
 }
+static bool t_realloc_shrink_merge(void) {
+    tr_reset();
+    void* p = kmalloc(4096); tr_add(p);
+    blk_hdr_t* h = hdr(p);
+
+    // Two shrinks: the second tail lands right before the first one, which is already free
+    TEST_ASSERT(krealloc(p, 2048) == p);
+    TEST_ASSERT(krealloc(p, 64) == p);
+
+    // Free neighbors always merge, so the block after the tail can't be free too
+    blk_hdr_t* tail = (blk_hdr_t*)((uint8_t*)h + h->total_size);
+    TEST_ASSERT(tail->magic == BLOCK_MAGIC_FREE);
+    uintptr_t after = (uintptr_t)tail + tail->total_size;
+    TEST_ASSERT(after >= h->arena->end || ((blk_hdr_t*)after)->magic == BLOCK_MAGIC_USED);
+    TEST_ASSERT(heap_check(heapv()) == HEAP_OK);
+    tr_free(); return true;
+}
+
 #pragma endregion
 
 #pragma region get_alloc_size
@@ -531,6 +549,7 @@ void test_heap(void) {
     run_test("realloc grow: data preserved",  t_realloc_grow);
     run_test("realloc shrink: data preserved",t_realloc_shrink);
     run_test("realloc into adjacent hole",    t_realloc_hole);
+    run_test("realloc shrink: tail merges",   t_realloc_shrink_merge);
     run_test("get_alloc_size >= requested",   t_get_sz);
     run_test("heap_align_size: multiples",    t_align_sz);
     run_test("validate_block: valid block",   t_validate_ok);

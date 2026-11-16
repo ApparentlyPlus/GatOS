@@ -39,6 +39,11 @@ generic_interrupt_handler:
     test qword ptr [rsp + 24], 3
     jz .no_swapgs
     swapgs
+
+    // Ring 3 can set AC with popf, and AC=1 turns SMAP off
+    pushfq
+    and qword ptr [rsp], ~0x40000
+    popfq
 .no_swapgs:
 
     // Save all general purpose registers
