@@ -55,9 +55,7 @@ const cpu_info_t* cpu_get_info(void);
 
 // Idle helpers (MONITOR/MWAIT with HLT fallback)
 void cpu_idle_init(void);
-bool cpu_mwait_available(void);
-uint32_t cpu_mwait_hint(void);
-uint32_t cpu_mwait_ext(void);
+void cpu_idle_on(void* volatile* watch);
 void cpu_idle(void);
 
 // CPU feature management

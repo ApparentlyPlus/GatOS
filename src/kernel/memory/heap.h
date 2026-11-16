@@ -1,8 +1,8 @@
 /*
  * heap.h - Kernel Heap Manager
  *
- * Grows by allocating from the VMM. Free list sorted by size (best fit), boundary tag
- * coalescing, magic numbers and red zones for corruption detection.
+ * Grows by allocating arenas from the VMM. Segregated size bins, boundary tag coalescing,
+ * magic numbers and red zones for corruption detection.
  *
  * Author: u/ApparentlyPlus
  */
@@ -14,17 +14,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-// Minimum allocation alignment (must be power of 2)
-#define HEAP_MIN_ALIGN 16
 
-// Minimum heap size (in bytes)
-#define HEAP_MIN_SIZE (64 * 1024)  // 64KB
-
-// Heap flags
-#define HEAP_FLAG_NONE      0
-#define HEAP_FLAG_ZERO      (1 << 0)  // Zero memory on allocation
-#define HEAP_FLAG_URGENT    (1 << 1)  // Don't fail, panic instead
-#define HEAP_FLAG_EXECUTABLE (1 << 2) // Memory is executable
 
 // Return codes
 typedef enum {
@@ -37,12 +27,81 @@ typedef enum {
     HEAP_ERR_CORRUPTED,     // Heap corruption detected
 } heap_status_t;
 
-// Forward declarations
+#pragma region Internals (shared with the white box tests)
 
-typedef struct heap heap_t;
+// Magic numbers for validation
+#define HEAP_MAGIC 0xF005BA11
+#define ARENA_MAGIC 0x1CEB00DA
+#define BLOCK_MAGIC_USED 0xABADCAFE
+#define BLOCK_MAGIC_FREE 0xA110CA7E
+#define BLOCK_RED_ZONE 0x8BADF00D
+
+// Minimum allocation alignment (must be power of 2) and block size
+#define HEAP_MIN_ALIGN 16
+#define MIN_BLOCK_SIZE 32
+
+// Arena management
+#define MIN_ARENA_SIZE (64 * 1024)
+#define HEAP_SHRINK_THRESHOLD 4
+
+// Segregated free list bins
+#define HEAP_BIN_COUNT 16
+
+typedef struct arena arena_t;
 typedef struct blk_hdr blk_hdr_t;
+typedef struct heap heap_t;
 
-// Kernel heap interface (auto initialized on first use)
+// Block header (placed before user data)
+struct blk_hdr {
+    uint32_t magic;
+    uint32_t red_zone_pre;
+    size_t size;
+    size_t total_size;
+    arena_t* arena;
+    struct blk_hdr* next_free;
+    struct blk_hdr* prev_free;
+    uint32_t red_zone_post;
+} __attribute__((aligned(16)));
+
+// Block footer (placed after user data)
+typedef struct {
+    uint32_t red_zone_pre;
+    blk_hdr_t* header;
+    uint32_t magic;
+    uint32_t red_zone_post;
+} __attribute__((aligned(16))) blk_foot_t;
+
+// Arena, one contiguous region carved into blocks. [start, end) holds the blocks
+struct arena {
+    uint32_t magic;
+    arena_t* next;
+    arena_t* prev;
+
+    uintptr_t start;
+    uintptr_t end;
+    size_t size;
+
+    blk_hdr_t* first_block;
+
+    size_t total_free;
+    size_t total_allocated;
+};
+
+// Heap, a list of arenas and the size bins of their free blocks
+struct heap {
+    uint32_t magic;
+    arena_t* arenas;
+    blk_hdr_t* bins[HEAP_BIN_COUNT];
+    size_t current_size;
+    size_t total_allocated;
+    size_t total_free;
+    size_t allocation_count;
+    size_t arena_count;
+};
+
+#pragma endregion
+
+// Kernel heap interface
 
 heap_status_t heap_kernel_init(void);
 heap_t* heap_kernel_get(void);

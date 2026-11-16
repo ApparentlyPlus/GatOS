@@ -7,6 +7,7 @@
  */
 
 #include <arch/x86_64/cpu/gdt.h>
+#include <arch/x86_64/cpu/interrupts.h>
 #include <arch/x86_64/memory/paging.h>
 #include <kernel/memory/pmm.h>
 #include <kernel/debug.h>
@@ -69,7 +70,7 @@ void gdt_init(void) {
     // double fault stack, specific for critical exception
     uint64_t df_stack_phys;
     if (pmm_alloc(KERNEL_STACK_SIZE, &df_stack_phys) == PMM_OK) {
-        tss.ist[0] = PHYSMAP_P2V(df_stack_phys + 16384);
+        tss.ist[0] = PHYSMAP_P2V(df_stack_phys + KERNEL_STACK_SIZE);
         LOGF("[GDT] Double Fault IST stack allocated at 0x%lx\n", tss.ist[0]);
     }
 
@@ -107,6 +108,10 @@ void gdt_init(void) {
     );
 
     __asm__ volatile("ltr %%ax" :: "a"((uint16_t)TSS_SEL));
+
+    // The IST stacks only exist now, so this is the earliest the IDT may point at them
+    if (tss.ist[0]) idt_set_ist(INT_DOUBLE_FAULT, 1);
+    if (tss.ist[1]) idt_set_ist(INT_PAGE_FAULT, 2);
 
     LOGF("[GDT] Global Descriptor Table and TSS initialized successfully.\n");
 }

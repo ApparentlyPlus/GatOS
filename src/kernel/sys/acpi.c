@@ -18,21 +18,16 @@ static void* rsdt_virt = NULL; // Mapped virtual address
 static bool xsdt_ok = false;
 
 /*
- * acpi_map_phys - Map a physical address through vmm_alloc
+ * acpi_map_phys - Virtual address for an ACPI table
  */
 void* acpi_map_phys(uint64_t phys_addr, size_t size) {
     if (phys_addr == 0) return NULL;
-
-    void* virt_addr = NULL;
+    if (phys_addr + size <= kmem->physmap_end) return (void*)PHYSMAP_P2V(phys_addr);
 
     uint64_t page_offset = phys_addr & (PAGE_SIZE - 1);
-    uint64_t base_phys = phys_addr - page_offset;
-    size_t map_size = align_up(size + page_offset, PAGE_SIZE);
-
-    // VM_FLAG_FOREIGN so it's treated as device memory
-    // MMIO dude, I hate that we need the vmm for this dammit
-    vmm_status_t status = vmm_alloc(NULL, map_size, VM_FLAG_WRITE | VM_FLAG_FOREIGN | VM_FLAG_DEVICE, (void*)base_phys, &virt_addr);
-
+    void* virt_addr = NULL;
+    vmm_status_t status = vmm_alloc(NULL, align_up(size + page_offset, PAGE_SIZE), VM_FLAG_FOREIGN,
+                                    (void*)(phys_addr - page_offset), &virt_addr);
     if (status != VMM_OK) {
         LOGF("[ACPI ERROR] Failed to map physical address 0x%lx (Status: %d)\n", phys_addr, status);
         return NULL;
@@ -42,14 +37,12 @@ void* acpi_map_phys(uint64_t phys_addr, size_t size) {
 }
 
 /*
- * acpi_unmap_phys - Unmap a previously mapped physical region
+ * acpi_unmap_phys - Drops a mapping acpi_map_phys made (physmap addresses have none)
  */
 void acpi_unmap_phys(void* virt) {
-    if (!virt) return;
-
-    void* base_virt = (void*)((uintptr_t)virt & ~(PAGE_SIZE - 1));
-
-    vmm_free(NULL, base_virt);
+    uintptr_t v = (uintptr_t)virt;
+    if (!v || (v >= PHYSMAP_VIRTUAL_BASE && v < PHYSMAP_P2V(kmem->physmap_end))) return;
+    vmm_free(NULL, (void*)align_down(v, PAGE_SIZE));
 }
 
 /*
@@ -176,5 +169,4 @@ void* acpi_find_table(const char* signature) {
 
 // Getters
 RSDP2Descriptor* acpi_get_rsdp(void) { return rsdp; }
-void* acpi_get_root_sdt(void) { return rsdt_virt; }
 bool acpi_is_xsdt_supported(void) { return xsdt_ok; }

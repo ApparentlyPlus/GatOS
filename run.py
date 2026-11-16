@@ -39,14 +39,10 @@ PLATFORM_TOOLCHAIN_DIR = BASE_TOOLCHAIN_DIR / f"x86_64-{OS_NAME}"
 GRUB_DIR = PLATFORM_TOOLCHAIN_DIR / "grub"
 
 SRC_DIR = ROOT_DIR / "src"
-HEADER_DIR = ROOT_DIR / "src"
 BUILD_DIR = ROOT_DIR / "build"
 DIST_DIR = ROOT_DIR / "dist/x86_64"
 ISO_DIR = ROOT_DIR / "targets/x86_64/iso"
 
-UEFI_DIR = ISO_DIR / "EFI/BOOT"
-UEFI_GRUB = UEFI_DIR / "BOOTX64.EFI"
-GRUB_CFG = ISO_DIR / "boot/grub/grub.cfg"
 KERNEL_BIN = DIST_DIR / "kernel.bin"
 DEBUG_LOG = ROOT_DIR / "debug.log"
 
@@ -58,10 +54,8 @@ if not PLATFORM_TOOLCHAIN_DIR.exists():
 CC = PLATFORM_TOOLCHAIN_DIR / "gcc" / "bin" / f"x86_64-elf-gcc{EXE_EXT}"
 LD = PLATFORM_TOOLCHAIN_DIR / "gcc" / "bin" / f"x86_64-elf-ld{EXE_EXT}"
 STRIP = PLATFORM_TOOLCHAIN_DIR / "gcc" / "bin" / f"x86_64-elf-strip{EXE_EXT}"
-GRUB_MKSTANDALONE = GRUB_DIR / f"grub-mkstandalone{EXE_EXT}"
 GRUB_MKRESCUE = GRUB_DIR / f"grub-mkrescue{EXE_EXT}"
 
-GRUB_MODULE_DIR = GRUB_DIR / "x86_64-efi"
 GRUB_FONT_PATH = GRUB_DIR / "unicode.pf2"
 if OS_NAME == "win":
     QEMU_EXEC = PLATFORM_TOOLCHAIN_DIR / "qemu" / f"qemu-system-x86_64{EXE_EXT}"
@@ -75,26 +69,18 @@ elif OS_NAME == "macos":
 
 # Now with DCE!
 CFLAGS_BASE = ["-m64", "-ffreestanding", "-nostdlib", "-fno-pic", "-mcmodel=kernel", "-mno-red-zone",
-               "-ffunction-sections", "-fdata-sections", f"-I{HEADER_DIR}"]
+               "-ffunction-sections", "-fdata-sections", f"-I{SRC_DIR}"]
 KERNEL_FPU_RESTRICTIONS = ["-mno-sse", "-mno-sse2", "-mno-mmx", "-mno-80387"]
 
-# Files whose functions run (or are called) from interrupt context and must
-# never emit SSE instructions, since that corrupts the interrupted thread's XMM state.
-# Everything NOT in this set is free to use floats and SSE normally.
-KERNEL_INTERRUPT_PATH = {
-    "arch/x86_64/cpu/interrupts.c",    # interrupt_dispatcher
-    "kernel/sys/scheduler.c",          # sched_schedule, fpu_nm_handler
-    "kernel/sys/timers.c",             # timer_handler (registered IRQ)
-    "kernel/drivers/keyboard.c",       # keyboard_handler (registered IRQ)
-    "kernel/drivers/xhci.c",           # xhci_irq_handler (registered IRQ)
-    "tests/test_timers.c",             # test IRQ callbacks
-    "kernel/memory/vmm.c",             # vmm_find_mapped_object, vmm_map_page (demand paging)
-    "kernel/memory/pmm.c",             # pmm_alloc, pmm_free (demand paging)
-    "klibc/avl.c",                     # called by vmm.c for VMA tree operations
+# Kernel code never touches the FPU, the registers belong to whatever thread got interrupted.
+# So every kernel file is built without it, except the ones in this list, which need floats.
+KERNEL_FPU_ALLOWED = {
+    "klibc/stdio.c",
 }
 
-CPPFLAGS = [f"-I{HEADER_DIR}", f"-Wa,-I{HEADER_DIR}", "-D__ASSEMBLER__"]
-LDFLAGS = ["-n", "-nostdlib", "--gc-sections", f"-T{ROOT_DIR / 'targets/x86_64/linker.ld'}", "--no-relax", "-g"]
+CPPFLAGS = [f"-I{SRC_DIR}", f"-Wa,-I{SRC_DIR}", "-D__ASSEMBLER__"]
+LINKER_SCRIPT = ROOT_DIR / "targets/x86_64/linker.ld"
+LDFLAGS = ["-n", "--gc-sections", "--no-relax", f"-T{LINKER_SCRIPT}"]
 
 CFLAGS_FAST = ["-O2", "-fomit-frame-pointer", "-fpredictive-commoning", "-fstrict-aliasing"]
 CFLAGS_VFAST = ["-O3", "-fpredictive-commoning", "-fstrict-aliasing", "-fno-delete-null-pointer-checks",
@@ -163,12 +149,11 @@ def reap_fuse(cmd):
 
 def get_kernel_version():
     pattern = re.compile(r'KERNEL_VERSION\s*=\s*"([^"]*)"')
-    for directory in {SRC_DIR, HEADER_DIR}:
-        for file in directory.rglob("*.[chS]"):
-            try:
-                match = pattern.search(file.read_text(errors="ignore"))
-                if match: return match.group(1)
-            except Exception: pass
+    for file in SRC_DIR.rglob("*.[chS]"):
+        try:
+            match = pattern.search(file.read_text(errors="ignore"))
+            if match: return match.group(1)
+        except Exception: pass
     return "v0.0.0-unknown"
 
 def fix_perms():
@@ -186,8 +171,8 @@ def is_userspace(src):
     rel = src.relative_to(SRC_DIR).as_posix()
     return rel.startswith("ulibc/") or rel == "kernel/uproc.c"
 
-def is_interrupt_path(src):
-    return src.relative_to(SRC_DIR).as_posix() in KERNEL_INTERRUPT_PATH
+def is_fpu_allowed(src):
+    return src.relative_to(SRC_DIR).as_posix() in KERNEL_FPU_ALLOWED
 
 def compile_sources(c_files, asm_files, profile_name):
     profile = BUILD_PROFILES.get(profile_name, BUILD_PROFILES["default"])
@@ -214,11 +199,7 @@ def compile_sources(c_files, asm_files, profile_name):
             if OS_NAME != "macos":
                 flags += ["-flto"]
 
-            # Only restrict SSE/FPU in files whose code runs from interrupt context.
-            # Everything else (kmain, kernel threads, drivers init, libc, etc.) can
-            # use floats and SSE freely, the lazy FPU mechanism handles state save/restore.
-            if is_interrupt_path(src):
-                flags += KERNEL_FPU_RESTRICTIONS
+            flags += ["-fno-tree-vectorize"] if is_fpu_allowed(src) else KERNEL_FPU_RESTRICTIONS
         else:
             flags += ["-ffast-math"]
         jobs.append((CC, src, BUILD_DIR / src.relative_to(SRC_DIR).with_suffix(".o"), flags))
@@ -243,11 +224,11 @@ def compile_sources(c_files, asm_files, profile_name):
 def link_kernel(objs):
     DIST_DIR.mkdir(parents=True, exist_ok=True)
 
+    # macOS has no LTO, so it links with ld directly. Everyone else goes through gcc for LTO
     if OS_NAME == "macos":
-        run_cmd([LD, *LDFLAGS, "-o", KERNEL_BIN] + [str(f) for f in objs])
+        run_cmd([LD, "-nostdlib", "-g", *LDFLAGS, "-o", KERNEL_BIN] + [str(f) for f in objs])
     else:
-        script = ROOT_DIR / "targets/x86_64/linker.ld"
-        flags = ["-nostdlib", "-flto", "-g", f"-Wl,-n,--gc-sections,--no-relax,-T{script}"]
+        flags = ["-nostdlib", "-flto", "-g", "-Wl," + ",".join(LDFLAGS)]
         run_cmd([CC, *flags, "-o", KERNEL_BIN] + [str(f) for f in objs])
 
     run_cmd([STRIP, str(KERNEL_BIN)])
@@ -274,8 +255,6 @@ def clean():
     for p in (BUILD_DIR, DIST_DIR.parent):
         if p.exists(): shutil.rmtree(p)
     if (ISO_DIR / "boot/kernel.bin").exists(): (ISO_DIR / "boot/kernel.bin").unlink()
-    if UEFI_GRUB.exists(): UEFI_GRUB.unlink()
-    if UEFI_DIR.exists() and not any(UEFI_DIR.iterdir()): UEFI_DIR.rmdir()
     if DEBUG_LOG.exists(): DEBUG_LOG.unlink()
     print(f"{GREEN}[INFO] Clean complete.{NC}")
 

@@ -8,9 +8,9 @@ This chapter focuses on establishing the essential utilities our kernel needs to
 
 2. **klibc**: A brief look at the introduction of `string.c`.
 
-3. **Multiboot2 Parsing**: Updating the parsing section to reflect how `multiboot2.c` now safely relocates the parsed data into a preallocated higher-half buffer (`multiboot_buffer`).
+3. **Multiboot2 Parsing**: How `multiboot2.c` parses the Multiboot2 struct and safely relocates its data into a preallocated higher-half buffer (`multiboot_buffer`).
 
-4. **Paging Cleanup**: Updating the identity unmapping section to reflect the new `cleanup_kpt` and `unmap_identity` logic.
+4. **Paging Cleanup**: Removing the identity map we set up in Chapter 3, with `unmap_identity`.
 
 Once we have these core utilities in place, we'll be ready for the next major step: in Chapter 5, we'll explore paging from a higher level perspective and construct the **physmap**, reserving and setting up the necessary page tables to map all of physical RAM into virtual memory.
 
@@ -67,7 +67,7 @@ typedef enum {
 } serial_port_t;
 ```
 
-To initialize a specific port, we call `serial_init_port`. To bring up both COM1 and COM2 at once, we use `serial_init_all`. Both ultimately run the same initialization sequence. This configures the baud rate (fixed at 38400), disables interrupts, and sets up the FIFO buffers:
+To initialize a port, we call `serial_init_port` once for each one we want (GatOS brings up COM1 and COM2). This configures the baud rate (fixed at 38400), disables interrupts, and sets up the FIFO buffers:
 
 ```c
 void serial_init_port(serial_port_t port) {
@@ -324,32 +324,10 @@ Useful when dealing with non-null-terminated buffers.
 
 ---
 
-### Writing Hexadecimal Values
-
-Kernel developers often need to log raw numbers (e.g., register states, memory addresses). To support this, the implementation includes helpers for printing values in hex.
-
-Each function breaks down the number into nibbles (4-bit chunks) and writes them using a shared helper:
-
-```c
-void serial_write_hex8_port(serial_port_t port, uint8_t value);
-void serial_write_hex16_port(serial_port_t port, uint16_t value);
-void serial_write_hex32_port(serial_port_t port, uint32_t value);
-void serial_write_hex64_port(serial_port_t port, uint64_t value);
-```
-
-For example, `serial_write_hex32_port(SERIAL_COM1, 0xCAFEBABE)` would print:
-
-```
-CAFEBABE
-```
-
-All of the above functions are also available in a default-port form targeting COM1:
+And since COM1 is the port we use the most, there's a shorthand for it:
 
 ```c
 void serial_write(const char* str);
-void serial_write_char(char c);
-void serial_write_hex32(uint32_t value);
-// ... and so on
 ```
 
 >[!NOTE]
@@ -425,12 +403,12 @@ It also supports full format strings:
 
 ```c
 LOGF("[PAGING] Removed identity mapping\n");
-LOGF("[PAGING] Reserved physmap tablespace (%d MiB)\n", table_bytes / MEASUREMENT_UNIT_MB);
+LOGF("[PAGING] Reserved physmap tablespace (%lu KiB)\n", table_bytes / MEASUREMENT_UNIT_KB);
 ```
 
 ### Dumping the Page Table Structure
 
-The last utility, `QEMU_DUMP_PML4`, provides a recursive walk of the kernel's paging hierarchy.
+The last utility, `QEMU_DUMP_PML4`, provides a recursive walk of the kernel's paging hierarchy. This one lives in [`paging.c`](/src/arch/x86_64/memory/paging.c) instead of `debug.c`, since it pokes at the page tables directly.
 
 ```c
 void QEMU_DUMP_PML4(void);
@@ -440,41 +418,25 @@ This function traverses all levels of the x86_64 4-level paging structure:
 
 * **PML4** → **PDPT** → **PD** → **PT** → **Physical Pages**
 
-At each level, it prints the index and entry contents (lower 32 bits for brevity). This produces a tree-like structure that shows exactly which virtual pages are mapped and where they point in physical memory.
+At each level, it logs the index and the full entry through `LOGF`, so it ends up in `debug.log`. This produces a tree-like structure that shows exactly which virtual pages are mapped and where they point in physical memory. A `2MiB` page (like the ones our boot tables use) shows up as a PD entry pointing straight at `PHYS`.
 
 Example (truncated for clarity):
 
 ```
 Page Tables:
-PML4[0001]: 0000A003 -> PDPT
-  PDPT[0002]: 00123003 -> PD
-    PD[0040]: 00ABF003 -> PT
-      PT[0010]: 04567003 -> PHYS
+PML4[100]: 19B023 -> PDPT
+  PDPT[0]: 197023 -> PD
+    PD[0]: 196023 -> PT
+      PT[1]: 1003 -> PHYS
+    PD[1]: 2000E3 -> PHYS
 ```
 
 We can use this to see what's mapped and where it points to after we make changes to the page tables.
 
 >[!IMPORTANT]
-> The function `QEMU_DUMP_PML4` relies on a few page table definitions declared in `paging.h`:
->
->```c
->#define PAGE_PRESENT    (1ULL << 0)
->#define PAGE_WRITABLE   (1ULL << 1)
->#define PAGE_USER       (1ULL << 2)
->#define PAGE_NO_EXECUTE (1ULL << 63)
->#define ADDR_MASK       0x000FFFFFFFFFF000UL
->#define PAGE_SIZE       0x1000UL
->#define PAGE_ENTRIES    512
->#define FRAME_MASK      0xFFFFF000
->```
+> To get from one table to the next, the walk needs to reach *any* physical address, and that's exactly what the physmap gives us. We build it next chapter, so `QEMU_DUMP_PML4` only works from then on.
 
-The raw output of `QEMU_DUMP_PML4` can be overwhelming, especially on large systems. Fortunately, QEMU makes it easy to redirect serial output into a file:
-
-```bash
-qemu-system-x86_64 [...] -serial stdio > dump.txt
-```
-
-The resulting `dump.txt` can then be parsed using [`parse_pmt.py`](tools/parse_pmt.py), which provides an interactive environment for you to play around with your mappings.
+The raw output of `QEMU_DUMP_PML4` can be overwhelming, especially on large systems. Since it all lands in `debug.log`, just copy that file to `dump.txt`. The resulting `dump.txt` can then be parsed using [`parse_pmt.py`](tools/parse_pmt.py), which skips everything that isn't a page table line and provides an interactive environment for you to play around with your mappings.
 
 >[!TIP]
 >For more information on helper tools and how to use them, check out the README in the [`tools`](tools) directory.
@@ -528,12 +490,12 @@ This implementation is truly exceptional:
 10. In short: probably the **best standalone `printf` implementation** available online
 11. Released under the permissive **MIT license**
 
-For GatOS specifically, the output function was initially wired up to pipe directly through `serial_write_char`, so everything printed with `kprintf` would end up on COM1.
+For GatOS specifically, the output function was initially wired up to pipe directly through `serial_write_char_port(SERIAL_COM1, c)`, so everything printed with `kprintf` would end up on COM1.
 
 >[!IMPORTANT]
 >Currently, GatOS has matured enough to have a full fledged TTY subsystem, so the `printf` code has been changed. We will talk about those changes in later chapters. 
 >
-> All you need to know for now is that you can follow the instructions on Marco's project and wire up his fully functional `printf` to output in QEMU's serial using the `serial_write_char` function discussed earlier.
+> All you need to know for now is that you can follow the instructions on Marco's project and wire up his fully functional `printf` to output in QEMU's serial using the `serial_write_char_port` function discussed earlier.
 >
 > The current implementation lives in [`klibc/stdio.h`](/src/klibc/stdio.h) and [`klibc/stdio.c`](/src/klibc/stdio.c).
 
@@ -558,47 +520,38 @@ Both `KVIRT_START`/`KVIRT_END` and their physical counterparts `KPHYS_START`/`KP
 > [!NOTE]
 > From this point forward, we'll just refer to **`KEND`** as a general concept. Whether it's `KPHYS_END` or `KVIRT_END` doesn't really matter — both point to the same boundary, just seen from different perspectives (physical vs virtual).
 
-To make this clean and maintainable, it's best to **wrap these linker symbols** inside `paging.h` and `paging.c`. That way, the rest of the kernel always queries `KEND` through the wrapper functions. This has two benefits:
-
-1. Other parts of the code automatically get the *current* value of `KEND` (even after tweaks).
-2. All adjustments happen in one place (`paging.c`), keeping the rest of the codebase simple and safe.
-
-In this light, we expose 4 new functions in `paging.h`:
+To make this clean and maintainable, the *current* kernel range lives in exactly one place: a small struct in [`layout.h`](/src/arch/x86_64/memory/layout.h), which `paging.h` includes.
 
 ```c
-uint64_t get_kstart(bool virtual);
-uint64_t get_kend(bool virtual);
-uint64_t get_linker_kend(bool virtual);
-uint64_t get_linker_kstart(bool virtual);
+typedef struct {
+    uint64_t kstart;
+    uint64_t kend;
+    uint64_t ram;
+    uint64_t physmap_end;
+} kmem_t;
 
-extern uintptr_t KPHYS_END;
-extern uintptr_t KPHYS_START;
+extern const kmem_t* const kmem;
 ```
 
-At first glance, this might look redundant — why do we need both "normal" and "linker" getters? Let's break it down.
+`kstart` and `kend` start out as the linker's `KPHYS_START` and `KPHYS_END`. The other two fields get filled in when we build the physmap next chapter, so ignore them for now.
 
-* **`get_kstart` / `get_kend`**
-  These return the *current* kernel boundaries. They are backed by the static variables `KSTART` and `KEND`, which may be updated at runtime. For example, when GatOS builds the physmap, it shifts `KEND` forward to make room for new page tables. Calling these functions ensures you always get the *latest, adjusted values*.
+Notice the double `const`? The rest of the kernel gets a pointer it can read through, but never write through. The struct itself lives in `paging.c`, and that's the only file that ever moves `kend`. So everyone reads `kmem->kend`, always gets the latest value, and there's exactly one place to look when it changes.
 
-* **`get_linker_kstart` / `get_linker_kend`**
-  These return the *original values* defined by the linker symbols. In other words, they give you the "linker" kernel range as it was at boot time, untouched by runtime adjustments. These are useful when you need the baseline, fixed reference points for the kernel's location.
+Both are physical addresses. When you need the higher half view of one, `KERNEL_P2V` from Chapter 2 does the conversion, e.g. `KERNEL_P2V(kmem->kend)`.
 
-Both variants take a `bool virtual` argument. If `true`, the function converts the address into its higher-half (virtual) equivalent using `KERNEL_P2V`. If `false`, you get the physical address directly.
-
-This dual system gives us flexibility:
-
-* Use **linker values** when you need to reference the kernel's fixed layout.
-* Use **current values** when you want the runtime-adjusted state (after physmap expansion).
-
-By centralizing this logic in `paging.c`, the rest of the kernel doesn't need to worry about linker symbols, runtime tweaks, or physical/virtual conversions. Everything just calls these wrappers and gets the correct answer for the current context.
+>[!NOTE]
+> The raw linker symbols, `KPHYS_START` and `KPHYS_END`, are still there if you ever need the kernel's range exactly as it was linked. They never move.
 
 ### The Parser
 
 At boot, the multiboot structure is placed in lower memory, and we can access it only because of the lower-half identity mapping established during early initialization.
 
-To handle this safely, the kernel first parses the multiboot structure in its original, lower-half form. After parsing, each pointer inside the structure is translated to its higher-half equivalent, and all relevant data is copied into a **preallocated buffer** reserved within the kernel's address space. Since this buffer resides in the higher half (inside the kernel range), the information remains accessible even after the lower half is unmapped.
+To handle this safely, the kernel copies the whole multiboot structure into a **preallocated buffer** reserved within the kernel's address space. One `kmemcpy` is all it takes. The structure is self-contained (every tag, every string, every memory map entry sits inside its `total_size` bytes), so there are no pointers to fix up afterwards. Since this buffer resides in the higher half (inside the kernel range), the information remains accessible even after the lower half is unmapped.
 
-This buffer is declared in [`kmain.c`](/src/kernel/kmain.c):
+This buffer is declared at file scope, right next to the code that boots the kernel. In these chapters, that's `kernel_main` in `kmain.c`.
+
+>[!NOTE]
+> In the actual source, the boot sequence lives in `kernel_bootstrap()` in [`bootstrap.c`](/src/kernel/bootstrap.c), and `kernel_main` just calls it. The chapters build that sequence up one step at a time inside `kernel_main`, so what you see here is the simplified version of it.
 
 ```c
 static uint8_t multiboot_buffer[8 * 1024]; // 8KB should be more than enough
@@ -643,7 +596,7 @@ void kernel_main(void* mb_info) {
 
 Now that the kernel is fully running in the higher half, the multiboot structure has been parsed and copied there, and all debugging tools are linked within the kernel range and accessible from the higher half, there is no longer any need to maintain the lower-half identity mapping.
 
-GatOS performs this cleanup in one sweep. Before doing so, it's helpful to have a small helper function for flushing the TLB. This ensures that any cached mappings are refreshed after we alter the page tables.
+Before we touch the page tables, it's helpful to have a small helper function for flushing the TLB. This ensures that any cached mappings are refreshed after we alter the page tables.
 
 Flushing the TLB is simple: just reload the `cr3` register, which holds the address of our `PML4` table:
 
@@ -668,41 +621,18 @@ uint64_t* getPML4(void) {
 >[!IMPORTANT]
 > Remember that `cr3` always holds the physical address of our *PML4*. Therefore, we use `KERNEL_P2V` to access it from higher memory.
 
-### Cleanup Kernel Page Tables
-
-The sweep is implemented in `cleanup_kpt(start, end)`. This function takes a physical address range and rebuilds the page table hierarchy so that **only that range remains mapped in the higher half**. Everything else, including the identity mapping and any other stray entries, is zeroed out.
-
-So for example, if I called `cleanup_kpt(0x1000, 0x2000)`, then it would tweak the page tables so that ONLY the virtual range `[0xFFFFFFFF80001000, 0xFFFFFFFF80002000]` is accessible. Anything else? Page fault. As you can see, only high memory remains.
-
-We call it with the full kernel range:
-
-```c
-cleanup_kpt(0x0, get_kend(false));
-```
-
-Internally, the function:
-
-1. Determines which PML4, PDPT, and PD indices are needed to cover the given range as a higher-half virtual mapping.
-2. Zeros every PML4 entry except the one pointing to the kernel's higher-half region.
-3. Zeros every PDPT entry except the one used by the kernel.
-4. Rewrites the PD: entries outside the kernel's range are zeroed, and each in-range entry is written as a `2MiB` huge page that maps the kernel directly.
-5. Calls `flush_tlb`.
-
->[!NOTE]
-> The boot tables map the kernel with `2MiB` huge pages (Chapter 3), so the trim bottoms out at the PD — there are no scratch PTs to walk. This is only ever a stopgap anyway: `build_physmap` shortly replaces the whole thing with proper pool-backed tables.
-
-### If we wanted to be explicit?
+### Unmapping the Lower Half
 
 Recall from Chapter 3 that our `PML4` and `PDPT` entries eventually point to the same `PD`, but through different indices:
 
 * `PML4[511] -> PDPT[510] -> PD` for the higher half
 * `PML4[0] -> PDPT[0] -> PD` for the lower half (identity)
 
-After `cleanup_kpt`, `PML4[0]` and `PDPT[0]` are already zeroed. But if you want to be explicit, we can define a function, `unmap_identity`, that manually cleans up the lower half mapping:
+So the whole identity map hangs off two entries. Zero them, flush the TLB, and it's gone. The higher half path doesn't go through either of them, so it doesn't even notice:
 
 ```c
 void unmap_identity(void) {
-    int64_t* PML4 = getPML4();
+    uint64_t* PML4 = getPML4();
     uint64_t* PDPT = PML4 + PAGE_ENTRIES * PREALLOC_PML4s;
     PML4[0] = 0;
     PDPT[0] = 0;
@@ -711,7 +641,10 @@ void unmap_identity(void) {
 }
 ```
 
-This isn't really necessary, but you can use it for learning purposes.
+That's it. Two writes and a flush.
+
+>[!NOTE]
+> The higher half still maps the whole first `1GB` after this, way more than the kernel needs. That's on purpose. Next chapter, we put the leftover room to work, and then throw these boot tables away entirely.
 
 Putting it all together in `kmain.c`:
 
@@ -724,8 +657,8 @@ static uint8_t multiboot_buffer[8 * 1024];
 
 void kernel_main(void* mb_info) {
 	// Init serial
-	serial_init_port(COM1_PORT);
-	serial_init_port(COM2_PORT);
+	serial_init_port(SERIAL_COM1);
+	serial_init_port(SERIAL_COM2);
 	QEMU_LOG("Kernel main reached, normal assembly boot succeeded", TOTAL_DBG);
 
 	// Multiboot comes next since we need to parse the memory map and other info before we can safely initialize memory management
@@ -738,9 +671,9 @@ void kernel_main(void* mb_info) {
 	}
 	QEMU_LOG("Multiboot structure parsed and copied to higher half", TOTAL_DBG);
 
-	// Cleanup
-	cleanup_kpt(0x0, get_kend(false));
-	QEMU_LOG("Unmapped all memory besides the higher half kernel range", TOTAL_DBG);
+	// The multiboot struct lives in the higher half now, so the identity map can go
+	unmap_identity();
+	QEMU_LOG("Removed the identity map, only the higher half remains", TOTAL_DBG);
 }
 ```
 
@@ -753,7 +686,7 @@ Finally, in `paging.h`, the preallocated page table counts used in the pointer a
 #define PREALLOC_PTs    0
 ```
 
-These reflect the layout established during bootstrap in `boot32.S`. Since the tables are allocated contiguously in `.bss`, arithmetic like `PML4 + PAGE_ENTRIES * PREALLOC_PML4s` skips 512 entries forward to reach the start of the PDPT. `PREALLOC_PTs` is `0` because the boot map uses `2MiB` huge pages straight out of the `PD` — there is no scratch PT level anymore.
+These reflect the layout established during bootstrap in `boot32.S`. Since the tables are allocated contiguously in `.bss`, arithmetic like `PML4 + PAGE_ENTRIES * PREALLOC_PML4s` skips 512 entries forward to reach the start of the PDPT. `PREALLOC_PTs` is `0` because the boot map uses `2MiB` huge pages straight out of the `PD`, so there is no PT level at all.
 
 >[!IMPORTANT]
 > Any attempt to access a lower-half address after this cleanup will cause a page fault. This is intentional. The kernel has no reason to operate in low memory anymore.

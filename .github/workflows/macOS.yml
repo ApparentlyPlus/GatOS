@@ -47,7 +47,7 @@ jobs:
               failures=$((failures+1))
             fi
           fi
-        done < <(grep "Test Results:" debug.log)
+        done < <(grep -E "[0-9]+/[0-9]+ passed" debug.log)
 
         if [ "$found_tests" -eq 0 ]; then
           echo "::error::No test result summaries found in logs!"

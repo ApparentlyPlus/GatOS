@@ -13,10 +13,9 @@
 # We need these symbols to be global so they can be accessed from the linker script and other files
 .global start
 .global PML4
-.global gdt64_code_segment
 .global gdt64_virt_pointer
 
-# We also rewuest the linker to point us to these symbols
+# We also request the linker to point us to these symbols
 # for the kernel stack and the long mode entry point
 .extern long_mode_start
 .extern KERNEL_STACK_TOP
@@ -34,10 +33,9 @@ start:
 	mov esp, offset KERNEL_V2P(KERNEL_STACK_TOP)
 
 	# I am transferring the multiboot information
-	# directly to edi which will then be zero extended 
-	# in the 64 bit transition, and then passed to the kernel
-	# as an arg. Usually I'd just keep the value in ebx, but
-	# for some reason when it becomes rbx, the value is lost.
+	# directly to edi, which becomes the first argument (rdi)
+	# of kernel_main. It can't stay in ebx, because
+	# setup_page_tables uses ebx as scratch.
 	mov edi, ebx
 
 	# Verify multiboot magic number
@@ -63,9 +61,6 @@ start:
 
 	# Far jump to 64-bit kernel entry point via code segment selector
 	jmp gdt64_code_segment:KERNEL_V2P(long_mode_start)
-
-	# Halt if for some reason jump returns
-	hlt
 
 # -----------------------------------------------------------------------------
 # check_multiboot:
@@ -95,7 +90,7 @@ check_SSE:
     mov eax, cr0
 
 	# clear CR0.EM (bit 2)
-    and eax, 0xFFFBFFFF
+    and eax, 0xFFFFFFFB
 
 	# set CR0.MP (bit 1)
     or  eax, 0x00000002
@@ -254,7 +249,9 @@ error:
 	mov al, 10 # \n
 	call .serial_putc
 
+.error_halt:
 	hlt
+	jmp .error_halt
 
 .serial_putc:
 	push eax

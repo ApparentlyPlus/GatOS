@@ -7,10 +7,12 @@
 #include <kernel/sys/process.h>
 #include <kernel/sys/scheduler.h>
 #include <kernel/sys/userspace.h>
+#include <kernel/sys/syscall.h>
 #include <kernel/memory/heap.h>
 #include <kernel/memory/vmm.h>
 #include <arch/x86_64/cpu/gdt.h>
 #include <arch/x86_64/memory/layout.h>
+#include <arch/x86_64/memory/paging.h>
 #include <kernel/drivers/tty.h>
 #include <kernel/debug.h>
 #include <tests/tests.h>
@@ -19,8 +21,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-static int ntests = 0;
-static int npass = 0;
+static suite_t suite;
 
 #pragma region Helpers
 
@@ -73,6 +74,37 @@ static bool t_proc_nn(void) {
     process_t* p = process_create("t_proc", NULL);
     TEST_ASSERT(p != NULL);
     process_destroy(p);
+    return true;
+}
+
+// Lives in the user image's .data, so every process starts with its own copy of it
+static volatile uint32_t data_probe __attribute__((section(".user_data"))) = 0xC0DE1234;
+
+static bool t_proc_data_private(void) {
+    uintptr_t off = (uintptr_t)&data_probe - (uintptr_t)&USER_DATA_START;
+    TEST_ASSERT((uintptr_t)&data_probe >= (uintptr_t)&USER_DATA_START);
+    TEST_ASSERT((uintptr_t)&data_probe < (uintptr_t)&USER_DATA_END);
+
+    process_t* a = process_create("t_data_a", NULL);
+    process_t* b = process_create("t_data_b", NULL);
+    TEST_ASSERT(a && b);
+
+    uint64_t pa, pb;
+    TEST_ASSERT(vmm_get_physical(a->vmm, (void*)&data_probe, &pa));
+    TEST_ASSERT(vmm_get_physical(b->vmm, (void*)&data_probe, &pb));
+    TEST_ASSERT(pa != pb && pa != (uintptr_t)&USER_DATA_LOAD_ADDR + off);
+
+    // Both copies start out with the image's value
+    volatile uint32_t* va = (volatile uint32_t*)PHYSMAP_P2V(pa);
+    volatile uint32_t* vb = (volatile uint32_t*)PHYSMAP_P2V(pb);
+    TEST_ASSERT(*va == 0xC0DE1234 && *vb == 0xC0DE1234);
+
+    // A write in one process stays in that process
+    *va = 0xDEAD;
+    TEST_ASSERT(*vb == 0xC0DE1234);
+
+    process_destroy(a);
+    process_destroy(b);
     return true;
 }
 
@@ -415,7 +447,7 @@ static bool t_out_contend(void) {
     sched_add(w);
     for (int i = 0; i < 10; i++) sched_yield();
     TEST_ASSERT(!out_done);
-    TEST_ASSERT(t->out_wait == w);
+    TEST_ASSERT(t->out->wait == w);
 
     tty_write(t, "B", 1);
     tty_unlock_output(t, held);
@@ -450,27 +482,97 @@ static bool t_bootstrap(void) {
 }
 #pragma endregion
 
+#pragma region Syscall ABI
+
+/* Bit 63 = probe ran, low bits = registers that didn't survive the syscall */
+userspace_bss static volatile uint64_t abi_res;
+
+userspace void abi_probe(void* arg) {
+    (void)arg;
+    uint64_t bad;
+    /* Everything but RAX, RCX and R11 must come back untouched */
+    __asm__ volatile(
+        "push %%rbp\n\t"
+        "mov $0x11, %%rbx\n\t"
+        "mov $0x12, %%rdx\n\t"
+        "mov $0x13, %%rsi\n\t"
+        "mov $0x14, %%rdi\n\t"
+        "mov $0x15, %%rbp\n\t"
+        "mov $0x16, %%r8\n\t"
+        "mov $0x17, %%r9\n\t"
+        "mov $0x18, %%r10\n\t"
+        "mov $0x19, %%r12\n\t"
+        "mov $0x1a, %%r13\n\t"
+        "mov $0x1b, %%r14\n\t"
+        "mov $0x1c, %%r15\n\t"
+        "mov %[nr], %%eax\n\t"
+        "syscall\n\t"
+        "xor %%eax, %%eax\n\t"
+        "cmp $0x11, %%rbx\n\t setne %%cl\n\t or %%cl, %%al\n\t"
+        "cmp $0x12, %%rdx\n\t setne %%cl\n\t shl $1, %%cl\n\t or %%cl, %%al\n\t"
+        "cmp $0x13, %%rsi\n\t setne %%cl\n\t shl $2, %%cl\n\t or %%cl, %%al\n\t"
+        "cmp $0x14, %%rdi\n\t setne %%cl\n\t shl $3, %%cl\n\t or %%cl, %%al\n\t"
+        "cmp $0x15, %%rbp\n\t setne %%cl\n\t shl $4, %%cl\n\t or %%cl, %%al\n\t"
+        "cmp $0x16, %%r8\n\t  setne %%cl\n\t shl $5, %%cl\n\t or %%cl, %%al\n\t"
+        "cmp $0x17, %%r9\n\t  setne %%cl\n\t shl $6, %%cl\n\t or %%cl, %%al\n\t"
+        "cmp $0x18, %%r10\n\t setne %%cl\n\t shl $7, %%cl\n\t or %%cl, %%al\n\t"
+        "cmp $0x19, %%r12\n\t setne %%cl\n\t or %%cl, %%ah\n\t"
+        "cmp $0x1a, %%r13\n\t setne %%cl\n\t shl $1, %%cl\n\t or %%cl, %%ah\n\t"
+        "cmp $0x1b, %%r14\n\t setne %%cl\n\t shl $2, %%cl\n\t or %%cl, %%ah\n\t"
+        "cmp $0x1c, %%r15\n\t setne %%cl\n\t shl $3, %%cl\n\t or %%cl, %%ah\n\t"
+        "pop %%rbp"
+        : "=a"(bad)
+        : [nr] "i"(SYS_YIELD)
+        : "rbx", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11",
+          "r12", "r13", "r14", "r15", "cc", "memory");
+    abi_res = bad | (1ull << 63);
+    /* The test kernel doesn't preempt ring 3, so hand the CPU back until we're torn down */
+    while (1) __asm__ volatile("syscall" : : "a"(SYS_YIELD) : "rcx", "r11", "memory");
+}
+
+static bool t_sys_abi(void) {
+    process_t* p = process_create("t_abi", NULL);
+    thread_t* t = thread_create(p, "t_abi", abi_probe, NULL, true, 0);
+    TEST_ASSERT(t != NULL);
+
+    /* abi_res lives in p's own bss, so read it through the physmap */
+    uint64_t phys;
+    TEST_ASSERT(vmm_get_physical(p->vmm, (void*)&abi_res, &phys));
+    volatile uint64_t* res = (volatile uint64_t*)PHYSMAP_P2V(phys);
+
+    /* A probe that faults gets its process reaped, so stop looking at its memory then */
+    sched_add(t);
+    uint64_t r = 0;
+    for (int i = 0; i < 100 && !r; i++) {
+        sched_yield();
+        if (!proc_in_list(p)) break;
+        r = *res;
+    }
+    if (proc_in_list(p)) process_destroy(p);
+
+    if (r != (1ull << 63)) LOGF("(res=0x%lx) ", r);
+    TEST_ASSERT(r == (1ull << 63));
+    return true;
+}
+#pragma endregion
+
 #pragma region Runner
 
 static void run_test(const char* name, bool (*fn)(void)) {
-    ntests++;
-    LOGF("[TEST] %-40s ", name);
+    test_begin(name);
     bool pass = fn();
-    if (pass) { npass++; LOGF("[PASS]\n"); }
-    else { LOGF("[FAIL]\n"); }
+    test_end(&suite, pass);
 }
 
 void test_multitasking(void) {
-    ntests = 0;
-    npass = 0;
-
-    LOGF("\n--- BEGIN MULTITASKING TEST ---\n");
+    suite_begin(&suite, "Multitasking");
 
     run_test("sched_active is true",          t_sched_active);
     run_test("sched_current not null",        t_sched_nn);
     run_test("sched_current name=kernel_main",t_sched_name);
     run_test("sched_current has stack",       t_sched_stk);
     run_test("process: not null",             t_proc_nn);
+    run_test("process: private .data",        t_proc_data_private);
     run_test("process: pid > 0",              t_proc_pid);
     run_test("process: name stored",          t_proc_name);
     run_test("process: has vmm",              t_proc_vmm);
@@ -506,22 +608,8 @@ void test_multitasking(void) {
     run_test("terminate_by_tty no crash",     t_term_tty);
     run_test("tty output: writer waits turn", t_out_contend);
     run_test("thread_create_bootstrap",       t_bootstrap);
+    run_test("syscall keeps non-ABI regs",    t_sys_abi);
 
-    LOGF("--- END MULTITASKING TEST ---\n");
-    LOGF("Multitasking Test Results: %d/%d\n\n", npass, ntests);
-
-    #ifdef TEST_BUILD
-    #include <kernel/drivers/console.h>
-    #include <klibc/stdio.h>
-    if (npass != ntests) {
-        console_set_color(CONSOLE_COLOR_RED, CONSOLE_COLOR_BLACK);
-        kprintf("[-] Multitasking tests failed (%d/%d passed).\n", npass, ntests);
-        console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
-    } else {
-        console_set_color(CONSOLE_COLOR_GREEN, CONSOLE_COLOR_BLACK);
-        kprintf("[+] Multitasking tests passed! (%d/%d)\n", npass, ntests);
-        console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
-    }
-    #endif
+    suite_end(&suite);
 }
 #pragma endregion

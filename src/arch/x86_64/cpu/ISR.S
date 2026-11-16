@@ -135,14 +135,12 @@ generic_interrupt_handler:
  */
 
 .macro GENERATE_INTERRUPT_HANDLER num
-    .align 16
-    .global interrupt_handler_\num
     interrupt_handler_\num:
     
     // If the vector has error code (from the known ones), 
     // push just the vector number alone, otherwise push a dummy error code (0) first.
 
-    .if \num == 8 || \num == 10 || \num == 11 || \num == 12 || \num == 13 || \num == 14 || \num == 17
+    .if \num == 8 || (\num >= 10 && \num <= 14) || \num == 17 || \num == 21 || \num == 29 || \num == 30
         push \num
     .else
         push 0
@@ -152,11 +150,26 @@ generic_interrupt_handler:
     jmp generic_interrupt_handler
 .endm
 
+.macro STUB_ADDRESS num
+    .quad interrupt_handler_\num
+.endm
+
 .altmacro
 
 // Generate all 256 handlers
 .set i, 0
 .rept 256
     GENERATE_INTERRUPT_HANDLER %i
+    .set i, i+1
+.endr
+
+// And a table of their addresses, so idt_init doesn't have to guess where each stub starts
+.section .rodata
+.align 8
+.global isr_stubs
+isr_stubs:
+.set i, 0
+.rept 256
+    STUB_ADDRESS %i
     .set i, i+1
 .endr

@@ -13,8 +13,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-static int ntests = 0;
-static int npass = 0;
+static suite_t suite;
 
 #pragma region Init / Destroy
 
@@ -459,7 +458,7 @@ static bool t_out_nolock(void) {
     /* No scheduler yet, so nobody can wait for the output */
     tty_t* t = tty_create();
     TEST_ASSERT(!tty_lock_output(t));
-    TEST_ASSERT(t->out_owner == NULL);
+    TEST_ASSERT(t->out->owner == NULL);
     tty_destroy(t);
     return true;
 }
@@ -468,7 +467,7 @@ static bool t_out_direct(void) {
     tty_t* t = tty_create();
     tty_write(t, "abc", 3);
     TEST_ASSERT(row_is(t, "abc"));
-    TEST_ASSERT(t->held_len == 0);
+    TEST_ASSERT(t->out->held_len == 0);
     tty_destroy(t);
     return true;
 }
@@ -476,13 +475,13 @@ static bool t_out_direct(void) {
 static bool t_out_held(void) {
     /* A write that can't wait for the owner is held back, not mixed into its line */
     tty_t* t = tty_create();
-    t->out_owner = (struct thread*)0x1;
-    t->out_depth = 1;
+    t->out->owner = (struct thread*)0x1;
+    t->out->depth = 1;
     tty_write(t, "xyz", 3);
-    TEST_ASSERT(t->held_len == 3);
+    TEST_ASSERT(t->out->held_len == 3);
     TEST_ASSERT(t->console->buffer[0].codepoint == ' ');
-    t->out_owner = NULL;
-    t->out_depth = 0;
+    t->out->owner = NULL;
+    t->out->depth = 0;
     tty_destroy(t);
     return true;
 }
@@ -490,28 +489,28 @@ static bool t_out_held(void) {
 static bool t_out_flush(void) {
     /* The owner's last unlock writes the held text out after its own */
     tty_t* t = tty_create();
-    t->out_owner = (struct thread*)0x1;
-    t->out_depth = 1;
+    t->out->owner = (struct thread*)0x1;
+    t->out->depth = 1;
     tty_write(t, "late", 4);
     tty_unlock_output(t, true);
     TEST_ASSERT(row_is(t, "late"));
-    TEST_ASSERT(t->held_len == 0);
-    TEST_ASSERT(t->out_owner == NULL);
+    TEST_ASSERT(t->out->held_len == 0);
+    TEST_ASSERT(t->out->owner == NULL);
     tty_destroy(t);
     return true;
 }
 
 static bool t_out_cap(void) {
     tty_t* t = tty_create();
-    t->out_owner = (struct thread*)0x1;
-    t->out_depth = 1;
+    t->out->owner = (struct thread*)0x1;
+    t->out->depth = 1;
     char big[TTY_HELD_SIZE + 100];
     kmemset(big, 'h', sizeof(big));
     tty_write(t, big, sizeof(big));
     tty_write(t, "more", 4);
-    TEST_ASSERT(t->held_len == TTY_HELD_SIZE);
-    t->out_owner = NULL;
-    t->out_depth = 0;
+    TEST_ASSERT(t->out->held_len == TTY_HELD_SIZE);
+    t->out->owner = NULL;
+    t->out->depth = 0;
     tty_destroy(t);
     return true;
 }
@@ -631,16 +630,12 @@ static bool t_cycle(void) {
 #pragma region Runner
 
 static void run_test(const char* name, bool (*fn)(void)) {
-    ntests++;
-    LOGF("[TEST] %-40s ", name);
-    if (fn()) { npass++; LOGF("[PASS]\n"); }
-    else { LOGF("[FAIL]\n"); }
+    test_begin(name);
+    test_end(&suite, fn());
 }
 
 void test_tty(void) {
-    ntests = 0;
-    npass = 0;
-    LOGF("\n--- BEGIN TTY SUBSYSTEM TEST ---\n");
+    suite_begin(&suite, "TTY");
 
     run_test("create: not null",              t_create_nn);
     run_test("create: fields zero",           t_create_fields);
@@ -693,21 +688,6 @@ void test_tty(void) {
     run_test("switch: no crash",              t_switch);
     run_test("cycle: no crash",               t_cycle);
 
-    LOGF("--- END TTY SUBSYSTEM TEST ---\n");
-    LOGF("TTY Test Results: %d/%d\n\n", npass, ntests);
-
-    #ifdef TEST_BUILD
-    #include <kernel/drivers/console.h>
-    #include <klibc/stdio.h>
-    if (npass != ntests) {
-        console_set_color(CONSOLE_COLOR_RED, CONSOLE_COLOR_BLACK);
-        kprintf("[-] Some TTY tests failed (%d/%d passed).\n", npass, ntests);
-        console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
-    } else {
-        console_set_color(CONSOLE_COLOR_GREEN, CONSOLE_COLOR_BLACK);
-        kprintf("[+] All TTY tests passed! (%d/%d)\n", npass, ntests);
-        console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
-    }
-    #endif
+    suite_end(&suite);
 }
 #pragma endregion

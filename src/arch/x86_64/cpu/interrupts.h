@@ -96,7 +96,6 @@ typedef struct
 
 extern idt_entry_t idt[IDT_SIZE];
 
-extern uint32_t gdt64_code_segment;
 
 // Function pointer type for interrupt handlers
 typedef cpu_context_t* (*irq_handler_t)(cpu_context_t*);
@@ -105,6 +104,8 @@ void idt_init(void);
 
 void irq_register(uint8_t vector, irq_handler_t handler);
 void irq_unregister(uint8_t vector);
+void irq_user_fault(irq_handler_t handler);
+void idt_set_ist(uint8_t vector, uint8_t ist);
 
 /*
  * intr_on - Set the IF flag in RFLAGS to enable CPU interrupts

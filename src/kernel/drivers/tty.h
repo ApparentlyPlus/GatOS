@@ -18,20 +18,27 @@ struct thread; // forward declaration for wait queue
 #define TTY_BUFFER_SIZE 4096
 #define TTY_HELD_SIZE 512
 
+// Who owns an output device right now. A framebuffer TTY owns its console alone, but
+// serial TTYs all write to COM1 and so share one of these
+typedef struct tty_output {
+    spinlock_t lock;
+    struct thread* owner;
+    uint32_t depth;
+    struct thread* wait;       // threads blocked waiting to write
+    char held[TTY_HELD_SIZE];
+    uint32_t held_len;
+} tty_output_t;
+
 typedef struct tty {
     char buffer[TTY_BUFFER_SIZE];
-    volatile uint32_t head; // Write index
-    volatile uint32_t tail; // Read index
+    volatile uint32_t head;      // Write index (volatile: polled outside the lock)
+    volatile uint32_t tail;      // Read index (volatile: polled outside the lock)
 
     spinlock_t lock;
     struct thread* wait_head;  // threads blocked waiting for input
 
-    spinlock_t out_lock;
-    struct thread* out_owner;
-    uint32_t out_depth;
-    struct thread* out_wait;   // threads blocked waiting to write
-    char held[TTY_HELD_SIZE];
-    uint32_t held_len;
+    tty_output_t own_out;
+    tty_output_t* out;
 
     // Line Discipline
     ldisc_t ldisc;

@@ -75,6 +75,7 @@ void console_init(multiboot_parser_t* parser);
 
 // Instance Management
 bool con_init(console_t* con);
+void con_destroy(console_t* con);
 void con_putc(console_t* con, char character);
 void con_write_batch(console_t* con, const char* buf, size_t count);
 void con_set_color(console_t* con, uint8_t foreground, uint8_t background);
@@ -89,7 +90,6 @@ void con_header_write(console_t* con, size_t row, const char* text, uint8_t fg, 
 void con_enable_cursor(console_t* con, bool enabled);
 
 // Global Accessors
-void console_print_char(char character);
 void console_set_color(uint8_t foreground, uint8_t background);
 void console_clear(uint8_t background);
 void console_enable_cursor(bool enabled);
@@ -99,6 +99,5 @@ size_t console_get_height();
 // Crash console api (lock free, scheduler free)
 size_t con_crash_width(void);
 void con_crash_clear(uint8_t bg);
-void con_crash_shadow_init(void);
 void con_crash_puts(const char* s);
 void con_crash_printf(const char* fmt, ...);

@@ -66,12 +66,13 @@ bool kernel_bootstrap(void* mb_info, multiboot_parser_t* mb, bool verbose, const
 
 	QEMU_LOG("Multiboot structure parsed and copied to higher half", TOTAL_DBG);
 
+	// The multiboot struct lives in the higher half now, so the identity map can go
+	unmap_identity();
+	QEMU_LOG("Removed the identity map, only the higher half remains", TOTAL_DBG);
+
 	// Early paging and physmap
 	reserve_tables(mb);
 	QEMU_LOG("Reserved the required space for page tables in the kernel region", TOTAL_DBG);
-
-	cleanup_kpt(0x0, get_kend(false));
-	QEMU_LOG("Unmapped all memory besides the higher half kernel range", TOTAL_DBG);
 
 	// With this I cast memory management
 	build_physmap();
@@ -83,14 +84,15 @@ bool kernel_bootstrap(void* mb_info, multiboot_parser_t* mb, bool verbose, const
 	QEMU_LOG("Initialized console", TOTAL_DBG);
 
 	// Initialize PMM before VMM since VMM needs to allocate memory for page tables
-	pmm_status_t pmm_status = pmm_init(0x0, PHYSMAP_V2P(get_physmap_end()), PAGE_SIZE);
+	// Its page map goes right past the kernel, the same trick as the physmap tables
+	pmm_status_t pmm_status = pmm_init(kmem->ram, kend_grow(mb, pmm_map_size(kmem->ram)));
 	if(pmm_status != PMM_OK) {
 		QEMU_LOG("[PMM] Failed to initialize physical memory manager", TOTAL_DBG);
 		return false;
 	}
 
-	// Exclude kernel image from the allocator before populating freelists
-	pmm_exclude_range(get_kstart(false), get_kend(false));
+	// Nothing below KEND is ever handed out
+	pmm_exclude_range(0, kmem->kend);
 
 	// Populate freelists from firmware reported available regions
 	for (size_t i = 0; i < mb->memory_map_length; i++) {
@@ -106,9 +108,6 @@ bool kernel_bootstrap(void* mb_info, multiboot_parser_t* mb, bool verbose, const
 	}
 	QEMU_LOG("Initialized physical memory manager", TOTAL_DBG);
 
-	// The crash console can only size its scroll shadow now that the PMM is on
-	con_crash_shadow_init();
-
 	// Initialize slab allocator before VMM since VMM needs to allocate memory for its structures
 	slab_status_t slab_status = slab_init();
 	if(slab_status != SLAB_OK) {
@@ -118,7 +117,7 @@ bool kernel_bootstrap(void* mb_info, multiboot_parser_t* mb, bool verbose, const
 	QEMU_LOG("Initialized slab allocator", TOTAL_DBG);
 
 	// Initialize VMM and switch to it
-	vmm_status_t vmm_status = vmm_kernel_init(get_kend(true) + PAGE_SIZE, 0xFFFFFFFFFFFFF000);
+	vmm_status_t vmm_status = vmm_kernel_init(KERNEL_P2V(kmem->kend) + PAGE_SIZE, 0xFFFFFFFFFFFFF000);
 	if(vmm_status != VMM_OK) {
 		QEMU_LOG("[VMM] Failed to initialize virtual memory manager", TOTAL_DBG);
 		return false;

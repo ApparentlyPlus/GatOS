@@ -11,7 +11,6 @@
 
 typedef struct {
     volatile int locked;    // Atomic lock variable (0 = free, 1 = taken)
-    uint32_t cpu_id;        // ID of the CPU holding the lock (for debugging/SMP)
     const char* name;       // Name of the lock (for debugging)
 } spinlock_t;
 

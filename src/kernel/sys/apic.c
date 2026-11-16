@@ -137,17 +137,6 @@ void lapic_init(void) {
 }
 
 /*
- * lapic_send_ipi - Send an Inter-Processor Interrupt to another core
- */
-void lapic_send_ipi(uint32_t dest_id, uint8_t vector) {
-    // spin until delivery bit clears before writing ICR
-    while (lapic_read(LAPIC_ICR_LOW) & (1 << 12));
-
-    lapic_write(LAPIC_ICR_HIGH, dest_id << 24);
-    lapic_write(LAPIC_ICR_LOW, vector);
-}
-
-/*
  * lapic_set_tpm - Sets the calibrated tick rate
  */
 void lapic_set_tpm(uint64_t tpm) {
@@ -241,14 +230,6 @@ void ioapic_redirect(uint8_t irq, uint8_t vector, uint32_t dest_core, uint16_t f
     entry |= (1 << 16);
     
     ioapic_set_entry(irq, entry);
-}
-
-/*
- * ioapic_mask - Mask an I/O APIC interrupt
- */
-void ioapic_mask(uint8_t irq) {
-    uint32_t low = ioapic_read(IOAPIC_REDTBL + 2 * irq);
-    ioapic_write(IOAPIC_REDTBL + 2 * irq, low | (1 << 16));
 }
 
 /*

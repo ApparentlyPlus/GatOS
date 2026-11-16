@@ -195,7 +195,7 @@ void cpu_init(void)
 static bool mwait_ok = false;
 static uint32_t mwait_cstate_hint = 0;
 static uint32_t mwait_ecx_ext = 0;
-static volatile uint64_t idle_dummy = 0;
+static void* volatile idle_dummy = 0;
 
 /*
  * cpu_idle_init - Detect MONITOR/MWAIT and pick the deepest C-state hint
@@ -225,36 +225,24 @@ void cpu_idle_init(void) {
 }
 
 /*
- * cpu_mwait_available - Whether MONITOR/MWAIT idle is usable
+ * cpu_idle_on - Deepest available C-state until an interrupt, or until something writes *watch.
+ * Returns right away if *watch is already set. The HLT fallback only wakes on interrupts
  */
-bool cpu_mwait_available(void) {
-    return mwait_ok;
-}
-
-/*
- * cpu_mwait_hint - Deepest C-state hint for MWAIT EAX
- */
-uint32_t cpu_mwait_hint(void) {
-    return mwait_cstate_hint;
-}
-
-/*
- * cpu_mwait_ext - MWAIT ECX extensions (bit 0 = interrupt break event)
- */
-uint32_t cpu_mwait_ext(void) {
-    return mwait_ecx_ext;
-}
-
-/*
- * cpu_idle - Deepest available C-state, HLT fallback. Monitors a dummy address so only an interrupt wakes the core
- */
-void cpu_idle(void) {
+void cpu_idle_on(void* volatile* watch) {
     if (mwait_ok) {
-        __asm__ volatile("monitor" :: "a"(&idle_dummy), "c"(0), "d"(0) : "memory");
+        __asm__ volatile("monitor" :: "a"(watch), "c"(0), "d"(0) : "memory");
+        if (*watch) return;
         __asm__ volatile("mwait" :: "a"(mwait_cstate_hint), "c"(mwait_ecx_ext) : "memory");
     } else {
         __asm__ volatile("hlt");
     }
+}
+
+/*
+ * cpu_idle - Idle until the next interrupt (watches an address nothing ever writes)
+ */
+void cpu_idle(void) {
+    cpu_idle_on(&idle_dummy);
 }
 
 const cpu_info_t* cpu_get_info(void)

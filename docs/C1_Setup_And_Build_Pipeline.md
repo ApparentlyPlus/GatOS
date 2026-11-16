@@ -162,7 +162,7 @@ Let’s examine GatOS’s `linker.ld`, which implements a higher-half x86\_64 ke
 ENTRY(start)
 
 KERNEL_VIRTUAL_BASE = 0xFFFFFFFF80000000;
-KPHYS_START = 0x10000;
+KPHYS_START = 0x100000;
 
 SECTIONS
 {
@@ -176,7 +176,7 @@ SECTIONS
 
     .text : AT(ADDR(.text) - KERNEL_VIRTUAL_BASE) ALIGN(4K)
     {
-        *(.text)
+        *(.text .text.*)
     }
 
     .rodata : AT(ADDR(.rodata) - KERNEL_VIRTUAL_BASE) ALIGN(4K)
@@ -201,25 +201,28 @@ SECTIONS
         KERNEL_STACK_TOP = .;
     }
 
-    . = . + 0x1000; /* Skip a 4KB block for safety */
+    . = ALIGN(4K);
     
     KPHYS_END = . - KERNEL_VIRTUAL_BASE;
     KVIRT_END = .;
 }
 ```
 
+>[!NOTE]
+> This isn't the full [`linker.ld`](/targets/x86_64/linker.ld). I cut out the `.user_*` sections, which link userspace code at a lower half address. We have no userspace yet, so they would only confuse you right now. We'll get back to them when we set up userspace.
+
 ### Key Concepts and Sections
 
 #### 1. **Higher-Half Kernel: Virtual vs Physical**
 
-* The kernel is **linked to run at a high virtual address** (`KERNEL_VIRTUAL_BASE = 0xFFFFFFFF80000000`), but the bootloader loads it at a lower **physical address** (`KPHYS_START = 0x10000`).
+* The kernel is **linked to run at a high virtual address** (`KERNEL_VIRTUAL_BASE = 0xFFFFFFFF80000000`), but the bootloader loads it at a lower **physical address** (`KPHYS_START = 0x100000`, aka 1 MiB).
 * The `AT()` directive tells the linker:
 
   > “Place this section in the binary at this **physical load address**, but reference it in the code using this **virtual address**.”
 * Example (`.boot` section):
 
-  * **Virtual Address (VMA):** `0xFFFFFFFF80010000`
-  * **Physical Load Address (LMA):** `0x10000`
+  * **Virtual Address (VMA):** `0xFFFFFFFF80100000`
+  * **Physical Load Address (LMA):** `0x100000`
 
 This separation allows the kernel to start executing before paging is enabled (at the physical address) and seamlessly continue at the virtual address once paging is active.
 
@@ -228,7 +231,7 @@ This separation allows the kernel to start executing before paging is enabled (a
 #### 2. **The `.boot` Section and `.multiboot_header`**
 
 * `.multiboot_header` is a **symbol defined in assembly** that the Multiboot-compliant bootloader looks for (at a specific physical address) to verify and load the kernel.
-* By placing it in `.boot` and marking it with `KEEP()`, the linker ensures the header is **not discarded** during linking, and that it exists right after `0x10000` physical.
+* By placing it in `.boot` and marking it with `KEEP()`, the linker ensures the header is **not discarded** during linking, and that it exists right after `0x100000` physical.
 
 ---
 
@@ -243,7 +246,7 @@ This separation allows the kernel to start executing before paging is enabled (a
 | `.stack`  | Reserved memory for the kernel stack. Provides symbols `KERNEL_STACK_BOTTOM` and `KERNEL_STACK_TOP` for assembly code to initialize the stack pointer. |
 
 * All sections are aligned to **4 KiB** pages for consistency with paging.
-* Skipped memory (`. = . + 0x1000`) ensures there’s a safe block for temporary use or metadata.
+* `. = ALIGN(4K)` at the end pads the image up to the next 4 KiB boundary, so `KPHYS_END` and `KVIRT_END` are always page aligned. You want this. Pages are 4 KiB (we'll see why in the next chapter), and a lot of the memory code we write later assumes that whatever it's handed starts and ends on a page boundary.
 
 ---
 
@@ -258,7 +261,7 @@ This separation allows the kernel to start executing before paging is enabled (a
 
 1. **GRUB’s perspective:**
 
-   * Loads the kernel at `0x10000` (physical memory).
+   * Loads the kernel at `0x100000` (physical memory).
    * Finds `.multiboot_header` to verify that it's a multiboot compliant kernel.
    * The multiboot header must be located within the first 8192 bytes of the OS image.
    * Jumps to `start` (physical address), in 32-bit protected mode.
@@ -282,11 +285,15 @@ src/
 │       └── memory/        # Paging structures and early memory setup (paging.c/h, layout.h)
 ├── kernel/
 │   ├── kmain.c            # The kernel entry point
+│   ├── bootstrap.c        # The staged init sequence kmain calls into
+│   ├── debug.c            # Serial logging helpers (QEMU_LOG, LOGF)
+│   ├── misc.c             # Odds and ends (the boot banner, etc.)
+│   ├── umain.c, uproc.c   # The userspace demo programs
 │   ├── drivers/           # Device drivers (console, serial, tty, keyboard, font, dashboard, pci, xhci…)
 │   ├── memory/            # Dynamic memory management (pmm, slab, vmm, heap)
 │   └── sys/               # Core subsystems (panic, acpi, apic, scheduler, process, syscall, timers…)
-├── klibc/                 # Kernel-side standard library (avl, stdio, string, math)
-├── ulibc/                 # Userspace standard library (linked into Ring 3 programs)
+├── klibc/                 # Kernel-side standard library (avl, stdio, string)
+├── ulibc/                 # Userspace standard library (stdio, stdlib, string, math, linked into Ring 3 programs)
 └── tests/                 # Kernel test suite
 ```
 
@@ -336,7 +343,7 @@ The final validation step checks that the expected binaries are present. That in
 
 Normally, OS dev tutorials tell you to manually build or install a cross-compiler, GRUB utilities, ISO tools, and QEMU. That works, but it creates a lot of machine-specific drift. `setup.py` avoids that by pulling in a known-good, prepackaged toolchain so the build behaves the same way across supported hosts.
 
-For more information, check out the project's [README](/README.md#getting-started) file.
+For more information, check out the project's [README](/README.md#running-the-kernel-by-itself) file.
 
 ### How to Run It
 
@@ -349,7 +356,7 @@ If the toolchain directory already exists and looks valid, the script asks wheth
 >[!NOTE]
 > This script installs the portable toolchain into the repository itself, under `toolchain/x86_64-linux`, `toolchain/x86_64-macos`, or `toolchain/x86_64-win`, depending on the host OS. 
 >
-> `run.py` then uses those local binaries directly instead of relying on globally installed host tools. This means that if you wish to delete the toolchain, you can just delete the `toolchain` folder. EVerything is self contained!
+> `run.py` then uses those local binaries directly instead of relying on globally installed host tools. This means that if you wish to delete the toolchain, you can just delete the `toolchain` folder. Everything is self contained!
 
 ## Build, Package, and Run
 
@@ -387,7 +394,7 @@ That means it will:
 
 | Command | Description |
 | --- | --- |
-| `python3 run.py` | Default full cycle: clean, build, then run in QEMU. |
+| `python3 run.py all` | Full cycle: clean, build, then run in QEMU. This is the default, so plain `python3 run.py` does the same thing. |
 | `python3 run.py build` | Clean and build the ISO, but do not launch QEMU. |
 | `python3 run.py clean` | Remove build artifacts, generated ISO output, temporary boot files, and `debug.log`. |
 | `python3 run.py help` | Print the built-in help menu. |
@@ -461,29 +468,28 @@ For each source file, the object output mirrors the source tree inside `build/`.
 
 Kernel and userspace code are treated slightly differently:
 
-* kernel code gets Link Time Optimizations (`-flto`) plus explicit floating point restrictions such as `-mno-sse`, `-mno-sse2`, `-mno-mmx`, and `-mno-80387`,
+* kernel code gets Link Time Optimizations (`-flto`), except on macOS, where LTO is skipped,
+* every kernel file also gets explicit floating point restrictions: `-mno-sse`, `-mno-sse2`, `-mno-mmx`, and `-mno-80387`, except the few listed in `KERNEL_FPU_ALLOWED` inside `run.py`,
 * userspace code gets `-ffast-math`, and
 * assembly is compiled through GCC with preprocessor support enabled.
 
-That distinction matters because the kernel should not casually rely on FPU or SIMD state before the OS has complete control over saving and restoring it.
+Why would a kernel ban floats? Here is the short version. Every now and then, the CPU drops whatever it's doing, runs some other piece of kernel code, and then comes back as if nothing happened. That's called an **interrupt** (Chapter 6 covers them properly).
 
->[!IMPORTANT]
->We will talk about FPU and userspace later on in the documents. For now, you dont need to know any of this.
+Now picture a program that's halfway through some floating point math when this happens. The CPU keeps that math in its own floating point registers. If the kernel code that runs in between uses those same registers, the program comes back to find its numbers changed, and has no idea why. And you don't even have to write a float for this to happen: at higher optimization levels, GCC happily borrows those registers to copy or clear memory faster. So kernel code simply isn't allowed to emit any floating point instructions.
+
+The one file that gets a pass is `klibc/stdio.c`, home of `printf`. Printing a float takes float math, so it keeps the FPU. It does get `-fno-tree-vectorize` though, which stops GCC from borrowing those registers on its own. That way, the only float code it ever runs is the code that formats an actual float.
 
 ### 4. Link and Strip the Kernel
 
-After compilation, all object files are linked into `dist/x86_64/kernel.bin` using the cross GCC driver with linker options forwarded through `-Wl,...`.
+After compilation, all object files are linked into `dist/x86_64/kernel.bin` using the cross GCC driver with linker options forwarded through `-Wl,...`. macOS, of course, has special needs. No LTO there, so `run.py` just calls `x86_64-elf-ld` directly with the same options.
 
 The binary is then stripped to remove unnecessary symbol data from the final boot image.
 
 ### 5. Build the Boot Media
 
-The packaging stage has two parts:
+This one is short. `run.py` copies `kernel.bin` into `targets/x86_64/iso/boot/`, right next to the GRUB config, and hands the whole folder to `grub-mkrescue`. Out comes a bootable ISO under `dist/x86_64/` (the actual ISO building is done by `xorriso`, which is why it's part of the toolchain).
 
-1. `grub-mkstandalone` creates `BOOTX64.EFI` inside `targets/x86_64/iso/EFI/BOOT/`.
-2. `grub-mkrescue` turns the populated ISO tree into a bootable image under `dist/x86_64/`.
-
-The ISO filename is generated from the kernel version (eg. "GatOS-v2.0.0.iso"). Test builds also embed `Test-Build` in the filename (eg. "GatOS-v2.0.0-Test-Build.iso").
+The ISO filename is generated from the kernel version (eg. "GatOS-v2.3.0.iso"). Test builds also embed `Test-Build` in the filename (eg. "GatOS-Test-Build-v2.3.0.iso").
 
 ### 6. Launch QEMU
 
@@ -530,18 +536,6 @@ Important parts here are:
 * **`--gc-sections`** to discard unreachable code and data,
 * **`--no-relax`** to avoid linker relaxations that could disturb the kernel’s carefully controlled layout, and
 * **`-T targets/x86_64/linker.ld`** to force the custom linker script we analyzed earlier in this chapter.
-
-## Summary of the Current Build Flow
-
-The modern GatOS workflow is now:
-
-1. **Provision toolchain:** `python3 setup.py` downloads and validates the host-specific portable toolchain into `toolchain/`.
-2. **Verify environment:** `python3 run.py` checks that those local binaries exist and are usable.
-3. **Compile:** all `*.c` and `*.S` files under `src/` are compiled in parallel into `build/`.
-4. **Link:** the objects are linked into `dist/x86_64/kernel.bin` with the linker script.
-5. **Stage boot assets:** GRUB files and the kernel are copied into the ISO directory tree under `targets/x86_64/iso/`.
-6. **Create ISO:** GRUB tooling produces a bootable image in `dist/x86_64/`.
-7. **Run:** if requested, QEMU boots the newest ISO and mirrors serial output to `debug.log`.
 
 >[!IMPORTANT]
 >You don't really have to know any of this. This chapter simply describes how GatOS's build system works internally. To run the kernel, all you need to do is call `setup.py` and `run.py`. That's all!

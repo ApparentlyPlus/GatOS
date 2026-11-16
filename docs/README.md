@@ -1,6 +1,6 @@
 ## Documentation
 
-**GatOS** is the low-level kernel and systems API backbone developed as the foundation for the **Pawstack framework**, a larger project detailed in the main [README](/README.md). Its primary aim is to be a stable, efficient, and (in the futrure) secure kernel designed for use in embedded systems, developed as part of my undergraduate thesis at the [University of Macedonia](https://www.uom.gr/en/dai).
+**GatOS** is the low-level kernel and systems API backbone developed as the foundation for the **Pawstack framework**, a larger project detailed in the main [README](/README.md). Its primary aim is to be a stable, efficient, and (in the future) secure kernel designed for use in embedded systems, developed as part of my undergraduate thesis at the [University of Macedonia](https://www.uom.gr/en/dai).
 
 While GatOS itself is engineered with the goal to be production-ready some day, I recognize the significant lack of accessible, high-quality material for understanding advanced kernel development and systems programming. To help address this, I am documenting my progress and the core concepts behind GatOS in a series of concise writeups.
 

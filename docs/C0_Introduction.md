@@ -83,7 +83,7 @@ When your machine powers on, the CPU doesn’t jump straight into your kernel. I
 
 By the time your kernel starts running, a lot of heavy lifting has already been done for you. That’s why, in the grand scheme of things, kernels live “above” the raw startup details. Your job at that point is to take control of the hardware in a structured way: initialize devices, manage memory, schedule tasks, and provide services that higher-level code can rely on.
 
-So while kernel development feels like you’re scraping against the metal, the truth is you’re already standing on a carefully prepared launchpad. The real challenge is deciding what your kernel should do once you’re in charge, and how to avoid completely corrupting evereything in the process.
+So while kernel development feels like you’re scraping against the metal, the truth is you’re already standing on a carefully prepared launchpad. The real challenge is deciding what your kernel should do once you’re in charge, and how to avoid completely corrupting everything in the process.
 
 **Because make no mistake** - OS Development is very delicate. One wrong move and everything falls apart.
 

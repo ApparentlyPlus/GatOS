@@ -35,7 +35,7 @@ The second category is **hardware interrupts**. These are signals sent to the CP
 
 In both cases, the mechanism is the same: the CPU pauses whatever it was doing and transfers control to a function the operating system has registered in advance. The critical word is *pauses*. An interrupt can fire between any two instructions, at any point in the call stack, completely invisible to the code that was running. The handler executes, and then, if everything goes right, execution resumes exactly where it left off, as if nothing happened.
 
-This is a remarkably powerful mechanism. It is also the source of an entire class of subtle bugs, which is why spinlocks are the first topic of this chapter.
+This is a remarkably powerful mechanism. It is also the source of an entire class of subtle bugs, which is why spinlocks are the first thing we build in this chapter, right after a bit more interrupt theory.
 
 ## Interrupt Vectors and the IDT
 
@@ -133,21 +133,7 @@ Keeping interrupts enabled during a trap handler is beneficial because it reduce
 
 ### Task Gate
 
-A Task Gate is a legacy mechanism tied to hardware task switching in x86.
-
-Instead of pointing directly to a function, a Task Gate points to a *Task State Segment (TSS)*. The TSS is a special CPU-managed structure that stores the entire execution context of a task (registers, stack pointers, segment state, etc).
-
-When a Task Gate is triggered, the CPU performs a **hardware task switch**, which means:
-
-* it saves the full state of the current task into its TSS
-* it loads a completely new task state from another TSS
-* execution resumes in a totally different context
-
-This is very different from a normal interrupt or function call, because the CPU itself is doing the context switching automatically in hardware.
-
-However, modern operating systems do *not* use this mechanism for scheduling anymore. The reason is simple: hardware task switching is rigid, slow, and less flexible than doing it in software. Instead, modern kernels perform context switching manually by saving registers and switching stacks in controlled code.
-
-The only place Task Gates still occasionally appear is in very specific failure paths (like Double Fault handling), where the system wants a guaranteed clean execution context.
+A Task Gate is a leftover from 32-bit x86, where the CPU could switch between whole tasks in hardware. In long mode, task gates simply don't exist anymore. Modern kernels switch between tasks in software anyway, by saving registers and switching stacks themselves, so nobody misses them.
 
 ### Summary
 
@@ -155,13 +141,11 @@ The only place Task Gates still occasionally appear is in very specific failure 
 | -------------- | -------------------------------------------------------- | ------------------------------- | ------------------------------------- |
 | Interrupt Gate | Jumps into kernel and blocks further maskable interrupts | Clears IF (disables interrupts) | Hardware interrupts (timer, keyboard) |
 | Trap Gate      | Jumps into kernel but keeps interrupts enabled           | Leaves IF unchanged             | Exceptions, syscalls                  |
-| Task Gate      | Triggers full hardware task switch via TSS               | N/A (full context switch)       | Legacy / special fatal cases          |
 
 If you strip everything down, the mental model is:
 
 * **Interrupt Gate** → “stop everything else while I handle this carefully”
 * **Trap Gate** → “handle this, but keep the system responsive”
-* **Task Gate** → “abandon this execution entirely and switch to another saved CPU state”
 
 ## Enabling and Disabling Interrupts
 
@@ -359,14 +343,13 @@ GatOS's kernel spinlocks live in [`kernel/sys/spinlock.h`](/src/kernel/sys/spinl
 ```c
 typedef struct {
     volatile int locked;
-    uint32_t cpu_id;
     const char* name;
 } spinlock_t;
 ```
 
 `volatile int locked` is the lock variable itself. The `volatile` qualifier tells the compiler that this value may change at any moment from outside the current execution context (specifically, from an interrupt handler) and therefore every read must go directly to memory rather than using a value the compiler cached in a register. Without `volatile`, an optimizing compiler might read `locked` once, decide it will not change, store it in a register, and loop on the register value forever, never noticing that the real value in RAM was updated by another actor.
 
-`cpu_id` and `name` are debug aids. When you encounter a deadlock and need to know which lock is stuck and which CPU is holding it, these fields save a significant amount of time.
+`name` is a debug aid. When you encounter a deadlock and need to know which lock is stuck, it saves a significant amount of time.
 
 ### The Atomicity Problem
 
@@ -382,15 +365,15 @@ Imagine two CPUs running this simultaneously. Both read `locked` and see zero. B
 
 The problem is that checking and setting are two separate operations. Between them, another actor can intervene. We need a single operation that both reads the old value and writes a new value **atomically**, as one indivisible unit that the hardware guarantees cannot be interleaved with anything else.
 
-`__atomic_test_and_set` provides exactly this:
+`__atomic_exchange_n` provides exactly this:
 
 ```c
-while (__atomic_test_and_set(&lock->locked, __ATOMIC_ACQUIRE)) {
+while (__atomic_exchange_n(&lock->locked, 1, __ATOMIC_ACQUIRE)) {
     __asm__ volatile("pause");
 }
 ```
 
-`__atomic_test_and_set` writes `1` into the memory location and returns the *old* value, all as one atomic hardware instruction. If the old value was `0` (the lock was free) the operation returns false and the loop exits: we have claimed the lock. If the old value was `1` (already taken) it returns true and we keep spinning.
+`__atomic_exchange_n` writes `1` into the memory location and returns the *old* value, all as one atomic hardware instruction (`xchg`, if you're curious). If the old value was `0` (the lock was free) the loop exits: we have claimed the lock. If the old value was `1` (already taken) we keep spinning.
 
 `__ATOMIC_ACQUIRE` is a memory ordering constraint. It instructs the compiler and the CPU not to reorder memory operations that happen *after* this instruction to before it. Without acquire ordering, an optimizing compiler might speculatively move code from inside the critical section to before the lock acquisition, which would defeat the entire purpose. Acquire ordering ensures that the critical section stays fenced on its entry side.
 
@@ -400,8 +383,7 @@ The `pause` instruction is a performance hint to the CPU. During a spin-wait loo
 
 ```c
 void spinlock_release(spinlock_t* lock, bool interrupts_enabled) {
-    lock->cpu_id = 0xFFFFFFFF;
-    __atomic_clear(&lock->locked, __ATOMIC_RELEASE);
+    __atomic_store_n(&lock->locked, 0, __ATOMIC_RELEASE);
     ...
 }
 ```
@@ -416,11 +398,10 @@ There is a second problem, more subtle than atomicity, and it is the reason `spi
 bool spinlock_acquire(spinlock_t* lock) {
     bool was_enabled = intr_save();
 
-    while (__atomic_test_and_set(&lock->locked, __ATOMIC_ACQUIRE)) {
+    while (__atomic_exchange_n(&lock->locked, 1, __ATOMIC_ACQUIRE)) {
         __asm__ volatile("pause");
     }
 
-    lock->cpu_id = lapic_get_id();
     return was_enabled;
 }
 ```
@@ -469,12 +450,11 @@ If interrupts were already disabled when we acquired the lock (because we were a
 bool spinlock_try_acquire(spinlock_t* lock, bool* was_enabled) {
     *was_enabled = intr_save();
 
-    if (__atomic_test_and_set(&lock->locked, __ATOMIC_ACQUIRE)) {
+    if (__atomic_exchange_n(&lock->locked, 1, __ATOMIC_ACQUIRE)) {
         intr_restore(*was_enabled);
         return false;
     }
 
-    lock->cpu_id = lapic_get_id();
     return true;
 }
 ```
@@ -554,11 +534,9 @@ The standard solution is to create 256 individual **stubs** in assembly, one per
 
 ```asm
 .macro GENERATE_INTERRUPT_HANDLER num
-    .align 16
-    .global interrupt_handler_\num
     interrupt_handler_\num:
     
-    .if \num == 8 || \num == 10 || \num == 11 || \num == 12 || \num == 13 || \num == 14 || \num == 17
+    .if \num == 8 || (\num >= 10 && \num <= 14) || \num == 17 || \num == 21 || \num == 29 || \num == 30
         push \num
     .else
         push 0
@@ -577,26 +555,30 @@ The standard solution is to create 256 individual **stubs** in assembly, one per
 .endr
 ```
 
-`.rept 256` repeats the macro 256 times, with `i` counting from 0 to 255. The result is 256 individually labeled functions. 
+`.rept 256` repeats the macro 256 times, with `i` counting from 0 to 255. The result is 256 individually labeled functions, `interrupt_handler_0` through `interrupt_handler_255`, generated entirely at compile time from a handful of macro lines.
 
-`interrupt_handler_0` through `interrupt_handler_255`, generated entirely at compile time from a handful of macro lines.
+Now `idt_init` needs the address of every one of them. Typing out 256 names by hand? No thanks. So we let the assembler do the boring part again, with a second `.rept` that writes a table of all 256 addresses:
 
-Every stub is aligned to exactly 16 bytes with `.align 16`. This is not just for correctness. We are gonna do a clever trick here. If we know the address of `interrupt_handler_0` and add 16 bytes, we will land on `interrupt_handler_1`. In the same sense, we can generalize:
+```asm
+.macro STUB_ADDRESS num
+    .quad interrupt_handler_\num
+.endm
 
+.section .rodata
+.align 8
+.global isr_stubs
+isr_stubs:
+.set i, 0
+.rept 256
+    STUB_ADDRESS %i
+    .set i, i+1
+.endr
 ```
-interrupt_handler_i = interrupt_handler_0 + (i*16)
-```
 
-Therefore, `idt_init` can calculate the address of stub `i` arithmetically, without needing 256 separate global symbols:
-
-```c
-void* handler = (void*)((uint64_t)interrupt_handler_0 + (i * 16));
-```
-
-Address of stub 0, plus `i` times 16, gives the address of stub `i`. Clean, and it saves the linker from resolving 256 individual symbol references.
+From C, that's just an array, `extern uint64_t isr_stubs[IDT_SIZE];`, and `isr_stubs[i]` is the address of stub `i`. Clean, and nobody has to care how big each stub turned out to be.
 
 >[!IMPORTANT]
-> The `.if` inside the macro handles a hardware quirk. For certain exception vectors (8, 10, 11, 12, 13, 14, and 17 ) the CPU automatically pushes a 64-bit **error code** onto the stack before jumping to the handler, providing additional context about what caused the exception. For every other vector, it does not. This asymmetry means the stack layout differs between vectors with error codes and vectors without them.
+> The `.if` inside the macro handles a hardware quirk. For certain exception vectors (8, 10 through 14, 17, 21, 29 and 30) the CPU automatically pushes a 64-bit **error code** onto the stack before jumping to the handler, providing additional context about what caused the exception. For every other vector, it does not. This asymmetry means the stack layout differs between vectors with error codes and vectors without them.
 >
 >The fix is to push a dummy error code of `0` for every vector that does not have a real one. After either path, the stack looks identical: vector number at the top, error code (real or zero) just below it. The shared handler can always find both at the same offsets.
 
@@ -706,7 +688,7 @@ At the lowest level, we define the Interrupt Descriptor Table (IDT) and a parall
 ```c
 idt_entry_t idt[IDT_SIZE] = {0};
 static irq_handler_t irq_handlers[IDT_SIZE] = {0};
-extern char interrupt_handler_0[];
+extern uint64_t isr_stubs[IDT_SIZE];
 ```
 
 The `idt` array is the hardware-facing structure used directly by the CPU to enter the kernel on interrupts and exceptions. Each entry tells the CPU *how to transition into kernel mode* for a given interrupt vector. We will initialize it in the next section.
@@ -751,17 +733,11 @@ void idt_init(void)
 {
     disable_pic();
 
+    // No IST stacks yet, they come with the TSS (gdt_init calls idt_set_ist)
     for (size_t i = 0; i < IDT_SIZE; i++)
     {
-        void* handler = (void*)((uint64_t)interrupt_handler_0 + (i * 16));
-        uint8_t ist = 0;
-        uint8_t dpl = DPL_RING_0;
-
-        if      (i == INT_DOUBLE_FAULT)                 { ist = 1; }
-        else if (i == INT_PAGE_FAULT)                   { ist = 2; }
-        else if (i == INT_BREAKPOINT || i == INT_DEBUG){ dpl = DPL_RING_3; }
-
-        set_idt_entry(i, handler, dpl, ist);
+        uint8_t dpl = (i == INT_BREAKPOINT || i == INT_DEBUG) ? DPL_RING_3 : DPL_RING_0;
+        set_idt_entry(i, (void*)isr_stubs[i], dpl, 0);
     }
 
     load_idt((void*)idt);
@@ -770,19 +746,15 @@ void idt_init(void)
 
 The first important step is `disable_pic()`. This is not optional. The legacy PIC can still deliver hardware interrupts during early boot (timer ticks, keyboard input, etc). If that happens before our handlers are ready, we triple fault. Disabling the PIC ensures that, during early initialization, only CPU-generated exceptions can occur.
 
-The loop itself populates all 256 IDT entries using the stub arithmetic described earlier. Each vector jumps to a slightly different stub, but they all funnel into a shared handler (the Interrupt Dispatcher).
+The loop itself populates all 256 IDT entries straight from `isr_stubs`. Each vector jumps to a slightly different stub, but they all funnel into a shared handler (the Interrupt Dispatcher).
 
-Two special cases are configured:
-
-* **Double fault** gets a dedicated IST stack
-* **Page fault** also gets its own IST stack (to maximize reliability)
-* **Debug/breakpoint exceptions** are allowed from ring 3 for userspace debugging
+There's one special case: **debug/breakpoint exceptions** are allowed from ring 3, for userspace debugging. And notice that last argument, the `0`. Every single entry gets IST `0`, no matter what. That one deserves its own section.
 
 Finally, `load_idt` activates the new table.
 
 ## Stack Safety: The IST
 
-The `ist` field in an IDT entry refers to the **Interrupt Stack Table**, a hardware feature that forces the CPU to switch to a known-good stack before executing the handler.
+The `ist` field in an IDT entry refers to the **Interrupt Stack Table**, a hardware feature that forces the CPU to switch to a known-good stack before executing the handler. `0` means "don't switch, use the stack you're on".
 
 This exists for one critical reason: sometimes the current stack is not safe to use.
 
@@ -794,42 +766,21 @@ The most important case is the **double fault** (vector 8). A double fault occur
 
 Now consider what happens if the current stack is also invalid. The CPU still needs to push an interrupt frame to begin handling the double fault. If that push itself fails, the system enters a **triple fault**, which immediately resets the machine with no diagnostics.
 
-To prevent this, we assign the double fault handler a dedicated IST stack:
+So the double fault handler (and the page fault handler, for good measure) should get a dedicated stack of their own. Then why does `idt_init` hand out `0` everywhere?
+
+Because the IST stacks don't live in the IDT. The IDT entry only holds an *index* (1 to 7). The actual stack addresses live in a different structure, the **TSS** (Task State Segment), which we haven't set up yet. We'll build it in a later chapter, together with the GDT's move to C.
+
+Point an IDT entry at an IST stack before any TSS exists, and the CPU can't find that stack when the exception fires. That's a fault while delivering a fault, which means a double fault, which needs its IST stack too, which also doesn't exist. Triple fault, and the machine resets. And `cli` won't save you here, because exceptions ignore the interrupt flag completely. A page fault is a page fault.
+
+So for now, every exception runs on whatever stack the kernel was on. That's good enough for a panic screen, and it's a lot better than a reset. Once the TSS and its stacks exist, `gdt_init` flips the two IST indices on:
 
 ```c
-if (i == INT_DOUBLE_FAULT) {
-    ist = 1;
-}
-else if (i == INT_PAGE_FAULT) {
-    ist = 2;
-}
+// The IST stacks only exist now, so this is the earliest the IDT may point at them
+if (tss.ist[0]) idt_set_ist(INT_DOUBLE_FAULT, 1);
+if (tss.ist[1]) idt_set_ist(INT_PAGE_FAULT, 2);
 ```
 
-This guarantees that even if the original kernel stack is corrupted or unmapped, the CPU has a clean, pre-allocated stack to use for recovery.
-
-> [!CAUTION]
-> Be extremely careful here, because the code above is deceptive.
->
-> We are assigning IST values (1 and 2) in the IDT entries, which *implies* that the CPU will switch to dedicated, pre-allocated safe stacks for those exceptions. 
->
->However, the IST mechanism is a feature inside the 64-bit TSS (Task State Segment), NOT the IDT. 
->
-> At this point in the boot process, we have **not even touched the TSS**, and we have **not allocated or configured any IST stacks** it is supposed to reference.
->
-> So what we are effectively doing here is cheating. The IDT is being set up as if the system is complete, but the supporting runtime state (TSS + IST stack memory) is not yet in place.
->
-> This means interrupts are effectively unsafe. We must **not enable global interrupts (`sti`) yet**, because any exception that tries to use IST would currently point into uninitialized memory.
->
-> The correct sequence is:
->
-> 1. Prepare the IDT as if everything else is set up
-> 2. Initialize our allocators
-> 3. Transfer GDT control from assembly into C
-> 4. Properly define and load the TSS
-> 5. Allocate and assign valid IST stacks
-> 6. **Only then enable interrupts**
->
-> We are currently in step 1. Until step 6, this configuration is purely preparatory. Structurally correct, but not yet operational. If interrupts were enabled now, any IST-triggering exception (like a double fault) would lead to an immediate and unrecoverable crash.
+`idt_set_ist` just rewrites the `ist` field of one IDT entry. Nothing fancy.
 
 ## The Interrupt Dispatcher
 
@@ -845,22 +796,28 @@ cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
     }
 
     if (irq_handlers[vec] != NULL) {
-        context = irq_handlers[vec](context);
+        cpu_context_t* next = irq_handlers[vec](context);
 
-        if (vec >= INT_FIRST_INTERRUPT) {
-            lapic_eoi();
+        if (next) {
+            if (vec >= INT_FIRST_INTERRUPT) {
+                lapic_eoi();
+            }
+            return next;
         }
+    }
 
+    // no handler, but still gotta EOI or we'll never get another interrupt
+    if (vec >= INT_FIRST_INTERRUPT) {
+        lapic_eoi();
         return context;
     }
 
-    if (vec < INT_FIRST_INTERRUPT) {
-        // panic: unhandled exception
-    }
-
+    panic_c(exc_name(vec), context);
     return context;
 }
 ```
+
+(Trimmed a little. The real one in [`interrupts.c`](/src/arch/x86_64/cpu/interrupts.c) also sanity checks the CPU context a handler hands back before using it.)
 
 The dispatcher is the central decision point for all interrupts. Its job is to classify the vector and route it appropriately.
 
@@ -875,7 +832,9 @@ After handling a hardware interrupt (typically vectors ≥ 32), the dispatcher s
 >[!NOTE]
 >We will explain the significance of EOIs in the APIC chapter.
 
-If the interrupt is a CPU exception (vectors < 32) and no handler exists, the kernel treats this as a fatal condition and escalates to a **panic**. There is no recovery path for missing exception handlers.
+If the interrupt is a CPU exception (vectors < 32) and no handler exists, the kernel treats this as a fatal condition and escalates to a **panic**, named after the exception (`exc_name` turns the vector into "Page Fault", "General Protection" and friends). There is no recovery path for missing exception handlers.
+
+One more rule hides in there. A handler for an *exception* is allowed to return `NULL`, which means "not mine, I couldn't fix this". The dispatcher then carries on as if there was no handler at all, and the kernel panics. That's how a subsystem can deal with *some* page faults and leave the rest alone. We'll lean on it when we get to the VMM.
 
 It is important to note that this system is still in early initialization:
 
@@ -994,60 +953,49 @@ static char cbuf[2048];    // formatting buffer (on stack in callers, but this i
 
 No heap. No locks. No TTY. No backbuffer. The cursor position is plain integers. The color is a plain integer. The output buffer is a static array with fixed size.
 
-`crash_emit` renders one byte directly to the framebuffer:
+`crash_cell` draws one character at a given cell, using the same `draw_glyph` from above:
 
 ```c
-static void crash_emit(uint8_t c) {
-    uint32_t row_h = (uint32_t)fh + PADDING_Y;
-    if      (c == '\n') { ccx = 0; ccy++; }
-    else if (c == '\r') { ccx = 0; }
-    else if (c == '\t') { ccx = (ccx + 4) & ~3u; }
-    else {
-        if (ccx >= (uint32_t)cols) { ccx = 0; ccy++; }
-        if (ccy >= (uint32_t)rows) crash_scroll();
-        uint32_t px = ccx * 8;
-        uint32_t py = ccy * row_h;
-        uint8_t* glyph = get_glyph(c);
-        if (glyph)
-            for (uint32_t y = 0; y < (uint32_t)fh; y++) {
-                uint8_t bits = glyph[y];
-                for (uint32_t x = 0; x < 8; x++)
-                    crash_pix(px + x, py + y, ((bits >> (7 - x)) & 1) ? VGA_PALETTE[cfg] : VGA_PALETTE[cbg]);
-            }
-        ccx++;
+static void crash_cell(uint32_t cp, uint32_t x, uint32_t y) {
+    if (x >= (uint32_t)cols || y >= (uint32_t)rows) return;
+    draw_glyph(get_glyph(cp), x * fw, y * (fh + PADDING_Y), VGA_PALETTE[cfg], VGA_PALETTE[cbg]);
+}
+```
+
+And `crash_emit` moves the cursor around and decides where each character goes:
+
+```c
+static void crash_emit(uint32_t cp) {
+    if (cp == '\n') { ccx = 0; ccy++; return; }
+    if (cp == '\r') { ccx = 0; return; }
+    if (cp == '\t') { ccx = (ccx + 4) & ~3u; return; }
+    if (cp == '\b') {
+        if (ccx > 0) crash_cell(' ', --ccx, ccy);
+        return;
     }
-    if (ccy >= (uint32_t)rows) crash_scroll();
+
+    if (ccx >= (uint32_t)cols) { ccx = 0; ccy++; }
+    if (ccy >= (uint32_t)rows) con_crash_clear(cbg);
+    crash_cell(cp, ccx++, ccy);
 }
 ```
 
-`crash_pix` is just `put_pixel` inlined, with no bounds-check overhead. `crash_scroll` shifts the entire framebuffer up by one text row using `kmemmove` on the raw pixel data and fills the vacated last row with the background color:
+Notice what happens when we run out of rows: no scrolling. We just wipe the screen and start again from the top. Why not scroll like a normal console? Scrolling means moving every pixel up by one row, and to move a pixel you first have to *read* it back from the framebuffer. Remember the PAT from Chapter 5? Framebuffer memory is write-combining (or uncacheable), and reading from it is painfully slow. A normal console gets around that with a copy of the screen in RAM, but that needs memory we can't allocate yet. Besides, a panic report fits on one screen with lots of room to spare, so the wipe basically never happens.
 
-```c
-static void crash_scroll(void) {
-    uint32_t row_h = (uint32_t)fh + PADDING_Y;
-    size_t row_bytes = row_h * fb_pitch;
-    size_t total = (size_t)fb_h * fb_pitch;
-    kmemmove(fb, fb + row_bytes, total - row_bytes);
-    // ... fill last row with cbg ...
-    if (ccy > 0) ccy = (uint32_t)rows - 1;
-}
-```
+>[!NOTE]
+> The wipe only happens *right before* a character would land off screen, not on the newline itself. Otherwise, a report that happened to end exactly at the last row would clear itself the moment it printed its final newline. Fun bug to stare at.
 
-`con_crash_clear` fills the framebuffer with the background color and resets the cursor to the top-left:
+`con_crash_clear` fills the screen with the background color and resets the cursor to the top-left:
 
 ```c
 void con_crash_clear(uint8_t bg) {
     if (!fb) return;
     cbg = bg & 0xF; ccx = 0; ccy = 0;
-    uint32_t color = VGA_PALETTE[cbg];
-    size_t total = (size_t)fb_h * fb_pitch;
-    if (fb_bpp == 32) {
-        uint32_t* p = (uint32_t*)fb;
-        for (size_t i = 0; i < total / 4; i++) p[i] = color;
-    }
-    // ...
+    fill_rect(0, 0, fb_w, fb_h, VGA_PALETTE[cbg]);
 }
 ```
+
+`fill_rect` paints a rectangle of the screen one color. It's the same helper the regular console uses to clear itself and draw its cursor. At 32 bits per pixel, it writes two pixels at a time as a single 64-bit store, which halves the number of trips to the framebuffer.
 
 `con_crash_puts` iterates over a string calling `crash_emit` per byte. `con_crash_printf` formats into the static `cbuf` array using `kvsnprintf` (the same formatting function we wired up to serial in Chapter 4) and passes the result to `con_crash_puts`:
 
@@ -1099,6 +1047,15 @@ All four variants funnel into `panic_c`:
 void panic_c(const char* message, cpu_context_t* context)
 {
     intr_off();
+
+    // If drawing the panic screen panics too, the second one stops right here
+    static bool panicking = false;
+    if (panicking) {
+        LOGF("[PANIC] Panicked while panicking: %s\n", message);
+        halt_system();
+    }
+    panicking = true;
+
     panic_log(message, context);
 
     con_crash_clear(CONSOLE_COLOR_RED);
@@ -1109,24 +1066,29 @@ void panic_c(const char* message, cpu_context_t* context)
 
 The very first call is `intr_off()`. We established earlier that the crash console bypasses locks by relying on the absence of interrupts. `intr_off()` makes that assumption true. From this line forward, no interrupt will fire on this CPU. The panic handler runs to completion deterministically.
 
+Then there's `panicking`. Think about what happens if something *inside* the panic path breaks. Say the framebuffer pointer is garbage, and drawing the crash screen page faults. That page fault panics, which tries to draw the crash screen, which page faults, which panics... and we recurse until the stack is gone. So the second panic just logs its reason and halts, and the first one's log is already in `debug.log`.
+
 `panic_log` writes the reason and context to COM2 via serial *before* anything touches the framebuffer:
 
 ```c
 static void panic_log(const char* msg, cpu_context_t* ctx)
 {
-    LOGF("\n*** KERNEL PANIC ***\n");
-    LOGF("REASON: %s\n", msg);
-    if (ctx)
-        LOGF("%s (#%lu)  ERR=0x%lx  RIP=0x%016lx\n",
-             exc_name(ctx->vector_number),
-             ctx->vector_number,
-             ctx->error_code,
-             ctx->iret_rip);
-    LOGF("********************\n");
+    LOGF("KERNEL PANIC: %s\n", msg);
+    if (!ctx) return;
+
+    log_indent(1);
+    LOGF("%s (#%lu), error 0x%lx, rip 0x%016lx\n",
+         exc_name(ctx->vector_number), ctx->vector_number, ctx->error_code, ctx->iret_rip);
+    if (ctx->vector_number == INT_PAGE_FAULT) {
+        uint64_t cr2;
+        __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+        LOGF("fault address 0x%016lx\n", cr2);
+    }
+    log_indent(-1);
 }
 ```
 
-`LOGF` writes to COM2, which `run.py` redirects to `debug.log` on disk. This matters because if the crash screen itself somehow fails, the serial log will still contain the panic reason and the faulting instruction pointer. Serial has no dependencies beyond the UART port address we configured in Chapter 4. It is the last resort.
+`LOGF` writes to COM2, which `run.py` redirects to `debug.log` on disk. `log_indent` just indents the lines that follow it in the log, so the details sit under the headline. This matters because if the crash screen itself somehow fails, the serial log will still contain the panic reason and the faulting instruction pointer. Serial has no dependencies beyond the UART port address we configured in Chapter 4. It is the last resort.
 
 Then `con_crash_clear(CONSOLE_COLOR_RED)` paints the entire screen red and resets the cursor. Everything previously on screen is gone. If you need to know what the kernel was outputting before the crash, `debug.log` is the place to look.
 
@@ -1182,12 +1144,12 @@ GatOS has been permanently locked down.
 
 ## Putting It All Together
 
-Here is the section of `kmain.c` that this chapter describes, with the reasoning made explicit:
+Here is the slice of the init sequence that this chapter describes, with the reasoning made explicit (from `kernel_bootstrap()` in [`bootstrap.c`](/src/kernel/bootstrap.c)):
 
 ```c
 // Serial: zero dependencies, works before everything else
-serial_init_port(COM1_PORT);
-serial_init_port(COM2_PORT);
+serial_init_port(SERIAL_COM1);
+serial_init_port(SERIAL_COM2);
 QEMU_LOG("Kernel main reached, normal assembly boot succeeded", TOTAL_DBG);
 
 // IDT before anything that could fault
@@ -1197,8 +1159,8 @@ QEMU_LOG("Initialized the IDT", TOTAL_DBG);
 // Multiboot and physmap: covered in previous chapters
 multiboot_parser_t multiboot = {0};
 multiboot_init(&multiboot, mb_info, multiboot_buffer, sizeof(multiboot_buffer));
+unmap_identity();
 reserve_tables(&multiboot);
-cleanup_kpt(0x0, get_kend(false));
 build_physmap();
 
 // Physmap exists, so PHYSMAP_P2V(fb_phys) is now a valid virtual address
@@ -1206,7 +1168,7 @@ build_physmap();
 console_init(&multiboot);
 QEMU_LOG("Initialized console", TOTAL_DBG);
 
-// From here, panacking halts with a red screen and extra information, rather than a silent reset
+// From here, panicking halts with a red screen and extra information, rather than a silent reset
 ```
 
 Each step makes the next step debuggable. 

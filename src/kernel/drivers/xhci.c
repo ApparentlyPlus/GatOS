@@ -53,8 +53,8 @@ static inline void dbw (xhci_hc_t *hc, uint32_t s, uint32_t v) { *(volatile uint
  * assert_dma_clean - Panics if the DMA memory overlaps the kernel image
  */
 static void assert_dma_clean(uint64_t phys, size_t sz, const char *name) {
-    uint64_t kstart = get_kstart(false);
-    uint64_t kend = get_kend(false);
+    uint64_t kstart = kmem->kstart;
+    uint64_t kend = kmem->kend;
     uint64_t end = phys + sz;
     if (!(end <= kstart || phys >= kend)) {
         panicf("[XHCI] DMA %s overlaps kernel image: [0x%lx..0x%lx) vs [0x%lx..0x%lx)\n",
@@ -1152,11 +1152,10 @@ bool xhci_init(void) {
             LOGF("[XHCI] failed to allocate controller state for %02x:%02x.%x\n", pci->bus, pci->dev, pci->func);
             continue;
         }
-        kmemset(hc, 0, sizeof(xhci_hc_t));
 
         uint32_t ms = align_up(pci->bar0_size, PAGE_SIZE);
         if (ms < PAGE_SIZE) ms = PAGE_SIZE;
-        if (vmm_alloc(NULL, ms, VM_FLAG_WRITE | VM_FLAG_FOREIGN, (void *)pci->bar0_phys, (void **)&hc->cap) != VMM_OK) {
+        if (vmm_alloc(NULL, ms, VM_FLAG_WRITE | VM_FLAG_FOREIGN | VM_FLAG_DEVICE, (void *)pci->bar0_phys, (void **)&hc->cap) != VMM_OK) {
             LOGF("[XHCI] failed to map BAR0 for %02x:%02x.%x\n", pci->bus, pci->dev, pci->func);
             continue;
         }

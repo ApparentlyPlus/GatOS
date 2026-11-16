@@ -46,7 +46,7 @@ To understand how it works, you first need to understand why the PMM is **the re
 
 To manage physical pages, the PMM must read and write data into them directly. But physical addresses cannot be dereferenced by the CPU after the identity map is gone. 
 
-Since we are now operating exlcusively in the higher half, we have built the physmap for this exact reason: since it maps physical (low) address `X` to virtual (high) address `PHYSMAP_VIRTUAL_BASE + X`, the PMM can reach any physical page through the physmap.
+Since we are now operating exclusively in the higher half, we have built the physmap for this exact reason: since it maps physical (low) address `X` to virtual (high) address `PHYSMAP_VIRTUAL_BASE + X`, the PMM can reach any physical page through the physmap.
 
 This is the key idea: the PMM uses the physmap **internally** to access physical pages, but its external interface deals exclusively in physical addresses. When it allocates a page, it returns the physical address (**not** the physmap virtual address) using `PHYSMAP_V2P`.
 
@@ -97,7 +97,7 @@ Ouch.
 
 Of course, this doesn't only happen with integers. Any data structure smaller than a full page, primitive or not, suffers from the same waste. This is why the PMM doesn't act as our main allocator. It is very good at exactly one thing: handing out physical pages. Nothing more, nothing less.
 
-As you can imagine, the slab allocator is what we use to fix this problem. It sits on top of the PMM: it requests whole physical pages from it, then subdivides them into small, fixed-size chunks called slabs. 
+As you can imagine, the slab allocator is what we use to fix this problem. It sits on top of the PMM: it requests whole physical pages from it, then subdivides them into small, fixed-size objects. Each page it carves up like that is called a *slab*, hence the name. 
 
 When you allocate an integer, the slab allocator hands you 4 bytes out of an already-allocated page, **not a fresh page of its own**. When that page fills up, it requests another from the PMM. This way, physical pages are packed tightly with real data, and the per-allocation waste is negligible.
 
@@ -105,47 +105,26 @@ When you allocate an integer, the slab allocator hands you 4 bytes out of an alr
 > Keep in mind that there is only **one** Slab Allocator in the entire system.
 
 ### What does the Virtual Memory Manager do?
-The short answer is: a shit load of things.
 
-The long answer is tough to explain in theory. The VMM is by far the most complex component of the memory subsystem.
+The short answer is: a shit load of things. It's the most complex piece of the memory subsystem, and it gets a whole chapter of its own, so here's just the gist.
 
 Recall from earlier chapters that everything the kernel touches (its code, its data sections, the physmap, everything) exists only as virtual memory. The CPU never operates on physical addresses directly; it always goes through the page tables. The subsystem that owns and manages those page tables is the VMM.
 
-At its core, the VMM's job is to abstract physical memory into contiguous, private address spaces, decoupling the memory that software thinks it uses from the actual hardware RAM beneath it. 
+Ask it for memory, and it picks a free range of virtual addresses, gets physical frames from the PMM to back them, and writes the page table entries that tie the two together. Free it, and it does the reverse.
 
-It does this through several interlocking responsibilities: handling the page tables, enforcing access permissions on memory regions, loading pages into RAM only when they are actually accessed, evicting inactive pages to swap space when RAM runs low, and mapping the same physical memory into multiple virtual address spaces for things like shared libraries or copy-on-write.
+Here's where the slab comes in. The VMM also has to *remember* everything it mapped: which ranges, with which permissions. That bookkeeping is a pile of small structs, a few dozen bytes each, and small structs are the slab's whole thing.
 
-But this is all very hard to intuit until you get into the nitty gritty. I won't go into too much detail right now (there will be a dedicated chapter to the VMM itself) but for now, just know that a VMM manages any virtual memory region you instruct it to, low or high.
-
-To make this concrete: say we tell a VMM to manage the range `0x0 – 0x10000` and then call `vmm_alloc(4)`. The VMM asks the slab allocator for a physical address for that 4-byte allocation, and let's say the slab returns physical `0x3740`. It then needs to map virtual `0x0` to physical `0x3740`. 
-
-But `0x0` has no page tables backing it yet, so the VMM walks the hierarchy from the PML4 downward, and at every null entry it finds, it asks the PMM for a fresh page to use as a new table (always through `PHYSMAP_P2V`). Once the hierarchy is fully populated downstream, it writes the final mapping so that virtual `0x0` resolves to physical `0x3740`.
-
-From that point on, any access to virtual `0x0` transparently reaches physical `0x3740` — the VMM has done its job. 
-
-To take it a step further, each VMM tracks its own page tables through its own metadata. This gives us a very important property: we can swap multiple VMMs in and out.
-
-For example, VMM A manages `0x0 – 0x10000` and maps virtual `0x0` to physical `0x3000`. VMM B manages the exact same range, but maps virtual `0x0` to physical `0x6570`. Since each VMM remembers its own page tables, switching between them is enough to completely change what the virtual address space looks like: while VMM A is active, `0x0` resolves to `0x3000`, and while VMM B is active, the same `0x0` resolves to `0x6570`. 
-
-This will become extremely useful once we introduce processes, where each process needs its own private view of memory.
+And since every VMM keeps its own page tables, we can have several of them and swap between them. That becomes extremely useful once we introduce processes, where each process needs its own private view of memory.
 
 >[!NOTE]
 >Keep in mind that there can be **many** VMMs in the system.
 
 ### What does the Heap Manager do?
 
-The heap manager is the final layer of the memory stack. It requires all previous components to be online before it can operate.
-
-Its job is to abstract away the complexity beneath it. The VMM thinks in pages and mappings; the heap thinks in arbitrary-sized allocations. It maintains its own metadata so that when you call `malloc`, it returns exactly the memory you asked for, and when you call `free`, it already knows how large that allocation was and can return it to the VMM correctly. 
-
-The entire machinery of the PMM, slab allocator, and VMM is still running underneath. The heap just packages all of it into the familiar `malloc`, `calloc`, `realloc`, `free`, and friends. 
-
-The VMM and the heap both operate on the same virtual address space, but at different levels of abstraction. The VMM owns the page tables, and handles mapping, unmapping, memory protection, etc. The heap sits on top of it, subdividing those mapped regions into allocations of arbitrary size, tracking what was handed out and to whom, and reducing fragmentation. Neither can do the other's job; they are complementary by design.
+The heap manager is the final layer of the memory stack. The VMM thinks in pages, and the heap thinks in arbitrary sizes. It carves the VMM's pages into allocations of whatever size you ask for, and remembers how big each one was. That's `malloc`, `calloc`, `realloc`, `free`, and friends. And it's also how a 4 byte allocation finally stops eating a whole page.
 
 > [!NOTE]
-> The heap is the **only** component of the memory subsystem that gets implemented twice: once for the kernel (`kheap`) and once for userland (`uheap`). That separation bleeds into the function names too: `kmalloc` vs `malloc`, `kfree` vs `free`, and so on. The kernel heap is usually minimal, as the kernel's allocation needs are modest and predictable. The userland heap, by contrast, can be extremely complex, which is why it is typically implemented inside `libc` (whether `glibc`, `musl`, or another) and communicates with the VMM through syscalls.
->
-> In GatOS specifically, the kernel heap is implemented alongside the other memory components, and the userland heap lives in my minimal `libc` port, `ulibc`, linked exclusively for userspace use.
+> The heap is the **only** component of the memory subsystem that gets implemented twice: once for the kernel (`kheap`, with `kmalloc` and `kfree`) and once for userland (in `ulibc`, with `malloc` and `free`), which asks the kernel for memory through syscalls.
 
 Hopefully by now you have a general grasp of why we need each component in the memory subsystem. Now that we have motivated the architecture, let's get specific with the PMM and the slab.
 
@@ -165,7 +144,7 @@ The simplest physical memory manager you could build is a bitmap: one bit per pa
 
 Suppose the VMM asks for a 16 KB block. That is four consecutive pages. With a bitmap, you need to scan for four *consecutive* free bits. Worse, as allocation and deallocation happen over time, your RAM starts looking like Swiss cheese: plenty of free pages in aggregate, but none of them contiguous. This is called **external fragmentation**, and it can cause large allocation requests to fail even when there is technically enough free memory.
 
-The buddy allocator solves this by organizing free memory into power-of-two-sized blocks. Every free block lives in a free list indexed by its *order*, where order `N` represents a block of size `min_block * 2^N`. GatOS uses a minimum block size of one page (`4KB`), so:
+The buddy allocator solves this by organizing free memory into power-of-two-sized blocks. Every free block lives in a free list indexed by its *order*, where order `N` represents a block of size `4KB * 2^N`. The smallest block is one page, so:
 
 ```
 Order 0  →  4 KB
@@ -181,10 +160,7 @@ When you free a block, you check whether its *buddy* — the adjacent block that
 The beauty of the buddy system is how it computes the buddy address. Given a block at physical address `addr` and order `N`, the buddy is:
 
 ```c
-static inline uint64_t buddy_of(uint64_t addr, uint32_t order) {
-    uint64_t size = order_to_size(order);
-    return (addr ^ size);
-}
+uint64_t buddy = phys ^ order_to_size(order);
 ```
 
 XOR with the block size. That is it. 
@@ -200,40 +176,29 @@ Converting between sizes and orders is straightforward:
 
 ```c
 static inline uint64_t order_to_size(uint32_t order) {
-    return min_block << order;
+    return (uint64_t)PAGE_SIZE << order;
 }
 
-static uint32_t size_to_order(uint64_t size_bytes) {
-    if (size_bytes == 0) return 0;
-    uint64_t need = min_block;
+static uint32_t size_to_order(uint64_t size) {
     uint32_t order = 0;
-    while (need < size_bytes) {
-        need <<= 1;
-        ++order;
-    }
+    while (order_to_size(order) < size) order++;
     return order;
 }
 ```
 
-`size_to_order` keeps doubling `need` until it is at least as large as the request. Whatever order we land on is the smallest block that can satisfy the request. If you ask for 5 KB, you get order 1 (8 KB). If you ask for exactly 4 KB, you get order 0. There is no such thing as a "5 KB block" in a buddy allocator. The granularity is always a power of two.
+`size_to_order` keeps going up an order until the block is at least as large as the request. Whatever order we land on is the smallest block that can satisfy the request. If you ask for 5 KB, you get order 1 (8 KB). If you ask for exactly 4 KB, you get order 0. There is no such thing as a "5 KB block" in a buddy allocator. The granularity is always a power of two.
 
 The downside of this is **internal fragmentation**: asking for 5 KB wastes 3 KB. For large kernel allocations — page tables, DMA buffers, large kernel structures — this overhead is acceptable. For small allocations like linked list nodes or process descriptors that are a few dozen bytes, it is catastrophic. That is the entire reason the Slab allocator exists, and we will get to it shortly.
 
-`max_order` is computed during initialization based on the total number of pages managed:
+`max_order` is computed in `pmm_init`, as the largest order whose block still fits in the managed range:
 
 ```c
-uint64_t span_trimmed = pmm_managed_size();
-uint64_t blocks = span_trimmed / min_block;
-
-uint32_t mo = 0;
-uint64_t tmp = blocks;
-while (tmp > 1) { tmp >>= 1; ++mo; }
-if (mo >= PMM_MAX_ORDERS) mo = PMM_MAX_ORDERS - 1;
-
-max_order = mo;
+max_order = 0;
+while (max_order + 1 < PMM_MAX_ORDERS && order_to_size(max_order + 1) <= end)
+    max_order++;
 ```
 
-This determines the largest single block we can ever hand out. For a 4 GB machine, `max_order` ends up around 20, meaning the largest block is about 4 GB. You probably do not need a single 4 GB contiguous allocation at kernel level, but the allocator can handle it. 
+This determines the largest single block we can ever hand out. For a 4 GB machine, `max_order` ends up at 20, meaning the largest block is 4 GB. You probably do not need a single 4 GB contiguous allocation at kernel level, but the allocator can handle it. 
 
 Psychos exist, you know.
 
@@ -243,7 +208,7 @@ Here is a question worth sitting with: when a block is free, what lives at its p
 
 Nothing important. It is free.
 
-This is the key insight the PMM exploits. Instead of maintaining a separate metadata structure for each free block (which would require its own allocation — circular and gross), we store the free list metadata *directly inside the free block itself*. The block's first few bytes are the header. When the block is allocated, the caller overwrites it anyway. When it is free, nobody else is using those bytes.
+This is the key insight the PMM exploits. Instead of maintaining a separate structure for the free list links of each block (which would require its own allocation — circular and gross), we store them *directly inside the free block itself*. The block's first few bytes are the header. When the block is allocated, the caller overwrites it anyway. When it is free, nobody else is using those bytes.
 
 ```c
 typedef struct {
@@ -254,218 +219,203 @@ typedef struct {
 } pmm_free_header_t;
 ```
 
-`magic` is `0xFEEDBEEF`. Any time the PMM touches a free block, it checks this field first. If it sees anything other than the magic value, it knows the block has been corrupted — either a use-after-free, a buffer overflow from an adjacent allocation, or something more exotic. Without this check, corruption in the free lists manifests as bizarre allocation behavior much later, in completely unrelated code. The magic gives us an early warning.
+`magic` is `0xFEEDBEEF`. Any time the PMM pulls a block off a free list, it checks this field first. If it sees anything other than the magic value, it knows the block has been corrupted — either a use-after-free, a buffer overflow from an adjacent allocation, or something more exotic. Without this check, corruption in the free lists manifests as bizarre allocation behavior much later, in completely unrelated code. The magic gives us an early warning.
 
-`order` tells us which free list this block belongs to. This sounds redundant — shouldn't we already know the order when we touch the header? — but it is a cross-check. If we think we are looking at an order-3 block and the header says order-7, something has gone wrong. Again, early warning.
+`order` tells us which free list this block belongs to. This sounds redundant, but it is a cross-check. If we think we are looking at an order-3 block and the header says order-7, something has gone wrong. Again, early warning.
 
 `next_phys` and `prev_phys` thread the block into a **doubly-linked list**. Both are physical addresses. At first glance, you might wonder why we need a doubly-linked list here. A singly-linked list would be simpler for push and pop.
 
 The reason is coalescing: when we merge a freed block with its buddy, we need to remove the buddy from wherever it currently sits in the free list. With only a `next` pointer, that requires scanning the entire list to find the predecessor. With `prev`, we splice it out in O(1). When you are managing the system's physical memory, O(n) on every free operation is a non-starter.
 
-All accesses to these headers go through the physmap:
+All accesses to these headers go through the physmap, via a tiny helper:
 
 ```c
-pmm_free_header_t *header = (pmm_free_header_t *)PHYSMAP_P2V(block_phys);
+static inline pmm_free_header_t* hdr_of(uint64_t phys) {
+    return (pmm_free_header_t*)PHYSMAP_P2V(phys);
+}
 ```
 
 This is the payoff for Chapter 5. The physmap was not just a convenience feature — it is a prerequisite for the PMM's ability to read and write free block metadata without any additional setup.
 
-### Validation
+## The Page Map
 
-The PMM validates every header it touches before trusting it:
+There's a catch with keeping everything inside the blocks, though. Say we're freeing a block and want to coalesce it. We compute its buddy's address, and now we need to know: is that buddy free, and if so, at which order?
+
+The obvious answer is "read its header and check the magic". But think about what's at that address if the buddy is *allocated*. Whatever its owner put there. Could be a page table, could be a string, could be anything. And if those first bytes happen to look like `0xFEEDBEEF` followed by the right order, we'd "unlink" a block that was never on any list, and now someone else's memory is in our free lists. Unlikely? Sure. But memory allocators run billions of times, and unlikely things love to happen at 3 AM.
+
+>[!WARNING]
+>This doesn't necessarily need to happen at random. Someone could deliberately (and maliciously) induce such behavior to exploit a potential bug in our coalescing logic.
+
+So the PMM keeps one small piece of bookkeeping *outside* the blocks, the **page map**, one byte per physical page.
 
 ```c
-static inline bool validate_free_header(uint64_t block_phys, uint32_t expected_order) {
-    if (!validate_block_in_range(block_phys, expected_order)) return false;
-    
-    pmm_free_header_t *header = (pmm_free_header_t *)PHYSMAP_P2V(block_phys);
-    
-    if (header->magic != PMM_FREE_BLOCK_MAGIC) {
-        LOGF("[PMM ERROR] Invalid magic at 0x%lx: 0x%x (expected 0x%x)\n",
-               block_phys, header->magic, PMM_FREE_BLOCK_MAGIC);
+// Page map entry, 0 means "not the start of a free block", otherwise PG_FREE | order
+#define PG_FREE 0x80
+
+static uint8_t* pmap = NULL;
+```
+
+Only the first page of each free block is marked, with `PG_FREE` plus its order. Every other byte is `0`. That's enough to answer our question without ever touching the buddy's memory: `pmap[buddy / PAGE_SIZE] == (PG_FREE | order)` means "a free block of exactly this order starts here". Anything else means the buddy is not ours to take.
+
+One byte per page sounds like a lot, but it really isn't. On QEMU's default 128 MiB machine that's `32 KiB`, and even `64 GB` of RAM only needs `16 MiB` of page map. How big it has to be is `pmm_map_size`, which is just the number of pages:
+
+```c
+uint64_t pmm_map_size(uint64_t end) {
+    return end / PAGE_SIZE;
+}
+```
+
+Where does it live, though? We have no allocator yet, that's the whole point of this chapter! Remember `kend_grow` from Chapter 5? It already solved this exact problem for the page tables once before. We can grab some RAM right after the kernel and move `KEND` past it. The page map does the same thing, as you'll see in the init code.
+
+### Validation
+
+The header is still checked whenever the PMM relies on it, as a second opinion next to the page map:
+
+```c
+static bool valid_hdr(uint64_t phys, uint32_t order) {
+    pmm_free_header_t* h = hdr_of(phys);
+
+    if (h->magic != PMM_FREE_BLOCK_MAGIC || h->order != order) {
+        LOGF("[PMM ERROR] Bad free header at 0x%lx (magic 0x%x, order %u, expected %u)\n", phys, h->magic, h->order, order);
         stats.corruption_detected++;
         return false;
     }
 
-    if (header->order != expected_order) {
-        LOGF("[PMM ERROR] Order mismatch at 0x%lx: %u (expected %u)\n",
-               block_phys, header->order, expected_order);
+    if ((h->next_phys != EMPTY_SENTINEL && h->next_phys >= range_end) ||
+        (h->prev_phys != EMPTY_SENTINEL && h->prev_phys >= range_end)) {
+        LOGF("[PMM ERROR] Bad free list links at 0x%lx\n", phys);
         stats.corruption_detected++;
         return false;
     }
-
-    if (header->next_phys != EMPTY_SENTINEL) {
-        if (header->next_phys < range_start || header->next_phys >= range_end) {
-            LOGF("[PMM ERROR] Invalid next pointer at 0x%lx: 0x%lx\n",
-                   block_phys, header->next_phys);
-            stats.corruption_detected++;
-            return false;
-        }
-    }
-    // ... same for prev_phys ...
 
     return true;
 }
 ```
 
-If validation fails anywhere, the PMM logs a detailed error to `COM2` (which ends up in `debug.log`), increments a corruption counter in the stats, and returns false. The caller then handles the failure safely rather than proceeding with garbage data. A memory allocator that silently continues after detecting corruption is worse than one that panics — it just moves the crash somewhere completely unrelated and makes it ten times harder to diagnose. The PMM is paranoid by design.
-
-After allocating a block, the header is deliberately stomped with poison values:
-
-```c
-static inline void clear_free_header(uint64_t block_phys) {
-    pmm_free_header_t *header = (pmm_free_header_t *)PHYSMAP_P2V(block_phys);
-    header->magic = 0;
-    header->order = 0xFFFFFFFF;
-    header->next_phys = 0xDEADBEEFDEADBEEF;
-    header->prev_phys = 0xDEADBEEFDEADBEEF;
-}
-```
-
-`0xDEADBEEFDEADBEEF` is a classic kernel poison value. If anything ever tries to dereference one of those pointers, you know immediately that something used memory after freeing it back to the PMM.
+If the page map says a block is free but its header disagrees, someone scribbled over free memory. The PMM logs a detailed error to `COM2` (which ends up in `debug.log`), increments a corruption counter in the stats, and returns false. The caller then handles the failure safely rather than proceeding with garbage data. A memory allocator that silently continues after detecting corruption is worse than one that panics — it just moves the crash somewhere completely unrelated and makes it ten times harder to diagnose. The PMM is paranoid by design.
 
 ## Pushing and Popping
 
-Free list management is handled by `push_head` and `pop_head`. These are the lowest-level operations the PMM performs, and everything else is built on top of them.
+Free list management is handled by `push_head`, `unlink` and `pop_head`. These are the lowest-level operations the PMM performs, and everything else is built on top of them.
 
 `push_head` inserts a block at the front of its order's free list:
 
 ```c
-static void push_head(uint32_t order, uint64_t block_phys) {
-    uint64_t old_head = free_heads[order];
-    pmm_free_header_t* hdr = (pmm_free_header_t*)PHYSMAP_P2V(block_phys);
-    hdr->magic = PMM_FREE_BLOCK_MAGIC;
-    hdr->order = order;
-    hdr->next_phys = (old_head == EMPTY_SENTINEL) ? EMPTY_SENTINEL : old_head;
-    hdr->prev_phys = EMPTY_SENTINEL;
+static void push_head(uint32_t order, uint64_t phys) {
+    uint64_t old = free_heads[order];
+    pmm_free_header_t* h = hdr_of(phys);
 
-    if (old_head != EMPTY_SENTINEL)
-        ((pmm_free_header_t*)PHYSMAP_P2V(old_head))->prev_phys = block_phys;
+    h->magic = PMM_FREE_BLOCK_MAGIC;
+    h->order = order;
+    h->next_phys = old;
+    h->prev_phys = EMPTY_SENTINEL;
 
-    free_heads[order] = block_phys;
+    if (old != EMPTY_SENTINEL) hdr_of(old)->prev_phys = phys;
+
+    free_heads[order] = phys;
+    pmap[phys / PAGE_SIZE] = PG_FREE | order;
     stats.free_blocks[order]++;
 }
 ```
 
-We write the header into the block at `block_phys`, wire up its `next_phys` to the current head, and update the old head's `prev_phys` to point back. Then `free_heads[order]` becomes the new block. All of this is standard doubly-linked list insertion at the head. The `stats.free_blocks[order]++` at the end keeps our debug counters accurate.
+We write the header into the block at `phys`, wire up its `next_phys` to the current head, and update the old head's `prev_phys` to point back. Then `free_heads[order]` becomes the new block. All of this is standard doubly-linked list insertion at the head. Then the page map gets its mark, and `stats.free_blocks[order]++` keeps our debug counters accurate.
 
-`pop_head` does the reverse, removing and returning the head:
+`unlink` takes a block out of its list, wherever it is, using its own links:
+
+```c
+static void unlink(uint32_t order, uint64_t phys) {
+    pmm_free_header_t* h = hdr_of(phys);
+
+    if (h->prev_phys == EMPTY_SENTINEL) free_heads[order] = h->next_phys;
+    else hdr_of(h->prev_phys)->next_phys = h->next_phys;
+
+    if (h->next_phys != EMPTY_SENTINEL) hdr_of(h->next_phys)->prev_phys = h->prev_phys;
+
+    h->magic = 0;
+    pmap[phys / PAGE_SIZE] = 0;
+    stats.free_blocks[order]--;
+}
+```
+
+No previous block means we're the head, so the head moves to our next. Otherwise our previous block skips over us. Same on the other side. Then we wipe the magic and the page map mark, so nothing mistakes this block for a free one anymore.
+
+`pop_head` is just `unlink` on the head, with a validation check first:
 
 ```c
 static uint64_t pop_head(uint32_t order) {
     uint64_t head = free_heads[order];
     if (head == EMPTY_SENTINEL) return EMPTY_SENTINEL;
 
-    if (!validate_free_header(head, order)) return EMPTY_SENTINEL;
+    // A broken head would hand out garbage, so we cut the whole list loose instead
+    if (!valid_hdr(head, order)) {
+        free_heads[order] = EMPTY_SENTINEL;
+        return EMPTY_SENTINEL;
+    }
 
-    pmm_free_header_t* hdr = (pmm_free_header_t*)PHYSMAP_P2V(head);
-    uint64_t next = hdr->next_phys;
-    free_heads[order] = (next == EMPTY_SENTINEL) ? EMPTY_SENTINEL : next;
-
-    if (next != EMPTY_SENTINEL)
-        ((pmm_free_header_t*)PHYSMAP_P2V(next))->prev_phys = EMPTY_SENTINEL;
-
-    clear_free_header(head);
-    stats.free_blocks[order]--;
+    unlink(order, head);
     return head;
 }
 ```
 
-Before touching anything, we validate the header of the block we are about to pop. If validation fails, we return `EMPTY_SENTINEL` rather than returning a potentially corrupt address. The caller treats this as "no block available," which is a safe fallback. Not great from an allocation perspective, but infinitely better than returning garbage.
+If the head is corrupt, we can't trust its links either, so the rest of that list is unreachable anyway. We drop it and return `EMPTY_SENTINEL`, which the caller treats as "no block available". We lose that list's memory, which is not great from an allocation perspective, but infinitely better than returning garbage.
 
-After popping, `clear_free_header` poisons the header, and `stats.free_blocks[order]--` keeps the stats accurate.
-
-For the coalescing path, there is also `remove_specific`, which removes an arbitrary block from the middle of a list using its `prev_phys` pointer to avoid scanning:
+For the coalescing path, there is `take_buddy`, which is where the page map earns its keep:
 
 ```c
-static bool remove_specific(uint32_t order, uint64_t target_phys) {
-    if (!validate_block_in_range(target_phys, order)) return false;
-
-    pmm_free_header_t* hdr = (pmm_free_header_t*)PHYSMAP_P2V(target_phys);
-
-    if (hdr->magic != PMM_FREE_BLOCK_MAGIC || hdr->order != order)
-        return false;
-
-    if (!validate_free_header(target_phys, order)) {
-        LOGF("[PMM] Corruption in remove_specific at 0x%lx\n", target_phys);
-        return false;
-    }
-
-    uint64_t prev = hdr->prev_phys;
-    uint64_t next = hdr->next_phys;
-
-    if (prev == EMPTY_SENTINEL) {
-        free_heads[order] = (next == EMPTY_SENTINEL) ? EMPTY_SENTINEL : next;
-    } else {
-        ((pmm_free_header_t*)PHYSMAP_P2V(prev))->next_phys = next;
-    }
-
-    if (next != EMPTY_SENTINEL)
-        ((pmm_free_header_t*)PHYSMAP_P2V(next))->prev_phys = prev;
-
-    clear_free_header(target_phys);
-    stats.free_blocks[order]--;
+static bool take_buddy(uint32_t order, uint64_t buddy) {
+    if (pmap[buddy / PAGE_SIZE] != (PG_FREE | order)) return false;
+    if (!valid_hdr(buddy, order)) return false;
+    unlink(order, buddy);
     return true;
 }
 ```
 
-The check `hdr->magic != PMM_FREE_BLOCK_MAGIC || hdr->order != order` is not necessarily corruption — it might just mean the buddy was already allocated. A buddy we are trying to coalesce with might have a valid header for a *different* order (if it was split further after we last touched it), or no valid header at all (if it is allocated). Returning `false` here tells the caller "the block is not in this free list," which is a perfectly normal situation during coalescing.
+The page map check comes first, and it is not a corruption check. A buddy that's allocated, or free but split into smaller blocks, simply isn't marked with this order. Returning `false` tells the caller "the buddy is not available at this order", which is a perfectly normal situation during coalescing. Only once the page map says yes do we look at the header at all.
 
 ## Allocating: Block Splitting
 
-`pmm_alloc` is the public entry point. It validates arguments, rounds the requested size up to the nearest block size, and delegates to the internal helper:
+`pmm_alloc` is the public entry point. It validates arguments, turns the requested size into an order, and delegates to the internal helper:
 
 ```c
-pmm_status_t pmm_alloc(size_t size_bytes, uint64_t *out_phys) {
+pmm_status_t pmm_alloc(size_t size_bytes, uint64_t* out_phys) {
+    if (!out_phys || size_bytes == 0) return PMM_ERR_INVALID;
+    if (!inited) return PMM_ERR_NOT_INIT;
+
+    uint32_t order = size_to_order(size_bytes);
+    if (order > max_order) return PMM_ERR_OOM;
+
     bool flags = spinlock_acquire(&pmm_lock);
-    // ...
-    uint64_t rounded = (uint64_t)size_bytes;
-    if (rounded & (min_block - 1)) rounded = align_up(rounded, min_block);
-
-    uint32_t order = size_to_order(rounded);
-    if (order > max_order) {
-        spinlock_release(&pmm_lock, flags);
-        return PMM_ERR_OOM;
-    }
-
     stats.alloc_calls++;
-    pmm_status_t status = alloc_block_of_order(order, out_phys);
+    pmm_status_t status = alloc_order(order, out_phys);
     spinlock_release(&pmm_lock, flags);
     return status;
 }
 ```
 
-Notice the spinlock acquire and release wrapping everything. This is exactly what Chapter 6 was about — the PMM's free lists are shared state that could be torn apart by an interrupt handler calling `pmm_alloc` at the wrong moment. The spinlock, combined with interrupt disabling inside `spinlock_acquire`, makes the entire operation atomic from the system's perspective.
+Notice the spinlock acquire and release wrapping the actual work. This is exactly what Chapter 6 was about. The PMM's free lists are shared state that could be torn apart by an interrupt handler calling `pmm_alloc` at the wrong moment. The spinlock, combined with interrupt disabling inside `spinlock_acquire`, makes the entire operation atomic from the system's perspective.
 
-The actual allocation logic lives in `alloc_block_of_order`:
+The actual allocation logic lives in `alloc_order`:
 
 ```c
-static pmm_status_t alloc_block_of_order(uint32_t req_order, uint64_t *out_phys) {
-    if (!inited) return PMM_ERR_NOT_INIT;
-    if (req_order > max_order) return PMM_ERR_OOM;
+static pmm_status_t alloc_order(uint32_t order, uint64_t* out_phys) {
+    for (uint32_t o = order; o <= max_order; o++) {
+        uint64_t block = pop_head(o);
+        if (block == EMPTY_SENTINEL) continue;
 
-    for (uint32_t o = req_order; o <= max_order; ++o) {
-        while (free_heads[o] != EMPTY_SENTINEL) {
-            uint64_t block = pop_head(o);
-            if (block == EMPTY_SENTINEL) break;
-
-            while (o > req_order) {
-                --o;
-                uint64_t half = order_to_size(o);
-                uint64_t buddy = block + half;
-                push_head(o, buddy);
-            }
-
-            *out_phys = block;
-            return PMM_OK;
+        // Hand the upper halves back until the block is the size we want
+        while (o > order) {
+            o--;
+            push_head(o, block + order_to_size(o));
         }
-    }
 
+        *out_phys = block;
+        return PMM_OK;
+    }
     return PMM_ERR_OOM;
 }
 ```
 
-Start at `req_order`. If the free list there is empty, move up to the next order. Keep going until we find a non-empty list. Pop a block from it. Then, if we took a larger block than needed, split it down: cut it in half, push the upper half to the free list at one order lower, and keep halving until we are at `req_order`.
+Start at the requested order. If the free list there is empty, move up to the next order. Keep going until we find a non-empty list. Pop a block from it. Then, if we took a larger block than needed, split it down: cut it in half, push the upper half to the free list at one order lower, and keep halving until we are at the order we wanted.
 
 Let's trace through a concrete example. Say we want a 4 KB block (order 0) and the free lists look like:
 
@@ -479,11 +429,11 @@ Order 3: [0x100000 → 0xA00000 → sentinel]
 1. `o = 0`: empty, skip.
 2. `o = 1`: empty, skip.
 3. `o = 2`: empty, skip.
-4. `o = 3`: non-empty! Pop `0x100000`. Now the inner `while (o > req_order)` loop runs:
-   - `o--` → `o = 2`, `half = 16KB`, `buddy = 0x100000 + 16KB = 0x104000`. Push `0x104000` to order 2.
-   - `o--` → `o = 1`, `half = 8KB`, `buddy = 0x100000 + 8KB = 0x102000`. Push `0x102000` to order 1.
-   - `o--` → `o = 0`, `half = 4KB`, `buddy = 0x100000 + 4KB = 0x101000`. Push `0x101000` to order 0.
-   - Now `o == req_order`, exit the inner loop.
+4. `o = 3`: non-empty! Pop `0x100000`. Now the inner `while (o > order)` loop runs:
+   - `o--` → `o = 2`, push `0x100000 + 16KB = 0x104000` to order 2.
+   - `o--` → `o = 1`, push `0x100000 + 8KB = 0x102000` to order 1.
+   - `o--` → `o = 0`, push `0x100000 + 4KB = 0x101000` to order 0.
+   - Now `o == order`, exit the inner loop.
 5. Return `0x100000`.
 
 After this, the free lists look like:
@@ -499,57 +449,103 @@ The 32 KB block was split into one 4 KB block (returned), plus three leftover "b
 
 ## Freeing: Coalescing
 
-Freeing is where the buddy system earns its keep. The implementation is inside `pmm_free`, after the basic validation:
+Freeing is where the buddy system earns its keep. `pmm_free` checks the arguments (in range, aligned to the block size), takes the lock, and hands the block to `free_order`:
 
 ```c
-while (order < max_order) {
-    uint64_t buddy = buddy_of(block_addr, order);
-    uint64_t buddy_size = order_to_size(order);
-
-    if (buddy < range_start || (buddy + buddy_size) > range_end) {
-        break;
+static pmm_status_t free_order(uint64_t phys, uint32_t order) {
+    if (free_overlaps(phys, order)) {
+        LOGF("[PMM ERROR] Double free at 0x%lx\n", phys);
+        return PMM_ERR_DOUBLE_FREE;
     }
 
-    bool found = remove_specific(order, buddy);
-    if (!found) {
-        push_head(order, block_addr);
-        spinlock_release(&pmm_lock, flags);
-        return PMM_OK;
+    stats.free_calls++;
+
+    // Coalesce like a pro heheh
+    while (order < max_order) {
+        uint64_t buddy = phys ^ order_to_size(order);
+        if (buddy + order_to_size(order) > range_end) break;
+        if (!take_buddy(order, buddy)) break;
+
+        stats.coalesce_success++;
+        if (buddy < phys) phys = buddy;
+        order++;
     }
 
-    stats.coalesce_success++;
-
-    if (buddy < block_addr) block_addr = buddy;
-    ++order;
+    push_head(order, phys);
+    return PMM_OK;
 }
-
-push_head(order, block_addr);
 ```
 
-Let's trace this too. Say we free `0x101000` (a 4 KB block, order 0). The free lists currently look like what we left them from the allocation trace above.
+Ignore `free_overlaps` for a moment, we'll get to it right after. Let's trace this. Say we free `0x101000` (a 4 KB block, order 0). The free lists currently look like what we left them from the allocation trace above.
 
-1. `order = 0`. `buddy = 0x101000 ^ 4KB = 0x100000`. Is `0x100000` in the order-0 free list? No (it was allocated). `remove_specific` returns `false`. We push `0x101000` to order 0 and return.
+1. `order = 0`. `buddy = 0x101000 ^ 4KB = 0x100000`. Is `0x100000` a free order-0 block? No (it was allocated), so the page map has no mark there and `take_buddy` returns `false`. We push `0x101000` to order 0 and return.
 
 Now suppose `0x100000` gets freed too. Free `0x100000` at order 0:
 
-1. `order = 0`. `buddy = 0x100000 ^ 4KB = 0x101000`. Is `0x101000` in the order-0 free list? Yes! `remove_specific` removes it. `stats.coalesce_success++`. `block_addr = min(0x100000, 0x101000) = 0x100000`. `order = 1`.
-2. `order = 1`. `buddy = 0x100000 ^ 8KB = 0x102000`. Is `0x102000` in the order-1 free list? Yes! Remove it. Coalesce again. `block_addr = 0x100000`. `order = 2`.
-3. `order = 2`. `buddy = 0x100000 ^ 16KB = 0x104000`. Is `0x104000` in the order-2 free list? Yes! Remove it. `block_addr = 0x100000`. `order = 3`.
-4. `order = 3`. `max_order` check — suppose `max_order = 3` for this example. Exit loop. Push `0x100000` to order 3.
+1. `order = 0`. `buddy = 0x100000 ^ 4KB = 0x101000`. Is `0x101000` a free order-0 block? Yes! `take_buddy` unlinks it. `stats.coalesce_success++`. `phys = min(0x100000, 0x101000) = 0x100000`. `order = 1`.
+2. `order = 1`. `buddy = 0x100000 ^ 8KB = 0x102000`. Free at order 1? Yes! Unlink it. Coalesce again. `phys = 0x100000`. `order = 2`.
+3. `order = 2`. `buddy = 0x100000 ^ 16KB = 0x104000`. Free at order 2? Yes! Unlink it. `phys = 0x100000`. `order = 3`.
+4. `order = 3`. `max_order` check. Suppose `max_order = 3` for this example. Exit loop. Push `0x100000` to order 3.
 
-The original 32 KB block is completely reassembled. Three separate frees, each of which individually triggered coalescing, gradually rebuilt the large block. This is exactly the kind of defragmentation that makes the buddy system worth the complexity.
+The original 32 KB block is completely reassembled. Two separate frees, the second of which triggered a whole chain of coalescing, rebuilt the large block. This is exactly the kind of defragmentation that makes the buddy system worth the complexity.
 
-The line `if (buddy < block_addr) block_addr = buddy;` is critical. When two buddies merge, the combined block starts at the *lower* address. If the freed block is the upper half (`block_addr > buddy`), we have to adopt the buddy's address as the new block start before bumping the order.
+The line `if (buddy < phys) phys = buddy;` is critical. When two buddies merge, the combined block starts at the *lower* address. If the freed block is the upper half (`phys > buddy`), we have to adopt the buddy's address as the new block start before bumping the order.
+
+### Catching Double Frees
+
+Now, `free_overlaps`. What happens if someone frees the same block twice?
+
+Without a check, the block goes onto a free list a second time. Two allocations later, two different owners get the same physical memory, and they slowly overwrite each other's data. That's one of the nastiest bugs you can have, because it breaks something completely unrelated to the actual mistake. So `free_order` refuses to free anything that's already (even partly) free:
+
+```c
+// True if phys lies inside any free block
+static bool free_covering(uint64_t phys) {
+    for (uint32_t o = 0; o <= max_order; o++) {
+        uint64_t head = align_down(phys, order_to_size(o));
+        uint8_t m = pmap[head / PAGE_SIZE];
+        if ((m & PG_FREE) && (uint32_t)(m & ~PG_FREE) >= o) return true;
+    }
+    return false;
+}
+
+// True if any page of [phys, phys + size of order) is already free
+static bool free_overlaps(uint64_t phys, uint32_t order) {
+    if (free_covering(phys)) return true;
+    for (uint64_t p = phys + PAGE_SIZE; p < phys + order_to_size(order); p += PAGE_SIZE)
+        if (pmap[p / PAGE_SIZE] & PG_FREE) return true;
+    return false;
+}
+```
+
+**What's happening here:**
+
+* A free block that contains `phys` has to start at `phys` rounded down to its own size, because buddy blocks are always aligned to their size. So `free_covering` tries every order: round `phys` down, and check whether a free block of at least that order starts there. That's at most one check per order, around 20 of them.
+* That catches a block that already sits inside a free block. But the block we're freeing could also *contain* free blocks. Say someone frees 8 KB, but its second page was already freed on its own. The loop in `free_overlaps` catches that by checking the page map for every page after the first.
+
+Both are pure page map lookups, so the cost is a handful of byte reads per free. Cheap insurance.
+
+### Exact Sizes
+
+There are two more public functions, `pmm_alloc_exact` and `pmm_free_range`. Remember the internal fragmentation from earlier? Ask `pmm_alloc` for 12 KB and you get a 16 KB block, 4 KB of it wasted. That's fine for most callers, but some (the VMM, for one) want *exactly* the number of pages they asked for. `pmm_alloc_exact` does the same allocation, then gives the unused tail straight back with `split_range` (more on that below). `pmm_free_range` is its counterpart: it frees any page aligned range, by cutting it into the largest aligned blocks that fit and freeing each one through `free_order`.
 
 ## Initialization: Two Phases
 
 The PMM's `pmm_init` function sets up data structures and records the managed range, but it does **not** mark any memory free:
 
 ```c
-pmm_status_t pmm_init(uint64_t range_start_phys, uint64_t range_end_phys, uint64_t min_block_size) {
+pmm_status_t pmm_init(uint64_t end, uint64_t map_phys) {
+    if (inited) return PMM_ERR_ALREADY_INIT;
     spinlock_init(&pmm_lock, "pmm_global");
-    bool flags = spinlock_acquire(&pmm_lock);
-    // ...
+
+    end = align_down(end, PAGE_SIZE);
+    if (end == 0) return PMM_ERR_INVALID;
+
+    range_end = end;
+    pmap = (uint8_t*)PHYSMAP_P2V(map_phys);
+    kmemset(pmap, 0, pmm_map_size(end));
+
+    // ... max_order, from earlier ...
+
     for (uint32_t i = 0; i < PMM_MAX_ORDERS; ++i)
         free_heads[i] = EMPTY_SENTINEL;
 
@@ -560,17 +556,19 @@ pmm_status_t pmm_init(uint64_t range_start_phys, uint64_t range_end_phys, uint64
 }
 ```
 
-All free lists start empty. The PMM is initialized but has nothing to give out. This is intentional. Before we can populate the free lists, we need to register exclusion zones — regions of physical memory that must never be allocated, regardless of what the firmware's memory map says.
+The PMM manages `[0, end)` of physical memory, and `map_phys` is where its page map lives. All free lists start empty and the whole page map is zeroed. The PMM is initialized but has nothing to give out. This is intentional. Before we can populate the free lists, we need to register exclusion zones — regions of physical memory that must never be allocated, regardless of what the firmware's memory map says.
 
 ### Exclusion Zones
 
-The most important exclusion zone is the kernel itself:
+The most important exclusion zone is everything up to `KEND`:
 
 ```c
-pmm_exclude_range(get_kstart(false), get_kend(false));
+pmm_exclude_range(0, kmem->kend);
 ```
 
-If we skipped this and then populated the free lists with all available RAM, the PMM might hand out physical pages that the kernel's `.text`, `.data`, or `.bss` sections live on. The first allocation that touched such a page would silently corrupt the kernel. The failure would show up much later, somewhere completely unrelated, and you would be staring at a page fault in a function that looks completely correct wondering what on earth happened.
+That one range covers a lot. The kernel image itself, of course. If we skipped it and then populated the free lists with all available RAM, the PMM might hand out physical pages that the kernel's `.text`, `.data`, or `.bss` sections live on. The first allocation that touched such a page would silently corrupt the kernel. The failure would show up much later, somewhere completely unrelated, and you would be staring at a page fault in a function that looks completely correct wondering what on earth happened.
+
+But since `KEND` has grown twice by now, it also covers the physmap's page tables and the PMM's own page map. And starting at `0` throws in the first MiB for free: page `0`, which would look exactly like a NULL pointer if we ever handed it out, and the firmware leftovers from Chapter 5 (old video memory, the BIOS ROM and friends).
 
 Exclusion zones are stored in a simple static table:
 
@@ -579,17 +577,17 @@ static pmm_exclusion_t exclusions[PMM_MAX_EXCLUSIONS];
 static uint32_t exclusion_count = 0;
 ```
 
-`PMM_MAX_EXCLUSIONS` is eight. This is intentional — we do not expect more than a handful of excluded regions. The kernel itself is one. If we ever needed to exclude additional ranges (ACPI tables, firmware reserved regions), we add entries here before calling `pmm_populate`.
+`PMM_MAX_EXCLUSIONS` is eight. This is intentional — we do not expect more than a handful of excluded regions. Right now there's just the one. If we ever needed to exclude additional ranges (ACPI tables, firmware reserved regions), we add entries here before calling `pmm_populate`.
 
 ### Populating the Free Lists
 
 After registering exclusions, we walk the multiboot memory map and mark each available region free:
 
 ```c
-for (size_t i = 0; i < multiboot.memory_map_length; i++) {
+for (size_t i = 0; i < mb->memory_map_length; i++) {
     uintptr_t region_start, region_end;
     uint32_t region_type;
-    if (multiboot_mem_region(&multiboot, i, &region_start, &region_end, &region_type) != 0)
+    if (multiboot_mem_region(mb, i, &region_start, &region_end, &region_type) != 0)
         continue;
     if (region_type != MULTIBOOT_MEMORY_AVAILABLE){
         // Handle non RAM...
@@ -599,80 +597,69 @@ for (size_t i = 0; i < multiboot.memory_map_length; i++) {
 }
 ```
 
-`pmm_populate` acquires the PMM lock and calls down to the internal `pmm_mark_free_range`. This is where the exclusion logic actually runs:
+`pmm_populate` acquires the PMM lock and calls down to the internal `mark_free`. This is where the exclusion logic actually runs:
 
 ```c
-static pmm_status_t pmm_mark_free_range(uint64_t start, uint64_t end) {
-    // ... alignment and range checks ...
+static void mark_free(uint64_t start, uint64_t end) {
+    if (end > range_end) end = range_end;
+    start = align_up(start, PAGE_SIZE);
+    end = align_down(end, PAGE_SIZE);
+    if (start >= end) return;
 
     for (uint32_t i = 0; i < exclusion_count; i++) {
         uint64_t ex_start = exclusions[i].start;
         uint64_t ex_end = exclusions[i].end;
         if (start < ex_end && ex_start < end) {
-            if (start < ex_start)
-                pmm_mark_free_range(start, ex_start);
-            if (ex_end < end)
-                pmm_mark_free_range(ex_end, end);
-            return PMM_OK;
+            if (start < ex_start) mark_free(start, ex_start);
+            if (ex_end < end) mark_free(ex_end, end);
+            return;
         }
     }
 
     split_range(start, end);
-    return PMM_OK;
 }
 ```
 
-Before marking any range free, we check whether it overlaps any exclusion zone. If it does, we split the range at the exclusion boundary and recursively mark the non-excluded pieces free. If the range fully contains an exclusion zone, the two recursive calls together cover everything except the excluded portion. If the range is fully contained within an exclusion zone, neither recursive call fires, and we return having marked nothing free.
+First, the range is clipped to whole pages inside what we manage. Then, before marking any range free, we check whether it overlaps any exclusion zone. If it does, we split the range at the exclusion boundary and recursively mark the non-excluded pieces free. If the range fully contains an exclusion zone, the two recursive calls together cover everything except the excluded portion. If the range is fully contained within an exclusion zone, neither recursive call fires, and we return having marked nothing free.
 
 The final call to `split_range` handles a range that has passed all exclusion checks:
 
 ```c
-static void split_range(uint64_t range_start, uint64_t range_end) {
-    uint64_t cur = range_start;
-
-    while (cur < range_end) {
-        uint64_t remain = range_end - cur;
-        
-        uint32_t chosen = 0;
-        for (int32_t o = (int32_t)max_order; o >= 0; --o) {
-            uint64_t bsize = order_to_size((uint32_t)o);
-            if (bsize > remain) continue;
-            if ((cur & (bsize - 1)) != 0) continue;
-            chosen = (uint32_t)o;
-            break;
-        }
-        
-        push_head(chosen, cur);
-        cur += order_to_size(chosen);
+static void split_range(uint64_t start, uint64_t end) {
+    while (start < end) {
+        uint32_t o = max_order;
+        while (order_to_size(o) > end - start || (start & (order_to_size(o) - 1)))
+            o--;
+        push_head(o, start);
+        start += order_to_size(o);
     }
 }
 ```
 
-This is a greedy partition: starting at `cur`, pick the largest order block that both fits in the remaining range *and* is naturally aligned to that block size. Push it. Advance `cur` by the block size. Repeat until the range is exhausted. The alignment check `(cur & (bsize - 1)) != 0` is mandatory — the buddy system requires all blocks to be naturally aligned to their size. If a 32 KB block does not start on a 32 KB boundary, its buddy computation breaks.
+This is a greedy partition: starting at `start`, pick the largest order block that both fits in the remaining range *and* is naturally aligned to that block size. Push it. Advance by the block size. Repeat until the range is exhausted. The alignment check `(start & (order_to_size(o) - 1))` is mandatory — the buddy system requires all blocks to be naturally aligned to their size. If a 32 KB block does not start on a 32 KB boundary, its buddy computation breaks. And the inner loop always stops by order 0 at the latest, since `start` and `end` are page aligned.
 
 The result is that any arbitrary aligned range gets partitioned into the fewest possible blocks of the largest possible sizes. Maximum efficiency, no waste.
 
 ## The Full Picture
 
-Stepping back, here is the relevant slice of `kmain.c` that initializes the PMM:
+Stepping back, here is the relevant slice of `kernel_bootstrap()` that initializes the PMM:
 
 ```c
-// Initialize PMM with all of physical RAM 
-// 0x0 to the end of the physmap - converted to a physical address
-pmm_status_t pmm_status = pmm_init(0x0, PHYSMAP_V2P(get_physmap_end()), PAGE_SIZE);
+// The page map goes right after the kernel, like the physmap tables did
+pmm_status_t pmm_status = pmm_init(kmem->ram, kend_grow(mb, pmm_map_size(kmem->ram)));
 if(pmm_status != PMM_OK) {
     QEMU_LOG("[PMM] Failed to initialize physical memory manager", TOTAL_DBG);
-    return;
+    return false;
 }
 
-// Exclude kernel image from the allocator before populating freelists
-pmm_exclude_range(get_kstart(false), get_kend(false));
+// Nothing below KEND is ever handed out
+pmm_exclude_range(0, kmem->kend);
 
 // Populate freelists from firmware reported available regions
-for (size_t i = 0; i < multiboot.memory_map_length; i++) {
+for (size_t i = 0; i < mb->memory_map_length; i++) {
     uintptr_t region_start, region_end;
     uint32_t region_type;
-    if (multiboot_mem_region(&multiboot, i, &region_start, &region_end, &region_type) != 0)
+    if (multiboot_mem_region(mb, i, &region_start, &region_end, &region_type) != 0)
         continue;
     if (region_type != MULTIBOOT_MEMORY_AVAILABLE){
         vmm_add_mmio(region_end - region_start);
@@ -683,9 +670,9 @@ for (size_t i = 0; i < multiboot.memory_map_length; i++) {
 QEMU_LOG("Initialized physical memory manager", TOTAL_DBG);
 ```
 
-The `0x0` start and `PHYSMAP_V2P(get_physmap_end())` end define the entire managed physical range. Everything between those two addresses is potentially allocatable, subject to exclusions. The kernel is excluded before any populating happens, so there is no window in which the kernel's physical pages could be handed out accidentally.
+The PMM manages `[0, kmem->ram)`, all of RAM. Note that it's `ram` and not `physmap_end`. The physmap may stretch further to cover the framebuffer, but that's not memory anyone should ever allocate. Everything in that range is potentially allocatable, subject to exclusions. The page map is carved out with `kend_grow` *before* the exclusion is registered, so the exclusion covers it too, and there is no window in which the kernel's (or the page map's) physical pages could be handed out accidentally.
 
-After this block runs, every usable physical page the firmware knows about, minus the kernel, is represented in the PMM's free lists and ready to allocate.
+After this block runs, every usable physical page the firmware knows about, minus everything below `KEND`, is represented in the PMM's free lists and ready to allocate.
 
 >[!NOTE]
 >You might notice that non-available memory regions are passed to `vmm_add_mmio` rather than silently skipped. This tallies up the total MMIO reservation the VMM needs to account for in its virtual address space layout. We will cover what that actually does in the next chapter.
@@ -826,7 +813,6 @@ The slot size is the user's requested size *plus* the allocation header. The all
 typedef struct {
     uint32_t magic;
     uint32_t cache_id;
-    uint64_t alloc_timestamp;
 } slab_alloc_header_t;
 ```
 
@@ -841,23 +827,27 @@ if (header->cache_id != cache->cache_id) {
 
 The minimum slot size (`SLAB_MIN_OBJ_SIZE`) ensures that even if the user asks for a tiny object (smaller than what a free header needs) the slot is still large enough to hold the free-list metadata when it is in the free state. More on what that free-list metadata looks like next.
 
-The cache structure itself is allocated from the PMM:
+So where does the `slab_cache_t` itself live? We can't allocate it from the slab, that's the allocator we're in the middle of building. We could ask the PMM for a page, but `sizeof(slab_cache_t)` is a tiny fraction of `4KB`, so that's exactly the waste the slab exists to avoid.
+
+>[!NOTE]
+>This is a classic bootstrapping problem in OS development. You need an allocator to build the data structures that describe the allocator.
+
+GatOS takes the easy way out. There can only ever be 16 caches (`SLAB_MAX_CACHES`), so they all live in a static table in BSS:
 
 ```c
+static slab_cache_t cache_pool[SLAB_MAX_CACHES];
+
 static slab_cache_t* slab_alloc_cache_struct(void) {
-    uint64_t phys = 0;
-    pmm_status_t status = pmm_alloc(sizeof(slab_cache_t), &phys);
-    // ...
-    slab_cache_t* cache = (slab_cache_t*)PHYSMAP_P2V(phys);
-    kmemset(cache, 0, sizeof(slab_cache_t));
-    return cache;
+    for (int i = 0; i < SLAB_MAX_CACHES; i++) {
+        if (cache_pool[i].magic == SLAB_CACHE_MAGIC) continue;
+        kmemset(&cache_pool[i], 0, sizeof(slab_cache_t));
+        return &cache_pool[i];
+    }
+    return NULL;
 }
 ```
 
-For now, the `slab_cache_t` structure itself is backed by a PMM allocation. This is wasteful, because `sizeof(slab_cache_t)` is much less than `4KB`, so most of that page goes unused. This is exactly the kind of inefficiency the Slab allocator is designed to eliminate for other structures. The irony is that we cannot use the Slab allocator to back the Slab allocator's own cache structures without a bootstrapping problem. Once the heap is online in the next chapter, cache structures can move there.
-
->[!NOTE]
->This is a classic bootstrapping problem in OS development. You need an allocator to build the data structures that describe the allocator. The typical solution is to have a simpler, less efficient allocator for bootstrapping, then transition to the real allocator once it is self-sufficient. GatOS uses PMM allocations for the Slab's own metadata during early boot, which is slightly wasteful (much less so than using the PMM for everything, of course) but correct.
+A slot whose `magic` is set belongs to a live cache, so we skip it. The first one that isn't gets cleared and handed out. Destroying a cache clears its magic, which frees the slot up again. No allocation, no bootstrapping problem, and the whole table costs a couple KiB that are part of the kernel image anyway.
 
 ### The Object Freelist
 
@@ -994,77 +984,56 @@ Why prefer partial over empty? Because using a partial slab increases the densit
 
 We only pull from an empty slab when no partial exists, and we only call `pmm_alloc` when there are no empty slabs at all.
 
-After allocating from a slab, we check whether its state has changed and move it between lists accordingly:
+After allocating from a slab, its fill level may have changed, so we put it on the list it now belongs on. That's `slab_relist`'s job:
 
 ```c
-if (slab->in_use == slab->capacity) {
-    if (slab->list_id == SLAB_LIST_PARTIAL) {
-        slab_move_to_list(&cache->slabs_partial, &cache->slabs_full, slab, SLAB_LIST_FULL);
-        cache->stats.partial_slabs--;
-        cache->stats.full_slabs++;
-    } else if (slab->list_id == SLAB_LIST_EMPTY) {
-        slab_move_to_list(&cache->slabs_empty, &cache->slabs_full, slab, SLAB_LIST_FULL);
-        cache->stats.empty_slabs--;
-        cache->stats.full_slabs++;
+static void slab_relist(slab_cache_t* cache, slab_t* slab) {
+    slab_t** lists[] = { NULL, &cache->slabs_empty, &cache->slabs_partial, &cache->slabs_full };
+    uint64_t* counts[] = { NULL, &cache->stats.empty_slabs, &cache->stats.partial_slabs, &cache->stats.full_slabs };
+
+    uint8_t to = slab->in_use == 0 ? SLAB_LIST_EMPTY
+               : slab->in_use == slab->capacity ? SLAB_LIST_FULL
+               : SLAB_LIST_PARTIAL;
+    uint8_t from = slab->list_id;
+    if (to == from) return;
+
+    if (from != SLAB_LIST_NONE) {
+        slab_remove_from_list(lists[from], slab);
+        (*counts[from])--;
     }
-} else if (slab->in_use == 1) {
-    if (slab->list_id == SLAB_LIST_EMPTY) {
-        slab_move_to_list(&cache->slabs_empty, &cache->slabs_partial, slab, SLAB_LIST_PARTIAL);
-        cache->stats.empty_slabs--;
-        cache->stats.partial_slabs++;
-    }
+    slab_add_to_list(lists[to], slab, to);
+    (*counts[to])++;
 }
 ```
 
-If filling the last slot in a slab makes it full, we move it to `slabs_full`. If the first allocation from an empty slab happens, we move it to `slabs_partial`. The transitions are not checked on every allocation, only at the specific thresholds (`in_use == 1` and `in_use == capacity`). Between those, the slab stays wherever it is.
+**What's happening here:**
 
-`slab_move_to_list` is just remove-then-add:
-
-```c
-static void slab_move_to_list(slab_t** from_list, slab_t** to_list, slab_t* slab, uint8_t to_id) {
-    slab_remove_from_list(from_list, slab);
-    slab_add_to_list(to_list, slab, to_id);
-}
-```
+* The two arrays line up with the `SLAB_LIST_*` ids, so `lists[id]` is that list and `counts[id]` is its counter in the stats. Index `0` is `SLAB_LIST_NONE`, a slab that isn't on any list yet, hence the `NULL`.
+* `to` is where the slab *should* be, judging by `in_use`. `from` is where it is now.
+* If those match, nothing to do. That's the common case: most allocations don't change a slab's state.
+* Otherwise, we take it off its old list and put it on the new one, counters included.
 
 The `list_id` field on the slab is critical here. Without it, moving a slab between lists would require knowing which list it came from, which would mean scanning all three. With `list_id`, we know exactly where to remove it from in O(1).
 
 ### Freeing and Page Reclamation
 
-Freeing an object from a slab updates `in_use`, pushes the slot back onto the slab's freelist, and handles the three list transitions in reverse:
+Freeing an object from a slab updates `in_use`, pushes the slot back onto the slab's freelist, and calls the same `slab_relist`. Then there's one extra step:
 
 ```c
-if (slab->in_use == 0) {
-    if (slab->list_id == SLAB_LIST_PARTIAL) {
-        slab_move_to_list(&cache->slabs_partial, &cache->slabs_empty, slab, SLAB_LIST_EMPTY);
-        cache->stats.partial_slabs--;
-        cache->stats.empty_slabs++;
-    } else if (slab->list_id == SLAB_LIST_FULL) {
-        slab_move_to_list(&cache->slabs_full, &cache->slabs_empty, slab, SLAB_LIST_EMPTY);
-        cache->stats.full_slabs--;
-        cache->stats.empty_slabs++;
-    }
-
-    if (cache->stats.empty_slabs > 1) {
-        slab_remove_from_list(&cache->slabs_empty, slab);
-        slab_free_page(slab);
-        cache->stats.empty_slabs--;
-    }
-
-} else if (slab->in_use == slab->capacity - 1) {
-    if (slab->list_id == SLAB_LIST_FULL) {
-        slab_move_to_list(&cache->slabs_full, &cache->slabs_partial, slab, SLAB_LIST_PARTIAL);
-        cache->stats.full_slabs--;
-        cache->stats.partial_slabs++;
-    }
+// An empty slab goes back to the empty list
+slab_relist(cache, slab);
+if (slab->in_use == 0 && cache->stats.empty_slabs > 1) {
+    slab_remove_from_list(&cache->slabs_empty, slab);
+    cache->stats.empty_slabs--;
+    slab_free_page(slab);
 }
 ```
 
-When a slab becomes empty, we move it to `slabs_empty`. But then there is an extra check: `if (cache->stats.empty_slabs > 1)`. If there is already an empty slab in the cache, we do not need this one too. We free it back to the PMM.
+When a slab becomes empty, `slab_relist` moves it to `slabs_empty`. But then there is an extra check: `if (cache->stats.empty_slabs > 1)`. If there is already an empty slab in the cache, we do not need this one too. We free it back to the PMM.
 
 Why `> 1` rather than `> 0`? We keep *one* empty slab around as a warm buffer for the next allocation burst. If we returned every empty slab immediately, a sequence of alloc-free-alloc-free would hammer the PMM with page allocations and frees, which is expensive. Keeping one empty slab in reserve absorbs that pattern at no ongoing cost (one idle PMM page per cache is not a big deal). Keeping *two or more* empty slabs would just waste memory.
 
-When a full slab has one object freed, it drops back to partial, becoming a candidate for future allocations again.
+And when a full slab has one object freed, `slab_relist` drops it back to partial, making it a candidate for future allocations again.
 
 `slab_free_page` is the reverse of `slab_allocate_page`:
 
@@ -1094,25 +1063,7 @@ This forces the ordering:
 PMM → Slab → VMM
 ```
 
-Each layer is a prerequisite for the next. Violating this order means the VMM cannot bootstrap its own data structures, and you get a panic or, worse, silent corruption. Here is the relevant sequence from `kmain.c` to make this concrete:
-
-```c
-// Initialize PMM before VMM since VMM needs to allocate memory for page tables
-pmm_status_t pmm_status = pmm_init(0x0, PHYSMAP_V2P(get_physmap_end()), PAGE_SIZE);
-// ... exclusions and population ...
-QEMU_LOG("Initialized physical memory manager", TOTAL_DBG);
-
-// Initialize slab allocator before VMM since VMM needs to allocate memory for its structures
-slab_status_t slab_status = slab_init();
-if(slab_status != SLAB_OK) {
-    QEMU_LOG("[Slab] Failed to initialize slab allocator", TOTAL_DBG);
-    return;
-}
-QEMU_LOG("Initialized slab allocator", TOTAL_DBG);
-
-// Initialize VMM and switch to it
-// ...
-```
+Each layer is a prerequisite for the next. Violating this order means the VMM cannot bootstrap its own data structures, and you get a panic or, worse, silent corruption. You'll see this exact order in the init sequence at the end of the chapter.
 
 `slab_init` itself is intentionally simple:
 
@@ -1144,42 +1095,30 @@ slab_status_t slab_init(void) {
 }
 ```
 
-It checks the PMM is up (`pmm_is_initialized()`), initializes the global state, and sets `slab_inited = true`. No memory allocation happens here, no PMM pages are claimed. The Slab allocator initializes lazily, so PMM pages are only claimed when the first cache is created, or when the first allocation from a cache happens and a new slab needs to be backed.
+It checks the PMM is up (`pmm_is_initialized()`), initializes the global state, and sets `slab_inited = true`. No memory allocation happens here, no PMM pages are claimed. The Slab allocator initializes lazily, so PMM pages are only claimed when the first allocation from a cache happens and a new slab needs to be backed.
 
 ### Integrity Checks
 
 Both allocators include deep verification functions: `pmm_verify_integrity` and `slab_verify_integrity`. These are not meant for production use on every allocation. They are for debugging, tests, or called when you suspect something has gone wrong.
 
-`pmm_verify_integrity` walks every free list at every order, checking magic values, alignment, and the stats counter against what it actually counts:
+`pmm_verify_integrity` walks every free list at every order. For every block, it checks that it's in range and aligned to its size, that the page map marks it as a free block of that order, that its header is valid, and that its `prev_phys` really points at the block we just came from. Then it compares what it counted against `stats.free_blocks[order]`. Any discrepancy means the stats have drifted from reality, which usually indicates a push or pop happened without the corresponding stats update.
 
 ```c
-for (uint32_t order = 0; order <= max_order; order++) {
-    uint64_t cur = free_heads[order];
-    int count = 0;
-    uint64_t size = order_to_size(order);
-
-    while (cur != EMPTY_SENTINEL) {
-        count++;
-        counted_free[order]++;
-
-        if (count > 100000) {
-            LOGF("[PMM] Order %u: Possible infinite loop detected\n", order);
-            all_ok = false;
-            break;
-        }
-
-        if (!validate_free_header(cur, order)) { ... }
-
-        if ((cur & (size - 1)) != 0) {
-            LOGF("[PMM] Order %u: Block 0x%lx not naturally aligned\n", order, cur, size);
-            all_ok = false;
-        }
-        // ...
+for (uint64_t cur = free_heads[order]; cur != EMPTY_SENTINEL; cur = hdr_of(cur)->next_phys) {
+    if (cur >= range_end || (cur & (order_to_size(order) - 1)) ||
+        pmap[cur / PAGE_SIZE] != (PG_FREE | order) || !valid_hdr(cur, order) ||
+        hdr_of(cur)->prev_phys != prev || ++count > stats.free_blocks[order]) {
+        LOGF("[PMM] Order %u: broken block at 0x%lx\n", order, cur);
+        ok = false;
+        break;
     }
+    prev = cur;
 }
 ```
 
-It checks for infinite loops (a free list where two blocks point to each other in a cycle), header corruption, and alignment violations. At the end, it compares the counted free block totals against `stats.free_blocks[order]`. Any discrepancy means the stats have drifted from reality, which usually indicates a push or pop happened without the corresponding stats update.
+That last condition doubles as the infinite loop guard. A list where two blocks point to each other in a cycle would keep counting forever, so the moment the count goes past what the stats say, we stop.
+
+Finally, it checks the page map from the other side. Every free mark in the page map has to belong to a block that's actually on a list, so the total number of marks must match the total number of listed blocks. A mismatch means a block that's marked free but unreachable, or the reverse.
 
 `slab_verify_integrity` goes through every cache, every slab in every list, validates the slab headers, checks that empty slabs actually have `in_use == 0`, that full slabs actually have `in_use == capacity`, and that the free object count in each slab matches `capacity - in_use`. It even has an infinite loop guard:
 
@@ -1203,16 +1142,16 @@ They are slow (O(n) in the number of free blocks or slab objects), but correctne
 
 ## Putting It All Together
 
-Here is the section of `kmain.c` that this chapter describes, with the reasoning made explicit:
+Here is the section of `kernel_bootstrap()` that this chapter describes, with the reasoning made explicit:
 
 ```c
 // PMM: the foundation. Physical pages. Nothing works without this.
-pmm_status_t pmm_status = pmm_init(0x0, PHYSMAP_V2P(get_physmap_end()), PAGE_SIZE);
-if(pmm_status != PMM_OK) { ... return; }
+pmm_status_t pmm_status = pmm_init(kmem->ram, kend_grow(mb, pmm_map_size(kmem->ram)));
+if(pmm_status != PMM_OK) { ... return false; }
 
-pmm_exclude_range(get_kstart(false), get_kend(false));
+pmm_exclude_range(0, kmem->kend);
 
-for (size_t i = 0; i < multiboot.memory_map_length; i++) {
+for (size_t i = 0; i < mb->memory_map_length; i++) {
     // ... 
     pmm_populate(region_start, region_end);
 }
@@ -1220,7 +1159,7 @@ QEMU_LOG("Initialized physical memory manager", TOTAL_DBG);
 
 // Slab: small object allocation. VMM depends on this.
 slab_status_t slab_status = slab_init();
-if(slab_status != SLAB_OK) { ... return; }
+if(slab_status != SLAB_OK) { ... return false; }
 QEMU_LOG("Initialized slab allocator", TOTAL_DBG);
 
 // VMM can now use Slab for its tracking structures...

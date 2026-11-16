@@ -39,7 +39,7 @@ jobs:
         }
 
         $content = Get-Content debug.log
-        $matches = $content | Select-String "Test Results:\s*(\d+)/(\d+)"
+        $matches = $content | Select-String "(\d+)/(\d+) passed"
         
         if (-not $matches) {
             Write-Error "No test result summaries found in logs!"

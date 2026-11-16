@@ -3,10 +3,6 @@
  *
  * Timing thresholds are derived at runtime from a calibration pass.
  *
- * Output is fixed for CI parsing:
- * "[TEST] <name>  [PASS|FAIL]"
- * "Timer Test Results: N/N"
- *
  * Author: Claude Code
  */
 
@@ -20,8 +16,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-static int ntests = 0;
-static int npass = 0;
+static suite_t suite;
 
 #pragma region Calibration
 
@@ -58,7 +53,7 @@ static void calibrate(void) {
             uint64_t over = (b - a > 1) ? (b - a - 1) : 0;
             if (over > max) max = over;
         }
-        ms_ovhd = max * 3 + 5; /* 3× margin + 5ms absolute floor */
+        ms_ovhd = max * 3 + 5; /* 3x margin + 5ms absolute floor */
     }
 
     /* sleep_us(500) overshoot */
@@ -72,12 +67,12 @@ static void calibrate(void) {
             uint64_t over_us = over_ns / 1000ULL;
             if (over_us > max) max = over_us;
         }
-        us_ovhd = max * 3 + 2000; /* 3× margin + 2ms floor */
+        us_ovhd = max * 3 + 2000; /* 3x margin + 2ms floor */
     }
 
-    LOGF("[CAL] TSC freq    : %lu kHz\n", tsc_khz);
-    LOGF("[CAL] ms overhead : %lu ms\n", ms_ovhd);
-    LOGF("[CAL] us overhead : %lu us\n", us_ovhd);
+    LOGF("calibrated TSC: %lu kHz\n", tsc_khz);
+    LOGF("calibrated ms overhead: %lu ms\n", ms_ovhd);
+    LOGF("calibrated us overhead: %lu us\n", us_ovhd);
     calibrated = true;
 }
 #pragma endregion
@@ -171,7 +166,7 @@ static bool t_tsc_freq(void) {
     /* Frequency must be >100 MHz and <10 GHz (physically impossible today) */
     TEST_ASSERT(tsc_khz > 0);
     TEST_ASSERT(tsc_khz < 10000000ULL);
-    LOGF("[INFO] TSC %lu kHz\n", tsc_khz);
+    LOGF("TSC %lu kHz\n", tsc_khz);
     return true;
 }
 #pragma endregion
@@ -244,8 +239,8 @@ static bool t_ms_hi(void) {
     uint64_t a = get_uptime_ms();
     sleep_ms(100);
     uint64_t b = get_uptime_ms();
-    uint64_t upper = 100 + ms_ovhd * 100; /* per-ms overhead × count */
-    LOGF("[INFO] sleep_ms(100)=%lu ms (cap:%lu)\n", (b-a), upper);
+    uint64_t upper = 100 + ms_ovhd * 100; /* per-ms overhead x count */
+    LOGF("sleep_ms(100)=%lu ms (cap:%lu)\n", (b-a), upper);
     TEST_ASSERT((b - a) <= upper);
     return true;
 }
@@ -285,7 +280,7 @@ static bool t_ms_various(void) {
         uint64_t b = get_uptime_ms();
         uint64_t lo = (t * 90) / 100;
         uint64_t hi = t + ms_ovhd * t + 10;
-        LOGF("[%lums:%lu] ", t, b - a);
+        LOGF("sleep_ms(%lu)=%lu ms\n", t, b - a);
         TEST_ASSERT((b - a) >= lo);
         TEST_ASSERT((b - a) <= hi);
     }
@@ -312,7 +307,7 @@ static bool t_us_hi(void) {
     uint64_t b = get_uptime_ns();
     uint64_t delta_us = (b - a) / 1000ULL;
     uint64_t upper = 500 + us_ovhd;
-    LOGF("[INFO] sleep_us(500)=%lu us (cap:%lu)\n", delta_us, upper);
+    LOGF("sleep_us(500)=%lu us (cap:%lu)\n", delta_us, upper);
     TEST_ASSERT(delta_us <= upper);
     return true;
 }
@@ -328,7 +323,7 @@ static bool t_us_small(void) {
     uint64_t a = get_uptime_ms();
     for (int i = 0; i < 100; i++) sleep_us(1);
     uint64_t b = get_uptime_ms();
-    TEST_ASSERT((b - a) < 500); /* 100 × 1us sleeps well under 500ms */
+    TEST_ASSERT((b - a) < 500); /* 100 x 1us sleeps well under 500ms */
     return true;
 }
 #pragma endregion
@@ -350,7 +345,7 @@ static bool t_drift_hi(void) {
     for (int i = 0; i < 50; i++) sleep_ms(2);
     uint64_t b = get_uptime_ms();
     uint64_t upper = 100 + ms_ovhd * 50 + 10;
-    LOGF("[INFO] drift(50×2ms)=%lu ms (cap:%lu)\n", (b - a), upper);
+    LOGF("drift(50x2ms)=%lu ms (cap:%lu)\n", (b - a), upper);
     TEST_ASSERT((b - a) <= upper);
     return true;
 }
@@ -435,7 +430,7 @@ static bool t_per_count(void) {
     irq_unregister(vec);
     uint32_t cnt = irq_cnt;
     uint64_t elapsed = t1 - t0;
-    LOGF("[INFO] periodic: %u irqs in %lu ms\n", cnt, elapsed);
+    LOGF("periodic: %u irqs in %lu ms\n", cnt, elapsed);
     TEST_ASSERT(cnt >= 5);
     return true;
 }
@@ -454,7 +449,7 @@ static bool t_per_stop(void) {
     sleep_ms(50);
     irq_unregister(vec);
     uint32_t after_stop = irq_cnt;
-    LOGF("[INFO] stop: %u before, %u after\n", at_stop, after_stop);
+    LOGF("stop: %u before, %u after\n", at_stop, after_stop);
     TEST_ASSERT(at_stop >= 1);
     TEST_ASSERT(after_stop <= at_stop + 1); /* at most 1 in-flight */
     return true;
@@ -479,7 +474,7 @@ static bool t_per_rearm(void) {
     lapic_timer_stop();
     uint32_t second_run = irq_cnt;
     irq_unregister(vec);
-    LOGF("[INFO] rearm: %u then %u\n", first_run, second_run);
+    LOGF("rearm: %u then %u\n", first_run, second_run);
     TEST_ASSERT(first_run >= 1);
     TEST_ASSERT(second_run >= 1);
     return true;
@@ -489,17 +484,12 @@ static bool t_per_rearm(void) {
 #pragma region Runner
 
 static void run_test(const char* name, bool (*fn)(void)) {
-    ntests++;
-    LOGF("[TEST] %-40s ", name);
-    if (fn()) { npass++; LOGF("[PASS]\n"); }
-    else { LOGF("[FAIL]\n"); }
+    test_begin(name);
+    test_end(&suite, fn());
 }
 
 void test_timers(void) {
-    ntests = 0;
-    npass = 0;
-
-    LOGF("\n--- BEGIN TIMER SUBSYSTEM TEST ---\n");
+    suite_begin(&suite, "Timers");
 
     run_test("HPET Available (no crash)",    t_hpet_avail);
     run_test("HPET Monotonic",               t_hpet_mono);
@@ -535,21 +525,6 @@ void test_timers(void) {
     run_test("LAPIC Periodic Stop",          t_per_stop);
     run_test("LAPIC Periodic Rearm",         t_per_rearm);
 
-    LOGF("--- END TIMER SUBSYSTEM TEST ---\n");
-    LOGF("Timer Test Results: %d/%d\n\n", npass, ntests);
-
-    #ifdef TEST_BUILD
-    #include <kernel/drivers/console.h>
-    #include <klibc/stdio.h>
-    if (npass != ntests) {
-        console_set_color(CONSOLE_COLOR_RED, CONSOLE_COLOR_BLACK);
-        kprintf("[-] Some timer tests failed (%d/%d passed).\n", npass, ntests);
-        console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
-    } else {
-        console_set_color(CONSOLE_COLOR_GREEN, CONSOLE_COLOR_BLACK);
-        kprintf("[+] All timer tests passed! (%d/%d)\n", npass, ntests);
-        console_set_color(CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
-    }
-    #endif
+    suite_end(&suite);
 }
 #pragma endregion

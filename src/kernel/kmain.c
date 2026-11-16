@@ -13,7 +13,7 @@
 // Forward declaration of userspace app launcher
 extern void uapps(void);
 
-static char* KERNEL_VERSION = "v2.2.0";
+static char* KERNEL_VERSION = "v2.3.0";
 
 void kernel_main(void* mb_info) {
 
