@@ -372,6 +372,48 @@ pmm_status_t pmm_free(uint64_t phys, size_t size_bytes) {
 }
 
 /*
+ * pmm_alloc_exact - Like pmm_alloc, but the rounding tail goes straight back to the free lists,
+ * so exactly align_up(size, PAGE_SIZE) bytes stay allocated
+ */
+pmm_status_t pmm_alloc_exact(size_t size_bytes, uint64_t* out_phys) {
+    if (!out_phys || size_bytes == 0) return PMM_ERR_INVALID;
+    if (!inited) return PMM_ERR_NOT_INIT;
+
+    uint32_t order = size_to_order(size_bytes);
+    if (order > max_order) return PMM_ERR_OOM;
+
+    bool flags = spinlock_acquire(&pmm_lock);
+    stats.alloc_calls++;
+    pmm_status_t status = alloc_order(order, out_phys);
+    if (status == PMM_OK)
+        split_range(*out_phys + align_up(size_bytes, PAGE_SIZE), *out_phys + order_to_size(order));
+    spinlock_release(&pmm_lock, flags);
+    return status;
+}
+
+/*
+ * pmm_free_range - Frees any page aligned range, in the largest aligned blocks that fit
+ */
+pmm_status_t pmm_free_range(uint64_t phys, size_t size_bytes) {
+    if (!inited) return PMM_ERR_NOT_INIT;
+    if (phys & (PAGE_SIZE - 1)) return PMM_ERR_NOT_ALIGNED;
+
+    uint64_t end = phys + align_up(size_bytes, PAGE_SIZE);
+    if (end > range_end || end < phys) return PMM_ERR_OUT_OF_RANGE;
+
+    bool flags = spinlock_acquire(&pmm_lock);
+    pmm_status_t status = PMM_OK;
+    while (phys < end && status == PMM_OK) {
+        uint32_t o = max_order;
+        while (order_to_size(o) > end - phys || (phys & (order_to_size(o) - 1))) o--;
+        status = free_order(phys, o);
+        phys += order_to_size(o);
+    }
+    spinlock_release(&pmm_lock, flags);
+    return status;
+}
+
+/*
  * pmm_is_free - True if the page at phys is currently free
  */
 bool pmm_is_free(uint64_t phys) {

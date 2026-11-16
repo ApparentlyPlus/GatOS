@@ -14,66 +14,12 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#pragma region Mirror internal structures for white-box inspection
-
-#define HEAP_MAGIC       0xF005BA11
-#define BLOCK_MAGIC_USED 0xABADCAFE
-#define BLOCK_MAGIC_FREE 0xA110CA7E
-#define BLOCK_RED_ZONE   0x8BADF00D
-#define MIN_BLOCK_SIZE   32
+#pragma region Tracker state
 
 typedef struct {
     bool active;
     void* ptr;
 } htrace_t;
-
-typedef struct heap_test_arena {
-    uint32_t magic;
-    struct heap_test_arena* next;
-    struct heap_test_arena* prev;
-    uintptr_t start;
-    uintptr_t end;
-    size_t size;
-    void* first_block;
-    size_t total_free;
-    size_t total_allocated;
-} heap_test_arena_t;
-
-#define HEAP_TEST_BIN_COUNT 16
-
-typedef struct {
-    uint32_t magic;
-    vmm_t* vmm;
-    void* arenas;
-    void* bins[HEAP_TEST_BIN_COUNT];
-    size_t min_arena_size;
-    size_t max_size;
-    size_t current_size;
-    uint32_t flags;
-    bool is_kernel;
-    size_t total_allocated;
-    size_t total_free;
-    size_t allocation_count;
-    size_t arena_count;
-} heap_test_t;
-
-typedef struct heap_test_header {
-    uint32_t magic;
-    uint32_t red_zone_pre;
-    size_t size;
-    size_t total_size;
-    heap_test_arena_t* arena;
-    struct heap_test_header* next_free;
-    struct heap_test_header* prev_free;
-    uint32_t red_zone_post;
-} __attribute__((aligned(16))) heap_test_hdr_t;
-
-typedef struct {
-    uint32_t red_zone_pre;
-    heap_test_hdr_t* header;
-    uint32_t magic;
-    uint32_t red_zone_post;
-} __attribute__((aligned(16))) heap_test_ftr_t;
 
 #define MAX_TRACK 1024
 static htrace_t track[MAX_TRACK];
@@ -99,15 +45,15 @@ static void tr_free(void) {
     tidx = 0;
 }
 
-static heap_test_hdr_t* hdr(void* p) {
-    return (heap_test_hdr_t*)((uint8_t*)p - sizeof(heap_test_hdr_t));
+static blk_hdr_t* hdr(void* p) {
+    return (blk_hdr_t*)((uint8_t*)p - sizeof(blk_hdr_t));
 }
 
-static heap_test_ftr_t* ftr(heap_test_hdr_t* h) {
-    return (heap_test_ftr_t*)((uint8_t*)h + sizeof(heap_test_hdr_t) + h->size);
+static blk_foot_t* ftr(blk_hdr_t* h) {
+    return (blk_foot_t*)((uint8_t*)h + sizeof(blk_hdr_t) + h->size);
 }
 
-static heap_test_t* heapv(void) { return (heap_test_t*)heap_kernel_get(); }
+static heap_t* heapv(void) { return heap_kernel_get(); }
 #pragma endregion
 
 #pragma region Initialization
@@ -158,7 +104,7 @@ static bool t_alloc_align_small(void) {
 static bool t_alloc_meta(void) {
     tr_reset();
     void* p = kmalloc(64); tr_add(p);
-    heap_test_hdr_t* h = hdr(p);
+    blk_hdr_t* h = hdr(p);
     TEST_ASSERT(h->magic == BLOCK_MAGIC_USED);
     TEST_ASSERT(h->size >= 64);
     TEST_ASSERT(h->red_zone_pre == BLOCK_RED_ZONE);
@@ -169,8 +115,8 @@ static bool t_alloc_meta(void) {
 static bool t_alloc_ftr(void) {
     tr_reset();
     void* p = kmalloc(48); tr_add(p);
-    heap_test_hdr_t* h = hdr(p);
-    heap_test_ftr_t* f = ftr(h);
+    blk_hdr_t* h = hdr(p);
+    blk_foot_t* f = ftr(h);
     TEST_ASSERT(f->magic == BLOCK_MAGIC_USED);
     TEST_ASSERT(f->red_zone_pre == BLOCK_RED_ZONE);
     TEST_ASSERT(f->red_zone_post == BLOCK_RED_ZONE);
@@ -191,7 +137,7 @@ static bool t_alloc_wr(void) {
 
 static bool t_free_marks(void) {
     void* p = kmalloc(32);
-    heap_test_hdr_t* h = hdr(p);
+    blk_hdr_t* h = hdr(p);
     kfree(p);
     TEST_ASSERT(h->magic == BLOCK_MAGIC_FREE);
     return true;
@@ -247,7 +193,7 @@ static bool t_realloc_null_malloc(void) {
 static bool t_realloc_zero_free(void) {
     tr_reset();
     void* p = kmalloc(64); tr_add(p);
-    heap_test_hdr_t* h = hdr(p);
+    blk_hdr_t* h = hdr(p);
     void* r = krealloc(p, 0);
     TEST_ASSERT(r == NULL);
     TEST_ASSERT(h->magic == BLOCK_MAGIC_FREE);
@@ -335,7 +281,7 @@ static bool t_validate_ok(void) {
 static bool t_validate_bad(void) {
     tr_reset();
     void* p = kmalloc(48); tr_add(p);
-    heap_test_hdr_t* h = hdr(p);
+    blk_hdr_t* h = hdr(p);
     uint32_t saved = h->magic;
     h->magic = 0xBAD1BAD1;
     TEST_ASSERT(!heap_validate_blk((blk_hdr_t*)h));
@@ -372,8 +318,8 @@ static bool t_coalesce_fwd(void) {
     void* A = kmalloc(128); tr_add(A);
     void* B = kmalloc(128); tr_add(B);
     void* C = kmalloc(128); tr_add(C);
-    heap_test_hdr_t* hA = hdr(A);
-    heap_test_hdr_t* hB = hdr(B);
+    blk_hdr_t* hA = hdr(A);
+    blk_hdr_t* hB = hdr(B);
     size_t sA = hA->total_size, sB = hB->total_size;
     kfree(A); track[0].active = false;
     kfree(C); track[2].active = false;
@@ -408,15 +354,15 @@ static bool t_freelist_binned(void) {
     void* s3 = kmalloc(16); tr_add(s3);
     void* med = kmalloc(128);
     kfree(med); kfree(large); kfree(small);
-    heap_test_t* h = heapv();
+    heap_t* h = heapv();
     int cnt = 0;
     /* Every free block must sit in the bin covering its size: [16<<i, 32<<i) */
-    for (int bin = 0; bin < HEAP_TEST_BIN_COUNT; bin++) {
-        heap_test_hdr_t* cur = (heap_test_hdr_t*)h->bins[bin];
+    for (int bin = 0; bin < HEAP_BIN_COUNT; bin++) {
+        blk_hdr_t* cur = (blk_hdr_t*)h->bins[bin];
         while (cur) {
             size_t lo = (size_t)16 << bin;
             TEST_ASSERT(cur->size >= lo);
-            if (bin < HEAP_TEST_BIN_COUNT - 1) TEST_ASSERT(cur->size < lo * 2);
+            if (bin < HEAP_BIN_COUNT - 1) TEST_ASSERT(cur->size < lo * 2);
             cur = cur->next_free; cnt++;
         }
     }
@@ -429,7 +375,7 @@ static bool t_freelist_binned(void) {
 
 static bool t_arena_expand(void) {
     tr_reset();
-    heap_test_t* h = heapv();
+    heap_t* h = heapv();
     size_t arenas0 = h->arena_count;
     void* p = kmalloc(1024 * 1024); tr_add(p);
     TEST_ASSERT(p != NULL);
@@ -439,7 +385,7 @@ static bool t_arena_expand(void) {
 
 static bool t_arena_shrink(void) {
     tr_reset();
-    heap_test_t* h = heapv();
+    heap_t* h = heapv();
     size_t arenas0 = h->arena_count;
     void* p = kmalloc(1024 * 1024); tr_add(p);
     TEST_ASSERT(h->arena_count > arenas0);
@@ -454,7 +400,7 @@ static bool t_arena_shrink(void) {
 static bool t_hdr_corrupt(void) {
     tr_reset();
     void* p = kmalloc(32); tr_add(p);
-    heap_test_hdr_t* h = hdr(p);
+    blk_hdr_t* h = hdr(p);
     uint32_t saved = h->magic;
     h->magic = 0xDEADBEEF;
     heap_status_t s = heap_check(heap_kernel_get());
@@ -466,8 +412,8 @@ static bool t_hdr_corrupt(void) {
 static bool t_ftr_corrupt(void) {
     tr_reset();
     void* p = kmalloc(32); tr_add(p);
-    heap_test_hdr_t* h = hdr(p);
-    heap_test_ftr_t* f = ftr(h);
+    blk_hdr_t* h = hdr(p);
+    blk_foot_t* f = ftr(h);
     uint32_t saved = f->magic;
     f->magic = 0xBADF00D1;
     heap_status_t s = heap_check(heap_kernel_get());
@@ -479,7 +425,7 @@ static bool t_ftr_corrupt(void) {
 static bool t_rz_corrupt(void) {
     tr_reset();
     void* p = kmalloc(32); tr_add(p);
-    heap_test_hdr_t* h = hdr(p);
+    blk_hdr_t* h = hdr(p);
     uint32_t saved = h->red_zone_post;
     h->red_zone_post = 0;
     heap_status_t s = heap_check(heap_kernel_get());

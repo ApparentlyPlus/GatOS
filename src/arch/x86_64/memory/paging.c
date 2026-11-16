@@ -227,16 +227,18 @@ void build_physmap() {
 
 /*
  * dump_table - Logs the present entries of one table, then walks into the level below
+ * The format is what docs/tools/parse_pmt.py reads
  */
 static void dump_table(uint64_t* table, int level) {
     static const char* names[] = { "PML4", "  PDPT", "    PD", "      PT" };
+    static const char* below[] = { "PDPT", "PD", "PT", "PHYS" };
 
     for (int i = 0; i < PAGE_ENTRIES; i++) {
         uint64_t e = table[i];
         if (!(e & PAGE_PRESENT)) continue;
 
         bool leaf = level == 3 || (level > 0 && (e & PAGE_HUGE));
-        LOGF("%s[%x]: 0x%lx%s\n", names[level], i, e, leaf ? "" : " ->");
+        LOGF("%s[%X]: %lX -> %s\n", names[level], i, e, leaf ? "PHYS" : below[level]);
         if (!leaf) dump_table((uint64_t*)PHYSMAP_P2V(PT_ENTRY_ADDR(e)), level + 1);
     }
 }

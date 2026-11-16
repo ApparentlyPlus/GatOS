@@ -10,6 +10,9 @@ def parse_addr(s):
         return int(s[8:], 16) | (0xffffffff << 32)
     return int(s, 16)
 
+ADDR_4K = 0x000FFFFFFFFFF000
+ADDR_2M = 0x000FFFFFFFE00000
+
 # 48-bit canonical -> 64-bit: sign-extend bit 47
 def canonical(pml4, pdpt, pd, pt):
     a = (pml4 << 39) | (pdpt << 30) | (pd << 21) | (pt << 12)
@@ -25,18 +28,22 @@ class PageTables:
         m = ENTRY.match(line.strip())
         if not m:
             return
-        kind, idx, val, _ = m.groups()
+        kind, idx, val, target = m.groups()
         idx, val = int(idx, 16), int(val, 16)
 
         if kind == 'PML4':
             self.cur = [idx, None, None]
         elif kind == 'PDPT':
             self.cur[1:] = [idx, None]
+        elif kind == 'PD' and target == 'PHYS':
+            # 2MiB page, stored in place of a PT
+            a, b = self.cur[0], self.cur[1]
+            self.tree[a][b][idx] = val & ADDR_2M
         elif kind == 'PD':
             self.cur[2] = idx
         else:
             a, b, c = self.cur
-            self.tree[a][b][c][idx] = val
+            self.tree[a][b][c][idx] = val & ADDR_4K
 
     def load(self, path):
         with open(path) as f:
@@ -54,6 +61,16 @@ class PageTables:
                 return {'error': f"{name}[{i:04X}] -> Not existent", 'valid_path': path}
             path = path + [f"{name}[{i:04X}]"]
             node = node[i]
+            if name == "PD" and isinstance(node, int):
+                return {
+                    'pml4_index': idx[0],
+                    'pdpt_index': idx[1],
+                    'pd_index': idx[2],
+                    'pt_index': idx[3],
+                    'phys_addr': node | (addr & 0x1FFFFF),
+                    'phys_page': node,
+                    'valid': True
+                }
 
         return {
             'pml4_index': idx[0],
@@ -67,16 +84,22 @@ class PageTables:
 
     # Contiguous [virt_start, virt_end, phys_start, phys_end] runs, pages merged across tables.
     def ranges(self):
-        pages = sorted((canonical(a, b, c, d), e & ~0xFFF)
-                       for a, l3 in self.tree.items() for b, l2 in l3.items()
-                       for c, l1 in l2.items() for d, e in l1.items())
+        pages = []
+        for a, l3 in self.tree.items():
+            for b, l2 in l3.items():
+                for c, l1 in l2.items():
+                    if isinstance(l1, int):
+                        pages.append((canonical(a, b, c, 0), l1, 0x200000))
+                    else:
+                        pages.extend((canonical(a, b, c, d), e, 0x1000) for d, e in l1.items())
+
         runs = []
-        for v, p in pages:
+        for v, p, size in sorted(pages):
             if runs and v == runs[-1][1] + 1 and p == runs[-1][3] + 1:
-                runs[-1][1] += 0x1000
-                runs[-1][3] += 0x1000
+                runs[-1][1] += size
+                runs[-1][3] += size
             else:
-                runs.append([v, v + 0xFFF, p, p + 0xFFF])
+                runs.append([v, v + size - 1, p, p + size - 1])
         return runs
 
     def show_ranges(self):

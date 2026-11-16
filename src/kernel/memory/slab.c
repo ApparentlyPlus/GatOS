@@ -380,33 +380,6 @@ slab_status_t slab_init(void) {
 }
 
 /*
- * slab_shutdown - Destroy all caches and mark allocator uninitialized
- */
-void slab_shutdown(void) {
-    bool flags = spinlock_acquire(&slab_list_lock);
-    if (!slab_inited) {
-        spinlock_release(&slab_list_lock, flags);
-        return;
-    }
-
-    // slab_cache_destroy acquires the list lock, so we release before calling it
-    while (caches) {
-        slab_cache_t* cache = caches;
-        spinlock_release(&slab_list_lock, flags);
-        slab_cache_destroy(cache);
-        flags = spinlock_acquire(&slab_list_lock);
-    }
-
-    slab_inited = false;
-    caches = NULL;
-    next_cache_id = 1;
-    kmemset(&stats, 0, sizeof(slab_stats_t));
-
-    LOGF("[SLAB] Slab (System Wide) Allocator shutdown\n");
-    spinlock_release(&slab_list_lock, flags);
-}
-
-/*
  * slab_is_initialized - simple accessor
  */
 bool slab_is_initialized(void) { return slab_inited; }

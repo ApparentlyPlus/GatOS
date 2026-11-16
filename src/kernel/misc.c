@@ -159,24 +159,3 @@ void print_test_banner(char* KERNEL_VERSION){
     kprintf("Welcome to the GatOS Kernel %s Test Build!\n\n", KERNEL_VERSION);
 }
 
-/*
- * get_rip - Retrieves current instruction pointer value
- */
-uintptr_t get_rip() {
-    uintptr_t rip;
-    asm volatile ("lea (%%rip), %0" : "=r" (rip));
-    return rip;
-}
-
-/*
- * check_kpos - Verifies kernel is running in higher-half memory
- */
-void check_kpos() {
-    uintptr_t rip = get_rip();
-   
-    if (rip >= 0xFFFFFFFF80000000) {
-        kprintf("[KERNEL] Running in higher-half kernel space\n");
-    } else {
-        kprintf("[KERNEL] Running in lower memory\n");
-    }
-}

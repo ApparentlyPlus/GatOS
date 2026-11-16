@@ -50,7 +50,7 @@ void irq_user_fault(irq_handler_t handler)
 
 #pragma region IDT Setup
 
-void set_idt_entry(uint8_t vector, void* handler, uint8_t dpl, uint8_t ist_index)
+static void set_idt_entry(uint8_t vector, void* handler, uint8_t dpl, uint8_t ist_index)
 {
     uint64_t handler_addr = (uint64_t)handler;
 
@@ -73,7 +73,7 @@ void idt_set_ist(uint8_t vector, uint8_t ist)
     idt[vector].ist = ist & 0x7;
 }
 
-void load_idt(void* idt_addr)
+static void load_idt(void* idt_addr)
 {
     struct {
         uint16_t limit;
@@ -172,7 +172,10 @@ cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
     // A broken program only takes itself down, not the whole system
     if ((context->iret_cs & 3) == 3 && user_fault) {
         cpu_context_t* next = user_fault(context);
-        if (next) return next;
+        if (next) {
+            check_frame(next, vec);
+            return next;
+        }
     }
 
     panic_c(exc_name(vec), context);

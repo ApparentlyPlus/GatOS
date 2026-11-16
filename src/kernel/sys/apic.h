@@ -134,7 +134,6 @@ void lapic_init(void);
 void lapic_eoi(void);
 void lapic_write(uint32_t reg, uint32_t value);
 uint32_t lapic_read(uint32_t reg);
-void lapic_send_ipi(uint32_t dest_id, uint8_t vector);
 
 // virtual address of the mapped LAPIC MMIO region
 extern uint64_t lapic_base;
@@ -151,7 +150,6 @@ static inline uint32_t lapic_get_id(void) {
 void ioapic_init(void);
 void ioapic_set_entry(uint8_t index, uint64_t data);
 void ioapic_redirect(uint8_t irq, uint8_t vector, uint32_t dest_core, uint16_t flags);
-void ioapic_mask(uint8_t irq);
 void ioapic_unmask(uint8_t irq);
 
 // Timer

@@ -631,6 +631,154 @@ static bool t_swiss_cheese(void) {
 }
 #pragma endregion
 
+#pragma region Bug Regressions
+
+#define BIG (4UL * 1024 * 1024)
+
+/* Leaf entry for virt, 2MiB pages included. level 2 = PD, 3 = PT */
+static uint64_t leaf_of(uint64_t root, uintptr_t virt, int* level) {
+    uint64_t* t = (uint64_t*)PHYSMAP_P2V(root);
+    size_t idx[4] = { PML4_INDEX(virt), PDPT_INDEX(virt), PD_INDEX(virt), PT_INDEX(virt) };
+    for (int l = 0; l < 4; l++) {
+        uint64_t e = t[idx[l]];
+        if (!(e & PAGE_PRESENT)) { *level = l; return 0; }
+        if (l == 3 || (l == 2 && (e & PAGE_HUGE))) { *level = l; return e; }
+        t = (uint64_t*)PHYSMAP_P2V(PT_ENTRY_ADDR(e));
+    }
+    return 0;
+}
+
+static uint64_t free_bytes(void) {
+    pmm_stats_t s; pmm_get_stats(&s);
+    uint64_t total = 0;
+    for (int i = 0; i < PMM_MAX_ORDERS; i++) total += s.free_blocks[i] * ((uint64_t)PG << i);
+    return total;
+}
+
+/* Fills some freshly freed physical pages with junk, so the next allocation has something to leak */
+static void dirty_pages(size_t len) {
+    vmm_t* k = vmm_kernel_get(); void* p;
+    if (vmm_alloc(k, len, VM_FLAG_WRITE, NULL, &p) != VMM_OK) return;
+    kmemset(p, 0xA5, len);
+    vmm_free(k, p);
+}
+
+static bool all_zero(vmm_t* v, uintptr_t base, size_t len) {
+    for (uintptr_t off = 0; off < len; off += PG) {
+        uint64_t phys;
+        if (!vmm_get_physical(v, (void*)(base + off), &phys)) return false;
+        uint64_t* q = (uint64_t*)PHYSMAP_P2V(phys);
+        for (int i = 0; i < PG / 8; i++) if (q[i]) return false;
+    }
+    return true;
+}
+
+static bool t_alloc_at_zeroed(void) {
+    tr_reset();
+    vmm_t* u = vmm_create(USER_BASE, USER_END); TEST_ASSERT(u != NULL); tr_vmm(u);
+    dirty_pages(PG * 8);
+    void* p;
+    TEST_ASSERT_STATUS(vmm_alloc_at(u, (void*)(USER_BASE + PG * 4), PG * 8, VM_FLAG_USER | VM_FLAG_WRITE, NULL, &p), VMM_OK);
+    TEST_ASSERT(all_zero(u, (uintptr_t)p, PG * 8));
+    tr_free(); return true;
+}
+
+static bool t_huge_queries(void) {
+    tr_reset();
+    vmm_t* v = vmm_kernel_get(); void* p;
+    TEST_ASSERT_STATUS(vmm_alloc(v, BIG, VM_FLAG_WRITE, NULL, &p), VMM_OK); tr_alloc(v, p, BIG);
+    uintptr_t b = (uintptr_t)p;
+
+    int level;
+    TEST_ASSERT(leaf_of(v->pt_root, b, &level) && level == 2);
+
+    /* Physical addresses inside a 2MiB page keep their offset */
+    uint64_t p0, p1;
+    TEST_ASSERT(vmm_get_physical(v, (void*)b, &p0));
+    TEST_ASSERT(vmm_get_physical(v, (void*)(b + 0x12345), &p1));
+    TEST_ASSERT(p1 == p0 + 0x12345);
+
+    /* The syscall buffer check has to see the 2MiB pages too */
+    TEST_ASSERT(vmm_check_buffer(v, (void*)(b + PG * 3), PG * 600, VM_FLAG_WRITE));
+
+    /* So does vmm_protect */
+    TEST_ASSERT_STATUS(vmm_protect(v, p, VM_FLAG_NONE), VMM_OK);
+    uint64_t e = leaf_of(v->pt_root, b + PAGE_2MB, &level);
+    TEST_ASSERT(level == 2 && (e & PAGE_HUGE) && !(e & PAGE_WRITABLE));
+    TEST_ASSERT(!vmm_check_buffer(v, p, PG, VM_FLAG_WRITE));
+    TEST_ASSERT_STATUS(vmm_protect(v, p, VM_FLAG_WRITE), VMM_OK);
+    e = leaf_of(v->pt_root, b, &level);
+    TEST_ASSERT(e & PAGE_WRITABLE);
+
+    tr_free(); return true;
+}
+
+static bool t_destroy_huge(void) {
+    uint64_t before = free_bytes();
+    vmm_t* u = vmm_create(USER_BASE, 0x10000000UL); TEST_ASSERT(u != NULL);
+    void* p;
+    TEST_ASSERT_STATUS(vmm_alloc(u, BIG, VM_FLAG_USER | VM_FLAG_WRITE, NULL, &p), VMM_OK);
+    int level;
+    TEST_ASSERT(leaf_of(u->pt_root, (uintptr_t)p, &level) && level == 2);
+    pmm_stats_t s0; pmm_get_stats(&s0);
+    vmm_destroy(u);
+    pmm_stats_t s1; pmm_get_stats(&s1);
+
+    /* Every page back exactly once, no double free along the way */
+    TEST_ASSERT(s1.corruption_detected == s0.corruption_detected);
+    TEST_ASSERT(free_bytes() == before);
+    TEST_ASSERT(pmm_verify_integrity());
+    return true;
+}
+
+static bool t_resize_no_leak(void) {
+    tr_reset();
+    uint64_t before = free_bytes();
+    vmm_t* v = vmm_kernel_get(); void* p;
+    TEST_ASSERT_STATUS(vmm_alloc(v, PG * 3, VM_FLAG_WRITE, NULL, &p), VMM_OK);
+    uintptr_t b = (uintptr_t)p;
+
+    TEST_ASSERT_STATUS(vmm_resize(v, p, PG * 9), VMM_OK);
+    TEST_ASSERT(all_zero(v, b + PG * 3, PG * 6));
+    kmemset(p, 0x5A, PG * 9);
+
+    /* Shrink then grow back over the same range, the regrown pages come zeroed */
+    TEST_ASSERT_STATUS(vmm_resize(v, p, PG * 2), VMM_OK);
+    TEST_ASSERT(!pte_present(v->pt_root, (void*)(b + PG * 2)));
+    TEST_ASSERT_STATUS(vmm_resize(v, p, PG * 6), VMM_OK);
+    TEST_ASSERT(all_zero(v, b + PG * 2, PG * 4));
+
+    TEST_ASSERT_STATUS(vmm_free(v, p), VMM_OK);
+    TEST_ASSERT(free_bytes() == before);
+    return true;
+}
+
+static bool t_exact_alloc(void) {
+    /* 12KiB costs 12KiB, not the 16KiB block the buddy allocator rounds to */
+    vmm_t* v = vmm_kernel_get(); void* p;
+    uint64_t before = free_bytes();
+    TEST_ASSERT_STATUS(vmm_alloc(v, PG * 3, VM_FLAG_WRITE, NULL, &p), VMM_OK);
+    uint64_t during = free_bytes();
+    TEST_ASSERT_STATUS(vmm_free(v, p), VMM_OK);
+    TEST_ASSERT(before - during == PG * 3);
+    TEST_ASSERT(free_bytes() == before);
+    return true;
+}
+
+static bool t_free_keeps_neighbors(void) {
+    /* Freeing one object must leave a neighbor in the same tables mapped */
+    tr_reset();
+    vmm_t* v = vmm_kernel_get(); void *a, *b;
+    TEST_ASSERT_STATUS(vmm_alloc(v, PG, VM_FLAG_WRITE, NULL, &a), VMM_OK);
+    TEST_ASSERT_STATUS(vmm_alloc(v, PG, VM_FLAG_WRITE, NULL, &b), VMM_OK); tr_alloc(v, b, PG);
+    *(volatile uint64_t*)b = 0xB0B0;
+    TEST_ASSERT_STATUS(vmm_free(v, a), VMM_OK);
+    TEST_ASSERT(pte_present(v->pt_root, b));
+    TEST_ASSERT(*(volatile uint64_t*)b == 0xB0B0);
+    tr_free(); return true;
+}
+#pragma endregion
+
 #pragma region Runner
 
 static void run_test(const char* name, bool (*fn)(void)) {
@@ -687,6 +835,12 @@ void test_vmm(void) {
     run_test("dirty reuse (security)",         t_dirty_reuse);
     run_test("vmm_stats: smoke",               t_stats_smoke);
     run_test("swiss cheese destroy",           t_swiss_cheese);
+    run_test("alloc_at: memory comes zeroed",  t_alloc_at_zeroed);
+    run_test("2MiB: phys, check_buffer, protect", t_huge_queries);
+    run_test("2MiB: destroy frees each page once", t_destroy_huge);
+    run_test("resize: no leak, regrown zeroed", t_resize_no_leak);
+    run_test("alloc: exact size, no round up",  t_exact_alloc);
+    run_test("free: neighbors stay mapped",     t_free_keeps_neighbors);
 
     suite_end(&suite);
 }

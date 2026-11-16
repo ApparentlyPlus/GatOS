@@ -66,7 +66,6 @@ typedef struct {
 // Initialization and Shutdown
 
 slab_status_t slab_init(void);
-void slab_shutdown(void);
 bool slab_is_initialized(void);
 
 // Cache Management

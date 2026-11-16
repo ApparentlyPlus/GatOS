@@ -66,10 +66,8 @@ typedef struct {
 void pci_init(void);
 int pci_find_xhci(pci_dev_t *out_arr, int max_out);
 
-uint8_t pci_read8(pci_dev_t *d, uint8_t off);
 uint16_t pci_read16(pci_dev_t *d, uint8_t off);
 uint32_t pci_read32(pci_dev_t *d, uint8_t off);
-void pci_write8(pci_dev_t *d, uint8_t off, uint8_t v);
 void pci_write16(pci_dev_t *d, uint8_t off, uint16_t v);
 void pci_write32(pci_dev_t *d, uint8_t off, uint32_t v);
 

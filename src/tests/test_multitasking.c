@@ -77,6 +77,37 @@ static bool t_proc_nn(void) {
     return true;
 }
 
+// Lives in the user image's .data, so every process starts with its own copy of it
+static volatile uint32_t data_probe __attribute__((section(".user_data"))) = 0xC0DE1234;
+
+static bool t_proc_data_private(void) {
+    uintptr_t off = (uintptr_t)&data_probe - (uintptr_t)&USER_DATA_START;
+    TEST_ASSERT((uintptr_t)&data_probe >= (uintptr_t)&USER_DATA_START);
+    TEST_ASSERT((uintptr_t)&data_probe < (uintptr_t)&USER_DATA_END);
+
+    process_t* a = process_create("t_data_a", NULL);
+    process_t* b = process_create("t_data_b", NULL);
+    TEST_ASSERT(a && b);
+
+    uint64_t pa, pb;
+    TEST_ASSERT(vmm_get_physical(a->vmm, (void*)&data_probe, &pa));
+    TEST_ASSERT(vmm_get_physical(b->vmm, (void*)&data_probe, &pb));
+    TEST_ASSERT(pa != pb && pa != (uintptr_t)&USER_DATA_LOAD_ADDR + off);
+
+    // Both copies start out with the image's value
+    volatile uint32_t* va = (volatile uint32_t*)PHYSMAP_P2V(pa);
+    volatile uint32_t* vb = (volatile uint32_t*)PHYSMAP_P2V(pb);
+    TEST_ASSERT(*va == 0xC0DE1234 && *vb == 0xC0DE1234);
+
+    // A write in one process stays in that process
+    *va = 0xDEAD;
+    TEST_ASSERT(*vb == 0xC0DE1234);
+
+    process_destroy(a);
+    process_destroy(b);
+    return true;
+}
+
 static bool t_proc_pid(void) {
     process_t* p = process_create("t_pid", NULL);
     TEST_ASSERT(p->pid > 0);
@@ -541,6 +572,7 @@ void test_multitasking(void) {
     run_test("sched_current name=kernel_main",t_sched_name);
     run_test("sched_current has stack",       t_sched_stk);
     run_test("process: not null",             t_proc_nn);
+    run_test("process: private .data",        t_proc_data_private);
     run_test("process: pid > 0",              t_proc_pid);
     run_test("process: name stored",          t_proc_name);
     run_test("process: has vmm",              t_proc_vmm);

@@ -87,18 +87,13 @@ static void sched_add_dead(thread_t* thread);
 static void sched_add_sleep(thread_t* thread);
 
 /*
- * idle_thread_entry - MONITOR/MWAIT idle loop, HLT fallback. Watches rq_head so any sched_add() wakes it
+ * idle_thread_entry - Idles the core, watching rq_head so any sched_add() wakes it
  */
 static void idle_thread_entry(void* arg) {
     (void)arg;
     while (1) {
-        if (cpu_mwait_available()) {
-            __asm__ volatile("monitor" :: "a"(&rq_head), "c"(0), "d"(0) : "memory");
-            if (rq_head) { sched_yield(); continue; }
-            __asm__ volatile("mwait" :: "a"(cpu_mwait_hint()), "c"(cpu_mwait_ext()) : "memory");
-        } else {
-            __asm__ volatile("hlt");
-        }
+        cpu_idle_on((void* volatile*)&rq_head);
+        if (rq_head) sched_yield();
     }
 }
 
@@ -248,6 +243,22 @@ static void sched_add_dead(thread_t* thread) {
 }
 
 /*
+ * drop_from - Unlinks every thread of proc from an rnext list, returns the list's new tail
+ */
+static thread_t* drop_from(thread_t** head, process_t* proc) {
+    thread_t* tail = NULL;
+    for (thread_t** link = head; *link; ) {
+        if ((*link)->process == proc) {
+            *link = (*link)->rnext;
+        } else {
+            tail = *link;
+            link = &(*link)->rnext;
+        }
+    }
+    return tail;
+}
+
+/*
  * sched_drop_proc - Removes all threads belonging to a process from all scheduler queues
  */
 void sched_drop_proc(process_t* proc) {
@@ -255,24 +266,8 @@ void sched_drop_proc(process_t* proc) {
 
     bool iflag = intr_save();
 
-    thread_t* prev = NULL;
-    thread_t* curr = rq_head;
-    while (curr) {
-        if (curr->process == proc) {
-            if (prev) {
-                prev->rnext = curr->rnext;
-            } else {
-                rq_head = curr->rnext;
-            }
-            if (rq_tail == curr) {
-                rq_tail = prev;
-            }
-            curr = curr->rnext;
-        } else {
-            prev = curr;
-            curr = curr->rnext;
-        }
-    }
+    rq_tail = drop_from(&rq_head, proc);
+    drop_from(&dead_head, proc);
 
     // Remove from sleep tree
     avl_node_t* sn = avl_min(&sleep_tree);
@@ -282,23 +277,6 @@ void sched_drop_proc(process_t* proc) {
         if (t->process == proc)
             avl_remove(&sleep_tree, sn);
         sn = next_sn;
-    }
-
-    // Remove from dead queue
-    prev = NULL;
-    curr = dead_head;
-    while (curr) {
-        if (curr->process == proc) {
-            if (prev) {
-                prev->rnext = curr->rnext;
-            } else {
-                dead_head = curr->rnext;
-            }
-            curr = curr->rnext;
-        } else {
-            prev = curr;
-            curr = curr->rnext;
-        }
     }
 
     intr_restore(iflag);
@@ -446,16 +424,7 @@ cpu_context_t* sched_schedule(cpu_context_t* ctx) {
      * Return the embedded context struct. ISR.S does mov rsp, rax and uses it as a staging area
      * for the pop/iretq sequence, iretq then restores the real RSP from context.iret_rsp
      */
-
-    cpu_context_t *next_ctx = &cur->context;
-    uint16_t cs = (uint16_t)next_ctx->iret_cs;
-    uint16_t ss = (uint16_t)next_ctx->iret_ss;
-    bool is_user = (cs & 3) == 3;
-    if (!is_user && (cs != KERNEL_CS || (ss != 0 && ss != KERNEL_DS)))
-        panicf_c(next_ctx, "sched: corrupt kernel ctx for '%s' (cs=0x%x ss=0x%x)", cur->name, cs, ss);
-    if (is_user && (cs != USER_CS || ss != USER_DS))
-        panicf_c(next_ctx, "sched: corrupt user ctx for '%s' (cs=0x%x ss=0x%x)", cur->name, cs, ss);
-    return next_ctx;
+    return &cur->context;
 }
 
 /*

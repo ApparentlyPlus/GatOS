@@ -79,7 +79,6 @@ void vmm_add_mmio(size_t bytes);
 uintptr_t vmm_get_alloc_base(vmm_t* vmm);
 uintptr_t vmm_get_alloc_end(vmm_t* vmm);
 size_t vmm_get_alloc_size(vmm_t* vmm);
-bool vmm_table_is_empty(uint64_t *table);
 
 // Address Translation & Query
 
@@ -104,7 +103,6 @@ vmm_status_t vmm_protect(vmm_t* vmm, void* addr, size_t new_flags);
 
 void vmm_dump(vmm_t* vmm);
 void vmm_stats(vmm_t* vmm, size_t* out_total, size_t* out_resident);
-void vmm_dump_pte_chain(uint64_t pt_root, void* virt);
 bool vmm_verify_integrity(vmm_t* vmm_pub);
 
 /*

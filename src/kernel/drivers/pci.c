@@ -11,16 +11,6 @@
 
 #pragma region I dont even know bro
 
-static inline void outl(uint16_t port, uint32_t val) {
-    __asm__ volatile("outl %0, %1" : : "a"(val), "Nd"(port));
-}
-
-static inline uint32_t inl(uint16_t port) {
-    uint32_t ret;
-    __asm__ volatile("inl %1, %0" : "=a"(ret) : "Nd"(port));
-    return ret;
-}
-
 static void cfg_sel(uint8_t b, uint8_t d, uint8_t f, uint8_t off) {
     uint32_t addr = 0x80000000 | (b << 16) | (d << 11) | (f << 8) | (off & 0xFC);
     outl(PCI_CFG_ADDR, addr);
@@ -41,11 +31,6 @@ static uint32_t r32(uint8_t b, uint8_t d, uint8_t f, uint8_t o) {
     return inl(PCI_CFG_DATA);
 }
 
-static void w8(uint8_t b, uint8_t d, uint8_t f, uint8_t o, uint8_t v) {
-    cfg_sel(b, d, f, o);
-    outb(PCI_CFG_DATA + (o & 3), v);
-}
-
 static void w16(uint8_t b, uint8_t d, uint8_t f, uint8_t o, uint16_t v) {
     cfg_sel(b, d, f, o);
     outw(PCI_CFG_DATA + (o & 2), v);
@@ -56,10 +41,8 @@ static void w32(uint8_t b, uint8_t d, uint8_t f, uint8_t o, uint32_t v) {
     outl(PCI_CFG_DATA, v);
 }
 
-uint8_t pci_read8(pci_dev_t *d, uint8_t o) { return r8(d->bus, d->dev, d->func, o); }
 uint16_t pci_read16(pci_dev_t *d, uint8_t o) { return r16(d->bus, d->dev, d->func, o); }
 uint32_t pci_read32(pci_dev_t *d, uint8_t o) { return r32(d->bus, d->dev, d->func, o); }
-void pci_write8(pci_dev_t *d, uint8_t o, uint8_t v) { w8(d->bus, d->dev, d->func, o, v); }
 void pci_write16(pci_dev_t *d, uint8_t o, uint16_t v) { w16(d->bus, d->dev, d->func, o, v); }
 void pci_write32(pci_dev_t *d, uint8_t o, uint32_t v) { w32(d->bus, d->dev, d->func, o, v); }
 

@@ -60,6 +60,8 @@ pmm_status_t pmm_exclude_range(uint64_t start, uint64_t end);
 
 pmm_status_t pmm_alloc(size_t size_bytes, uint64_t *out_phys);
 pmm_status_t pmm_free(uint64_t phys, size_t size_bytes);
+pmm_status_t pmm_alloc_exact(size_t size_bytes, uint64_t* out_phys);
+pmm_status_t pmm_free_range(uint64_t phys, size_t size_bytes);
 pmm_status_t pmm_populate(uint64_t start, uint64_t end);
 
 // Introspection helpers
