@@ -22,7 +22,7 @@
 
 #pragma region Internal Globals
 
-static hpet_regs_t* hpet = NULL;
+static volatile hpet_regs_t* hpet = NULL;
 static uint32_t hpet_period = 0; // Femtoseconds per tick
 
 static uint64_t tsc_tpm = 0;
@@ -122,7 +122,7 @@ static void hpet_init(void) {
         return;
     }
 
-    hpet = (hpet_regs_t*)virt_addr;
+    hpet = (volatile hpet_regs_t*)virt_addr;
     hpet_period = hpet->capabilities_high;
 
     // Enable HPET (Set bit 0 of General Config)
@@ -373,9 +373,8 @@ void timer_init(void) {
     hpet_init();
     timer_calibrate_all();
 
-    // Register handler and unmask IRQ 0 (System Timer)
+    // The LAPIC timer interrupts its own core directly, so there's no I/O APIC pin to unmask
     irq_register(INT_FIRST_INTERRUPT, (irq_handler_t)timer_handler);
-    ioapic_unmask(0);
 
     // Enable TSC Deadline tickless mode if supported
     uint32_t a, b, c, d;

@@ -9,6 +9,9 @@
 #include <arch/x86_64/cpu/interrupts.h>
 #include <kernel/sys/timers.h>
 #include <kernel/sys/apic.h>
+#include <kernel/sys/acpi.h>
+#include <kernel/memory/vmm.h>
+#include <arch/x86_64/cpu/cpu.h>
 #include <kernel/debug.h>
 #include <tests/tests.h>
 #include <klibc/string.h>
@@ -481,6 +484,68 @@ static bool t_per_rearm(void) {
 }
 #pragma endregion
 
+#pragma region ACPI and APIC
+
+static bool t_acpi_cksum(void) {
+    uint8_t buf[4] = { 0x10, 0x20, 0x30, (uint8_t)(0x100 - 0x60) };
+    TEST_ASSERT(acpi_checksum_ok(buf, sizeof(buf)));
+    buf[1] ^= 1;
+    TEST_ASSERT(!acpi_checksum_ok(buf, sizeof(buf)));
+    return true;
+}
+
+static bool t_acpi_tables(void) {
+    ACPISDTHeader* madt = acpi_find_table("APIC");
+    TEST_ASSERT(madt != NULL);
+    TEST_ASSERT(kstrncmp(madt->Signature, "APIC", 4) == 0);
+    TEST_ASSERT(acpi_checksum_ok(madt, madt->Length));
+    acpi_unmap_phys(madt);
+    TEST_ASSERT(acpi_find_table("NOPE") == NULL);
+    return true;
+}
+
+static bool t_lapic_base(void) {
+    // The register page has to be the one the MSR names, all of its address bits
+    uint64_t phys = 0;
+    TEST_ASSERT(vmm_get_physical(NULL, (void*)lapic_base, &phys));
+    TEST_ASSERT(phys == (read_msr(MSR_IA32_APIC_BASE) & MSR_APIC_BASE_ADDR));
+    return true;
+}
+
+static bool t_ioapic_pin0(void) {
+    // The scheduler tick comes from the LAPIC, nothing should have unmasked pin 0 for it
+    TEST_ASSERT(ioapic_read(IOAPIC_REDTBL) & LVT_MASK);
+    return true;
+}
+
+static bool t_nmi_lint(void) {
+    MADTHeader* madt = acpi_find_table("APIC");
+    TEST_ASSERT(madt != NULL);
+    uint8_t* start = (uint8_t*)(madt + 1);
+    uint8_t* end = (uint8_t*)madt + madt->header.Length;
+
+    uint32_t uid = 0xFFFFFFFF;
+    for (uint8_t* p = start; p < end; p += ((MADTRecordHeader*)p)->length) {
+        MADT_LAPIC* rec = (MADT_LAPIC*)p;
+        if (rec->header.type == MADT_TYPE_LAPIC && rec->apic_id == lapic_get_id()) uid = rec->acpi_processor_id;
+    }
+
+    // Every NMI record meant for this core has to show up in its LINT entry
+    bool ok = true;
+    for (uint8_t* p = start; p < end; p += ((MADTRecordHeader*)p)->length) {
+        MADT_NMI* nmi = (MADT_NMI*)p;
+        if (nmi->header.type != MADT_TYPE_NMI) continue;
+        if (nmi->acpi_processor_id != 0xFF && nmi->acpi_processor_id != uid) continue;
+        uint32_t lvt = lapic_read(nmi->lint == 0 ? LAPIC_LVT_LINT0 : LAPIC_LVT_LINT1);
+        if ((lvt & (7 << 8)) != LVT_DELIVERY_NMI) ok = false;
+    }
+    acpi_unmap_phys(madt);
+    TEST_ASSERT(ok);
+    return true;
+}
+
+#pragma endregion
+
 #pragma region Runner
 
 static void run_test(const char* name, bool (*fn)(void)) {
@@ -491,6 +556,11 @@ static void run_test(const char* name, bool (*fn)(void)) {
 void test_timers(void) {
     suite_begin(&suite, "Timers");
 
+    run_test("ACPI checksum helper",         t_acpi_cksum);
+    run_test("ACPI MADT found, checksum ok", t_acpi_tables);
+    run_test("LAPIC mapped at MSR base",     t_lapic_base);
+    run_test("I/O APIC pin 0 stays masked",  t_ioapic_pin0);
+    run_test("MADT NMI records on LINTs",    t_nmi_lint);
     run_test("HPET Available (no crash)",    t_hpet_avail);
     run_test("HPET Monotonic",               t_hpet_mono);
     run_test("HPET No Regression (1000x)",   t_hpet_noreg);

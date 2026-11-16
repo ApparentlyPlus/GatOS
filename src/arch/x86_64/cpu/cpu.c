@@ -253,8 +253,18 @@ void cpu_idle_init(void) {
     else if ((d >> 8) & 0xF) mwait_cstate_hint = 0x10;
     else mwait_cstate_hint = 0x00;
 
-    LOGF("[CPU] MONITOR/MWAIT: deepest C-state hint=0x%02x IBE=%u\n",
-         mwait_cstate_hint, mwait_ecx_ext);
+    // Without ARAT (Always Running APIC Timer), the LAPIC timer stops in C2 and deeper, and
+    // the deadline that should wake us never fires. C1 is the only safe choice then.
+    cpuid(0, 0, &a, &b, &c, &d);
+    bool arat = false;
+    if (a >= 6) {
+        cpuid(6, 0, &a, &b, &c, &d);
+        arat = a & (1u << 2);
+    }
+    if (!arat) mwait_cstate_hint = 0x00;
+
+    LOGF("[CPU] MONITOR/MWAIT: C-state hint=0x%02x IBE=%u ARAT=%u\n",
+         mwait_cstate_hint, mwait_ecx_ext, arat);
 }
 
 /*

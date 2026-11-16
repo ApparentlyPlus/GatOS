@@ -29,6 +29,7 @@
 #define MSR_APIC_BASE_BSP       (1 << 8)
 #define MSR_APIC_BASE_X2        (1 << 10)
 #define MSR_APIC_BASE_ENABLE    (1 << 11)
+#define MSR_APIC_BASE_ADDR      0x000FFFFFFFFFF000ULL // Bits 12 to 51
 
 // Local APIC Register Offsets
 #define LAPIC_ID                0x0020  // Local APIC ID
@@ -60,6 +61,8 @@
 #define LAPIC_SW_ENABLE         (1 << 8)
 
 // LVT Masks
+#define LVT_DELIVERY_NMI        (4 << 8)
+#define LVT_ACTIVE_LOW          (1 << 13)
 #define LVT_MASK                (1 << 16)
 #define LVT_TIMER_PERIODIC      (1 << 17)
 #define LVT_TIMER_TSC_DEADLINE  (1 << 18)
@@ -148,6 +151,7 @@ static inline uint32_t lapic_get_id(void) {
 
 // I/O APIC
 void ioapic_init(void);
+uint32_t ioapic_read(uint32_t reg);
 void ioapic_set_entry(uint8_t index, uint64_t data);
 void ioapic_redirect(uint8_t irq, uint8_t vector, uint32_t dest_core, uint16_t flags);
 void ioapic_unmask(uint8_t irq);

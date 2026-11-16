@@ -46,16 +46,24 @@ void acpi_unmap_phys(void* virt) {
 }
 
 /*
+ * acpi_checksum_ok - Every ACPI table's bytes add up to 0 (mod 256)
+ */
+bool acpi_checksum_ok(const void* table, size_t length) {
+    uint8_t sum = 0;
+    for (size_t i = 0; i < length; i++)
+        sum += ((const uint8_t*)table)[i];
+    return sum == 0;
+}
+
+/*
  * acpi_validate_rsdp - Validate the RSDP structure by checking its checksum
  */
 bool acpi_validate_rsdp(RSDP2Descriptor* rsdp) {
     if (!rsdp) return false;
 
-    size_t length = (rsdp->Revision < 2) ? sizeof(RSDPDescriptor) : rsdp->Length;
-    uint8_t sum = 0;
-    for (size_t i = 0; i < length; i++)
-        sum += ((uint8_t*)rsdp)[i];
-    return sum == 0;
+    // The first 20 bytes have their own checksum, and 2.0 adds one over the whole structure
+    if (!acpi_checksum_ok(rsdp, sizeof(RSDPDescriptor))) return false;
+    return rsdp->Revision < 2 || acpi_checksum_ok(rsdp, rsdp->Length);
 }
 
 /*
@@ -122,6 +130,9 @@ bool acpi_init(multiboot_parser_t* parser) {
     if (!rsdt_virt) {
         panic("Failed to map full Root SDT.");
     }
+    if (!acpi_checksum_ok(rsdt_virt, total_length)) {
+        panic("Root SDT checksum mismatch.");
+    }
 
     LOGF("[ACPI] Root SDT mapped at 0x%p (Phys: 0x%lx)\n", rsdt_virt, rsdt_phys);
     return true;
@@ -160,7 +171,13 @@ void* acpi_find_table(const char* signature) {
         acpi_unmap_phys(header_virt);
 
         if (match) {
-            return acpi_map_phys(table_phys, length);
+            void* table = acpi_map_phys(table_phys, length);
+            if (table && !acpi_checksum_ok(table, length)) {
+                LOGF("[ACPI] %.4s checksum mismatch, ignoring it\n", signature);
+                acpi_unmap_phys(table);
+                continue;
+            }
+            return table;
         }
     }
 

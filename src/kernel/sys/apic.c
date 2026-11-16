@@ -95,7 +95,7 @@ void lapic_init(void) {
         write_msr(MSR_IA32_APIC_BASE, apic_msr);
     }
 
-    uint64_t phys_base = apic_msr & 0xFFFFF000;
+    uint64_t phys_base = apic_msr & MSR_APIC_BASE_ADDR;
     if (lapic_base == 0) {
         void* virt_addr = NULL;
         if (vmm_alloc(NULL, PAGE_SIZE, VM_FLAG_WRITE | VM_FLAG_FOREIGN | VM_FLAG_DEVICE, (void*)phys_base, &virt_addr) != VMM_OK)
@@ -118,14 +118,28 @@ void lapic_init(void) {
         uint8_t* end = (uint8_t*)madt + madt->header.Length;
         uint32_t my_id = lapic_get_id();
 
+        // NMI records name ACPI processor UIDs, not APIC IDs, so find ours in the LAPIC records first
+        uint32_t my_uid = 0xFFFFFFFF;
+        for (uint8_t* p = start; p < end; p += ((MADTRecordHeader*)p)->length) {
+            MADT_LAPIC* rec = (MADT_LAPIC*)p;
+            if (rec->header.type == MADT_TYPE_LAPIC && rec->apic_id == my_id) {
+                my_uid = rec->acpi_processor_id;
+                break;
+            }
+        }
+
         while (start < end) {
             MADTRecordHeader* header = (MADTRecordHeader*)start;
             if (header->type == MADT_TYPE_NMI) {
                 MADT_NMI* nmi = (MADT_NMI*)header;
-                // 0xFF targets all processors; otherwise match by local APIC ID
-                if (nmi->acpi_processor_id == 0xFF || nmi->acpi_processor_id == my_id) {
+                // 0xFF targets all processors
+                if (nmi->acpi_processor_id == 0xFF || nmi->acpi_processor_id == my_uid) {
                     uint32_t lvt_reg = (nmi->lint == 0) ? LAPIC_LVT_LINT0 : LAPIC_LVT_LINT1;
-                    lapic_write(lvt_reg, (4 << 8));
+                    uint32_t lvt = LVT_DELIVERY_NMI;
+
+                    // Same polarity encoding as an ISO
+                    if ((nmi->flags & 0x03) == 0x03) lvt |= LVT_ACTIVE_LOW;
+                    lapic_write(lvt_reg, lvt);
                     LOGF("[APIC] Configured LINT%u as NMI\n", nmi->lint);
                 }
             }
@@ -171,7 +185,8 @@ void lapic_timer_stop(void) {
 
 void lapic_tsc_arm(uint64_t tsc_deadline, uint8_t vector) {
     lapic_write(LAPIC_LVT_TIMER, (uint32_t)vector | LVT_TIMER_TSC_DEADLINE);
-    __asm__ volatile("lfence" ::: "memory");
+    // The SDM wants MFENCE between the MMIO write to the LVT and the WRMSR, lfence doesn't order stores
+    __asm__ volatile("mfence" ::: "memory");
     tsc_deadline_arm(tsc_deadline);
 }
 

@@ -126,5 +126,6 @@ bool acpi_init(multiboot_parser_t* parser);
 RSDP2Descriptor* acpi_get_rsdp(void);
 bool acpi_is_xsdt_supported(void);
 void* acpi_find_table(const char* signature);
+bool acpi_checksum_ok(const void* table, size_t length);
 void* acpi_map_phys(uint64_t phys_addr, size_t size);
 void acpi_unmap_phys(void* virt);
