@@ -2,29 +2,7 @@
 
 Alas, the moment you've all been waiting for! I am proud to announce that, in this chapter, we will actually jump into the bootstrapping code of GatOS! We’ll bring to life everything discussed in the previous chapter, along with a few other essential checks. But first, let’s lay the groundwork necessary.
 
-## GatOS’s Project Structure
-
-Chapter 1 covered the build system and the full project layout. Here’s a focused look at the portion of `src/` that’s relevant to this chapter — the early boot code:
-
-```
-src/
-├── arch/
-│   └── x86_64/
-│       ├── boot/
-│       │   ├── header.S           # Multiboot2 header (this chapter)
-│       │   ├── boot32.S           # 32-bit bootstrap entry point (this chapter)
-│       │   └── boot64.S           # 64-bit long mode entry point (this chapter)
-│       ├── cpu/                   # GDT, IDT, ISR stubs (later chapters)
-│       └── memory/
-│           ├── paging.h           # KERNEL_V2P / PHYSMAP macros
-│           └── paging.c           # Physmap setup (Chapter 5)
-└── kernel/
-    └── kmain.c                    # The C entry point (Chapter 4 onward)
-```
-
-The include root is `src/`, so `#include <arch/x86_64/memory/paging.h>` resolves correctly from both C and assembly files. The `targets/x86_64/` directory holds `linker.ld` and the GRUB ISO structure, unchanged from Chapter 1.
-
-With that established, let’s get into the code.
+This chapter lives in [`src/arch/x86_64/boot/`](/src/arch/x86_64/boot/): `header.S`, `boot32.S` and `boot64.S`. The full layout of `src/` is back in Chapter 1, if you need a refresher.
 
 ## The GRUB Configuration
 
@@ -248,23 +226,7 @@ The solution to this problem was presented in the last section of the previous c
 >[!NOTE]
 > The `offset` keyword is used here to get the address of the `KERNEL_STACK_TOP` symbol rather than its value. This ensures we're loading the pointer to the stack's top location into the `esp` register.
 
-GatOS defines the following macros in [`paging.h`](/src/arch/x86_64/memory/paging.h). (`KERNEL_VIRTUAL_BASE` itself is in [`layout.h`](/src/arch/x86_64/memory/layout.h), together with every other hardcoded address in the kernel.)
-
-```c
-#include <arch/x86_64/memory/layout.h> // #define KERNEL_VIRTUAL_BASE 0xFFFFFFFF80000000
-
-#ifdef __ASSEMBLER__
-
-#define KERNEL_V2P(a) ((a) - KERNEL_VIRTUAL_BASE)
-#define KERNEL_P2V(a) ((a) + KERNEL_VIRTUAL_BASE)
-#else
-
-#include <stdint.h>
-#define KERNEL_V2P(a) ((uintptr_t)(a) & ~KERNEL_VIRTUAL_BASE)
-#define KERNEL_P2V(a) ((uintptr_t)(a) | KERNEL_VIRTUAL_BASE)
-
-#endif
-```
+We already wrote the fix for this in Chapter 2: the `KERNEL_V2P` and `KERNEL_P2V` macros in [`paging.h`](/src/arch/x86_64/memory/paging.h). `KERNEL_V2P` subtracts `KERNEL_VIRTUAL_BASE` from an address, and since GAS runs our assembly through the C preprocessor, the subtraction happens at build time.
 
 Therefore, we can include `paging.h` in our `boot32.S` and call `KERNEL_V2P` to convert the Higher Half *link* address into the correct lower half *load* address:
 
@@ -328,7 +290,9 @@ error:
 	mov al, 10 # \n
 	call .serial_putc
 
+.error_halt:
 	hlt
+	jmp .error_halt
 
 .serial_putc:
 	push eax
@@ -342,6 +306,8 @@ error:
 	out dx, al
 	ret
 ```
+
+Notice the `hlt` sits in a little loop. That's because `hlt` doesn't stop the CPU for good: it sleeps until something wakes it up (an interrupt, which we'll meet in Chapter 6), and then it carries on with whatever comes next. Here, that would be `.serial_putc`, followed by a `ret` to nowhere. The `jmp` just puts it straight back to sleep.
 
 To display an error, we simply load an error code into `al` and jump to `error`:
 
@@ -386,20 +352,16 @@ Here's our strategy: we transfer the pointer from `ebx` to `edi` early in the bo
 mov edi, ebx
 ```
 
-This proactive move is crucial due to what happens when we transition to long mode:
+Why not just leave it in `ebx`? Because `ebx` doesn't survive that long. The page table setup further down uses `ebx` as a scratch register, so by the time we reach 64-bit code, the pointer would be long gone. `edi` is left alone the whole way.
 
-1. **Register Behavior During Mode Transition**: When we jump to 64-bit long mode, 32-bit registers are extended to 64 bits. However, they're handled differently:
-   - `ebx` will be zero-extended to `rbx` (the upper 32 bits become zero)
-   - `edi` will be zero-extended to `rdi` (the upper 32 bits become zero)
+And `edi` isn't a random pick either. In the System V AMD64 calling convention, the first argument of a function is passed in `rdi`, the 64-bit version of `edi`. So once we're in long mode, the pointer is already sitting exactly where our C function expects its first argument:
 
-2. **The Critical Difference**: While both registers get extended, we choose `edi` deliberately because of x86_64 calling conventions. In the System V AMD64 ABI, the first parameter to a function is passed in `rdi`.
+```c
+void kernel_main(void* mb_info);
+```
 
-3. **Seamless C Integration**: By storing the Multiboot2 struct pointer in `edi` now, it will automatically be available in `rdi` when we call our `kernel_main` function in C. This means we can simply declare our main function as:
-
-   ```c
-   void kernel_main(void* mb_info);
-   ```
-   And the pointer will be ready to use without any additional setup.
+>[!NOTE]
+> There's one catch. The upper 32 bits of `rdi` aren't guaranteed to be zero after the switch to long mode. Writing to `edi` in 64-bit code always clears them though, so `boot64.S` starts with a `mov edi, edi` that does exactly that. You'll see it at the end of this chapter.
 
 ## The CPUID Check
 
@@ -489,7 +451,7 @@ check_SSE:
     
     # Enable SSE
     mov eax, cr0
-    and eax, 0xFFFBFFFF       # clear CR0.EM (bit 2)
+    and eax, 0xFFFFFFFB       # clear CR0.EM (bit 2)
     or  eax, 0x00000002       # set   CR0.MP (bit 1)
     mov cr0, eax
     mov eax, cr4
@@ -809,16 +771,6 @@ This structure is loaded into the GDTR register:
 - **Limit**: Size of the GDT minus one (16 bits)
 - **Base**: Physical address of the GDT (32-bit in compatibility mode)
 
-### Why This Minimal Approach Works
-
-In 64-bit mode:
-- **CS, DS, ES, SS are effectively ignored** for memory addressing
-- **Base addresses are treated as zero** regardless of descriptor contents
-- **Limits are not enforced** (except for FS and GS, which we're not using)
-- **The main purpose is to establish privilege level** and architecture mode
-
-This minimal GDT gives us exactly what we need: a valid code segment that tells the processor "we're now executing 64-bit code at privilege level 0," without the complexity of the full 32-bit GDT structure.
-
 ## Enabling Paging And Entering Long Mode
 
 This is a critical moment where the memory mapping we've painstakingly set up finally becomes active. We're getting there!
@@ -900,12 +852,6 @@ After executing these instructions:
 3. **The CPU is now in 64-bit long mode**, but still executing 32-bit code
 4. **We need to reload segment registers** and jump to 64-bit code
 
-### Important Considerations
-
-- **Order matters**: This specific sequence is required for a smooth transition
-- **We're still in compatibility mode**: The CPU is in 64-bit mode but executing 32-bit instructions until we load a 64-bit code segment
-- **The next step** will be to jump to our higher-half kernel code using an absolute far jump
-
 ## The Far Jump to 64-bit Long Mode
 
 Are you tired of all the setup so far and ready for the big payoff? I know I am! This is where all our preparation culminates in the actual transition to 64-bit mode.
@@ -953,7 +899,6 @@ Back in our 32-bit `boot32.S`, we perform all the previous steps discussed to ju
 
 .global start
 .global PML4
-.global gdt64_code_segment
 .global gdt64_virt_pointer
 
 .extern long_mode_start
@@ -992,24 +937,12 @@ start:
 
 	# Far jump to 64-bit kernel entry point via code segment selector
 	jmp gdt64_code_segment:KERNEL_V2P(long_mode_start)
-
-	# Halt if for some reason jump returns
-	hlt
 ```
 
 This far jump is critical because:
 1. **It loads the CS register** with our new 64-bit code segment selector
 2. **The processor validates** that we're actually transitioning to a 64-bit segment
 3. **It begins executing** at the physical address of our 64-bit code
-
-### Why This Architecture Matters
-
-This two-file approach separates concerns cleanly:
-- **`boot32.S`**: Handles the 32-bit bootstrapping process
-- **`boot64.S`**: Contains pure 64-bit kernel code
-- **The far jump**: Acts as a clean architectural boundary between the two worlds
-
-Once we land in `long_mode_start`, we're finally executing genuine 64-bit code with our higher-half memory mapping active. This means we can start using virtual addresses like `0xFFFFFFFF80000000` and leave the physical addressing constraints of the boot process behind us. 
 
 ### Transition to High Memory
 
@@ -1028,10 +961,9 @@ We've successfully jumped to 64-bit mode, but we're still executing from low mem
 .code64
 long_mode_start:
 
-    # If for some reason the multiboot information
-    # is not passed, we will just halt the system.
-    cmp rdi, 0
-    je .no_multiboot_info
+    # The multiboot pointer came over in edi. The upper half of rdi is
+    # undefined after the mode switch, and writing edi zeroes it.
+    mov edi, edi
 
     # NULLIFY all data segment registers
     mov ax, 0x0
@@ -1044,27 +976,12 @@ long_mode_start:
     movabs rax, offset upper_memory
     jmp rax
 
-.no_multiboot_info:
-    hlt
-
-
 upper_memory:
     mov rax, KERNEL_VIRTUAL_BASE
     add rsp, rax
 
-    mov rax, 0x0
-    mov ss, rax
-    mov ds, rax
-    mov es, rax
-
     lgdt [gdt64_virt_pointer]
 
-    pushq 0x8
-    movabs rax, offset .transition_to_c
-    push rax
-    retfq
-
-.transition_to_c:
     # RDI contains the multiboot information
     # which is passed from the bootloader.
     # It is handled by the kernel as an argument.
@@ -1078,14 +995,13 @@ upper_memory:
 
 ### Step-by-Step Breakdown
 
-#### 1. Validation and Initial Setup
+#### 1. Cleaning Up `rdi`
 
 ```asm
-cmp rdi, 0
-je .no_multiboot_info
+mov edi, edi
 ```
-- **Multiboot validation**: Check if RDI contains a valid Multiboot information structure pointer
-- **Safety measure**: Halt if no boot information was provided (shouldn't happen)
+
+Remember the catch from the `edi` section earlier? This is it. Moving `edi` onto itself looks like it does nothing, but in 64-bit code, any write to a 32-bit register clears the upper half of the 64-bit one. So `rdi` now holds our Multiboot2 pointer, and *only* our Multiboot2 pointer.
 
 #### 2. Clearing Segment Registers
 
@@ -1130,7 +1046,7 @@ lgdt [gdt64_virt_pointer]
 
 Remember that second GDT pointer from earlier? Here's where we need it.
 
-Back in `boot32.S`, we loaded the GDT through `gdt64_pointer`, which holds the GDT's *physical* address. We had no choice, the higher half wasn't mapped yet. Thing is, `lgdt` doesn't copy the GDT anywhere. Remember the GDTR register from Chapter 2? `lgdt` just stores the GDT's address in there, and the CPU goes back to that address every time it needs a segment descriptor. That happens a lot more than you'd think. The far return right below this, for example, loads `CS`, so the CPU has to read the GDT to do it.
+Back in `boot32.S`, we loaded the GDT through `gdt64_pointer`, which holds the GDT's *physical* address. We had no choice, the higher half wasn't mapped yet. Thing is, `lgdt` doesn't copy the GDT anywhere. Remember the GDTR register from Chapter 2? `lgdt` just stores the GDT's address in there, and the CPU goes back to that address every time it needs a segment descriptor. That happens more often than you'd think. Every time the CPU drops what it's doing to run some other piece of kernel code (an interrupt, which Chapter 6 is all about), it reloads `CS`, and to do that it has to read the GDT.
 
 Next chapter, we nuke the identity map. Leave the GDTR as is, and it now points to an address that isn't mapped anymore. The next time the CPU goes looking for a descriptor, it touches an unmapped address, and we know what that means from Chapter 2: a page fault. And since the CPU needs the GDT to even *handle* a fault properly, things fall apart very, very quickly.
 
@@ -1139,64 +1055,22 @@ Next chapter, we nuke the identity map. Leave the GDTR as is, and it now points 
 
 So while both mappings are still around, we reload the GDTR with `gdt64_virt_pointer`. It's the exact same table, we're just pointing at it through its higher half address.
 
-#### 6. Far Return to Establish Code Segment
+>[!TIP]
+> What about `CS` itself? It already holds our 64-bit code segment, the far jump loaded it. And reloading the GDTR doesn't touch the segment registers, so there's nothing left to fix there.
+
+#### 6. Final Handoff to C Code
 
 ```asm
-pushq 0x8
-movabs rax, offset .transition_to_c
-push rax
-retfq
-```
-
-This clever sequence performs a far return to reload CS:
-- **Push code segment selector** (0x8 points to our 64-bit code segment in GDT)
-- **Push target address** (`.transition_to_c` with virtual addressing)
-- **`retfq`** performs far return, loading CS with the selector and jumping to the virtual address
-
-#### 7. Final Handoff to C Code
-
-```asm
-.transition_to_c:
-    movabs rax, offset kernel_main
-    call rax
+movabs rax, offset kernel_main
+call rax
 .halt:
     hlt
     jmp .halt
 ```
-- **Kernel entry**: Call our main C kernel function with proper virtual addressing
+- **Kernel entry**: Call our C entry point, `kernel_main` in [`kmain.c`](/src/kernel/kmain.c), at its higher half address
 - **Boot information**: RDI still contains the Multiboot info pointer passed from our 32-bit stub.
-- **Halt fallback**: If kernel_main returns (which it shouldn't), halt the system. Why a loop? `hlt` doesn't stop the CPU forever. It sleeps until something wakes it up (an interrupt, which we'll meet in Chapter 6), and then it carries on with whatever comes after the `hlt`. Here, that's garbage. The loop just puts it straight back to sleep.
+- **Halt fallback**: If `kernel_main` returns (which it shouldn't), halt the system. Same loop as in our error handler, for the same reason: `hlt` alone would wake up on the next interrupt and run off into whatever comes after it.
 
-### Why This Complex Dance?
+After this sequence completes, we're fully operating in our higher-half kernel environment at `0xFFFFFFFF80000000`, with clean segment registers, a stack in the higher half, a GDT that survives the identity map going away, and the Multiboot2 pointer waiting in `rdi`.
 
-This multi-stage transition ensures:
-
-- **Clean segment state**: All segment registers are properly initialized
-- **Proper stack operation**: The stack pointer uses virtual addresses before we make function calls
-- **GDT stays reachable**: The GDTR points at the GDT's higher half address, so unmapping the low half later doesn't break it
-- **Correct code execution**: The far return ensures we're fully in the higher-half address space
-- **C compatibility**: The C kernel receives parameters correctly and can use normal pointer arithmetic
-
-After this sequence completes, we're fully operating in our higher-half kernel environment at `0xFFFFFFFF80000000`. 
-
-### The Final Handoff to C
-
-After completing the complex transition to higher-half memory, we finally arrive at the destination we've been working toward: handing control over to our main C kernel. This is where the assembly bootstrapping ends and the high-level kernel initialization begins.
-
-GatOS's `kernel_main` function is defined in [`kmain.c`](/src/kernel/kmain.c) with a straightforward signature:
-
-```c
-void kernel_main(void* mb_info) {
-    // Welcome to C!
-}
-```
-
-This function serves as the architectural boundary between low-level assembly setup and high-level kernel code. The single parameter `mb_info` contains the Multiboot information structure pointer that was carefully preserved in the RDI register throughout our boot process.
-
-To access this C function from our assembly code, we need to declare it as an external symbol in `boot64.S`:
-
-```asm
-.extern kernel_main
-```
-
-The C kernel now operates in a clean 64-bit environment, in high memory. The journey from GRUB to 64-bit C code is complete!
+Welcome to C!

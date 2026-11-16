@@ -141,7 +141,7 @@ Every allocator sits in a strict layer above the one below it, and each is initi
 | Layer | Notes |
 |---|---|
 | **Physmap** | The entirety of physical RAM is mapped at a fixed virtual base, so the kernel can touch any physical page without temporary mappings. |
-| **PMM** | Physical page **buddy allocator** with power-of-two free lists across 32 orders, upward coalescing on free, and a magic-tagged header on every free block so corruption is caught rather than propagated. It is also firmware-aware, meaning the kernel image is registered as an exclusion range *before* the free lists are ever populated, and only regions the firmware reports as available RAM are ever handed to it, so firmware regions and MMIO holes never make it into the free lists. |
+| **PMM** | Physical page **buddy allocator** with power-of-two free lists across 32 orders, upward coalescing on free, and a magic-tagged header on every free block so corruption is caught rather than propagated. A one-byte-per-page map kept outside the blocks tells it which blocks are free without trusting their contents, which is also how it catches double frees, even partial ones. It is also firmware-aware, meaning everything below the end of the kernel is registered as an exclusion range *before* the free lists are ever populated, and only regions the firmware reports as available RAM are ever handed to it, so firmware regions and MMIO holes never make it into the free lists. |
 | **Slab** | Named object caches for hot fixed-size structures, carving PMM pages into objects instead of burning a full page on a 64-byte allocation. Tracks partial/full/empty slabs per cache. |
 | **VMM** | Per-address-space page table root plus a sorted list of VM objects. Flags cover write/exec/user, device memory (`VM_FLAG_DEVICE`), foreign physical ranges the VMM must never free (`VM_FLAG_FOREIGN`), and lazily-backed regions (`VM_FLAG_LAZY`). |
 | **Demand paging** | `VM_FLAG_LAZY` regions are backed on first touch. The `#PF` handler checks the faulting process's address space first, falls back to the kernel's, allocates and zeroes a page, and returns. User stacks and `mmap` regions cost nothing until actually used. |
@@ -169,7 +169,7 @@ The kernel turns on the hardware protections it can and actually uses them:
 * **ACPI** table parsing (RSDP with RSDT/XSDT support) and **APIC**: Local APIC plus I/O APIC with per-IRQ redirection, masking and unmasking.
 * A four source timer stack: **PIT**, **HPET**, **LAPIC timer** and a calibrated **TSC**.
 * **Tickless operation.** Where TSC-deadline is available, the LAPIC is armed for the *next actual event*, aka the earlier of the scheduler quantum or the next sleeping thread's wake time, instead of interrupting on a fixed period. With nothing to wake, the timer is stopped outright. There's a 10ms periodic fallback for CPUs without it.
-* Uptime and sleep math done in 64- and 128-bit integer arithmetic, because the kernel builds with no floating point and no SSE on interrupt-sensitive paths.
+* Uptime and sleep math done in 64- and 128-bit integer arithmetic, because the kernel builds with no floating point and no SSE, except for the one file that formats `%f`.
 * **Lazy FPU switching**: The FPU/SSE/AVX state area is per-thread and only swapped when a different thread actually uses it, so the kernel's own paths never pay for it.
 * **MONITOR/MWAIT** idle, so an idle system parks the core in a low-power state instead of spinning (with `HLT` as fallback).
 * Spinlocks with proper interrupt-state save and restore.
@@ -207,7 +207,7 @@ Currently exposed syscalls:
 ### Diagnostics
 
 * A **live kernel dashboard** on `CTRL+SHIFT+ESC`: CPU brand and feature list, current power draw in watts, CPU utilisation, physical memory usage and fragmentation, heap and slab statistics, and a scaled table of every process and thread with its state, rendered to fit whatever the framebuffer gives it.
-* A **crash console** that owns a separate shadow buffer sized at boot, so a panic can render a full red-screen report, including reason, decoded exception, error code, faulted address with a decoded access/mode/cause breakdown, `RIP`/`CS`/`RSP`/`SS` and expanded `RFLAGS`, and still scroll back through it instead of dumping one screen and dying.
+* A **crash console** that depends on nothing but the framebuffer, so a panic can render a full red-screen report, including reason, decoded exception, error code, faulted address with a decoded access/mode/cause breakdown, `RIP`/`CS`/`RSP`/`SS` and expanded `RFLAGS`, even when the thing that broke is the memory manager itself.
 * `QEMU_LOG()` and `LOGF()` for serial-side tracing, plus dump helpers like `QEMU_DUMP_PML4` and companion host scripts in [`docs/tools/`](./docs/tools/) that parse a raw page-table dump into something readable.
 
 ### Libraries
@@ -357,7 +357,7 @@ These scripts exist solely for transparency and educational insight, not as a su
 
 Since `v1.7.5`, a test suite has been included in the kernel itself. It is built to be run in a live environment, which means the kernel itself will run the tests if you instruct it to do so.
 
-The suite is around **500 assertions across 8 subsystems**: the PMM (including coalescing and exclusion behaviour), the slab allocator, the VMM, the heap's binned free lists, timers, spinlocks, the TTY subsystem, and multitasking. Since it runs live inside the kernel, it exercises the real allocators against real hardware state rather than a mocked-out host build.
+The suite is **310 tests across 9 suites**: early boot state, the PMM (including coalescing, exclusion and double free behaviour), the slab allocator, the VMM, the heap's binned free lists, timers, spinlocks, the TTY subsystem, and multitasking. Since it runs live inside the kernel, it exercises the real allocators against real hardware state rather than a mocked-out host build.
 
 ### Running Tests
 

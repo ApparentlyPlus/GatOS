@@ -97,5 +97,4 @@ const char* slab_cache_name(slab_cache_t* cache);
  * Notes on improving the slab allocator in the future:
  *
  * - Per-CPU caches (a freelist, a count and a current slab per CPU) once SMP is in.
- * - alloc_timestamp in the slab is always 0, rdtsc would do.
  */

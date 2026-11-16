@@ -469,21 +469,15 @@ For each source file, the object output mirrors the source tree inside `build/`.
 Kernel and userspace code are treated slightly differently:
 
 * kernel code gets Link Time Optimizations (`-flto`), except on macOS, where LTO is skipped,
-* a small list of kernel files (`KERNEL_INTERRUPT_PATH` inside `run.py`) also gets explicit floating point restrictions: `-mno-sse`, `-mno-sse2`, `-mno-mmx`, and `-mno-80387`,
+* every kernel file also gets explicit floating point restrictions: `-mno-sse`, `-mno-sse2`, `-mno-mmx`, and `-mno-80387`, except the few listed in `KERNEL_FPU_ALLOWED` inside `run.py`,
 * userspace code gets `-ffast-math`, and
 * assembly is compiled through GCC with preprocessor support enabled.
 
-Why only some files? Here is the short version. Every now and then, the CPU drops whatever it's doing, runs some other piece of kernel code, and then comes back as if nothing happened. That's called an **interrupt** (Chapter 6 covers them properly). The files in that list are exactly the ones that run during those "in between" moments.
+Why would a kernel ban floats? Here is the short version. Every now and then, the CPU drops whatever it's doing, runs some other piece of kernel code, and then comes back as if nothing happened. That's called an **interrupt** (Chapter 6 covers them properly).
 
-Now picture a program that's halfway through some floating point math when this happens. The CPU keeps that math in its own floating point registers. If the code that runs in between uses those same registers, the program comes back to find its numbers changed, and has no idea why. So those files are simply not allowed to emit any floating point instructions.
+Now picture a program that's halfway through some floating point math when this happens. The CPU keeps that math in its own floating point registers. If the kernel code that runs in between uses those same registers, the program comes back to find its numbers changed, and has no idea why. And you don't even have to write a float for this to happen: at higher optimization levels, GCC happily borrows those registers to copy or clear memory faster. So kernel code simply isn't allowed to emit any floating point instructions.
 
-Everything else in the kernel can use floats just fine, because GatOS saves and restores the floating point registers whenever it switches between programs. We'll get to that much later, once we have threads.
-
->[!NOTE]
-> This used to be a lot more blunt. Early GatOS slapped the FPU restrictions on *every* kernel file. Once the kernel learned to save that state itself, the restriction was narrowed down to the files that actually run during interrupts.
-
->[!IMPORTANT]
->We will talk about FPU and userspace later on in the documents. For now, you dont need to know any of this.
+The one file that gets a pass is `klibc/stdio.c`, home of `printf`. Printing a float takes float math, so it keeps the FPU. It does get `-fno-tree-vectorize` though, which stops GCC from borrowing those registers on its own. That way, the only float code it ever runs is the code that formats an actual float.
 
 ### 4. Link and Strip the Kernel
 
@@ -495,7 +489,7 @@ The binary is then stripped to remove unnecessary symbol data from the final boo
 
 This one is short. `run.py` copies `kernel.bin` into `targets/x86_64/iso/boot/`, right next to the GRUB config, and hands the whole folder to `grub-mkrescue`. Out comes a bootable ISO under `dist/x86_64/` (the actual ISO building is done by `xorriso`, which is why it's part of the toolchain).
 
-The ISO filename is generated from the kernel version (eg. "GatOS-v2.2.0.iso"). Test builds also embed `Test-Build` in the filename (eg. "GatOS-Test-Build-v2.2.0.iso").
+The ISO filename is generated from the kernel version (eg. "GatOS-v2.3.0.iso"). Test builds also embed `Test-Build` in the filename (eg. "GatOS-Test-Build-v2.3.0.iso").
 
 ### 6. Launch QEMU
 
@@ -542,18 +536,6 @@ Important parts here are:
 * **`--gc-sections`** to discard unreachable code and data,
 * **`--no-relax`** to avoid linker relaxations that could disturb the kernel’s carefully controlled layout, and
 * **`-T targets/x86_64/linker.ld`** to force the custom linker script we analyzed earlier in this chapter.
-
-## Summary of the Current Build Flow
-
-The modern GatOS workflow is now:
-
-1. **Provision toolchain:** `python3 setup.py` downloads and validates the host-specific portable toolchain into `toolchain/`.
-2. **Verify environment:** `python3 run.py` checks that those local binaries exist and are usable.
-3. **Compile:** all `*.c` and `*.S` files under `src/` are compiled in parallel into `build/`.
-4. **Link:** the objects are linked into `dist/x86_64/kernel.bin` with the linker script.
-5. **Stage boot assets:** GRUB files and the kernel are copied into the ISO directory tree under `targets/x86_64/iso/`.
-6. **Create ISO:** GRUB tooling produces a bootable image in `dist/x86_64/`.
-7. **Run:** if requested, QEMU boots the newest ISO and mirrors serial output to `debug.log`.
 
 >[!IMPORTANT]
 >You don't really have to know any of this. This chapter simply describes how GatOS's build system works internally. To run the kernel, all you need to do is call `setup.py` and `run.py`. That's all!

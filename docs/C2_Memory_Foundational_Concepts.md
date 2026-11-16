@@ -603,15 +603,6 @@ Also remember how I mentioned that this `1GB` fixed mapping gives a lot of leewa
 
 All kernel sections (`.text`, `.data`, etc.) reside within the physical range `[KPHYS_START, KPHYS_END]` and, consequently, the virtual range `[KVIRT_START, KVIRT_END]`. However, our page tables have already mapped the entire larger range up to `KERNEL_VIRTUAL_BASE + 1GB`.
 
-Here is how GatOS uses this extra space:
-1. It parses the Multiboot2 structure from GRUB to determine the total size of the system's RAM.
-2. It calculates how many page tables are required to map all of this physical memory into a virtual address space, and then calculates the total memory, `X` bytes, needed to store these page tables.
-3. GatOS then internally adjusts `KVIRT_END` to `KVIRT_END + X`. This is safe because we know `KVIRT_END + X` will not exceed `KERNEL_VIRTUAL_BASE + 1GB` for any reasonable amount of RAM.
-4. Using this newly reserved space `X`, GatOS populates the page tables to map the entire physical memory (the *physmap*) into the higher half virtual address starting at `PHYSMAP_VIRTUAL_BASE = 0xFFFF800000000000`. The kernel's own mapping at `KERNEL_VIRTUAL_BASE` remains intact within this new page structure.
-5. Finally, it unmaps all virtual memory regions except for two essential ones:
-    - `[KERNEL_VIRTUAL_BASE, KVIRT_END]` for the kernel itself.
-    - `[PHYSMAP_VIRTUAL_BASE, PHYSMAP_VIRTUAL_BASE + RAM_SIZE]` for the physmap.
-
-We will see in future documents why we need this *physmap*, but it has to do with bootstrapping our *Physical Memory Allocator (PMM)* without causing page faults because the addresses aren't mapped.
+So what is all that extra room for? Here's the teaser. GatOS asks GRUB how much RAM the machine has, works out how many page tables it would take to map *all* of it, and parks those tables right after the kernel, in space our `1GB` mapping already covers. Those tables become the *physmap*, a map of every byte of RAM in the higher half. We'll build it in Chapter 5, and it's what lets the kernel hand out physical memory later without page faulting on addresses that aren't mapped.
 
 *Ain't ya friggin' excited?*
