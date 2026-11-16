@@ -13,7 +13,7 @@
 #include <klibc/stdio.h>
 
 // run.py scrapes this for the ISO name
-static char* KERNEL_VERSION = "v2.0.0";
+static char* KERNEL_VERSION = "v2.1.0";
 
 void kernel_main(void* mb_info) {
 

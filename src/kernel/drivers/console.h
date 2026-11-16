@@ -75,6 +75,7 @@ void console_init(multiboot_parser_t* parser);
 
 // Instance Management
 bool con_init(console_t* con);
+void con_destroy(console_t* con);
 void con_putc(console_t* con, char character);
 void con_write_batch(console_t* con, const char* buf, size_t count);
 void con_set_color(console_t* con, uint8_t foreground, uint8_t background);

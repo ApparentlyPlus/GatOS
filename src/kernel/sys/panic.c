@@ -54,7 +54,7 @@ void halt_system(void)
 /*
  * exc_name - Returns a human-readable name for an exception vector
  */
-static const char* exc_name(uint64_t vec)
+const char* exc_name(uint64_t vec)
 {
     static const char* names[] = {
         "Divide-by-Zero",
@@ -77,6 +77,8 @@ static const char* exc_name(uint64_t vec)
         "Alignment Check",
         "Machine Check",
         "SIMD Exception",
+        "Virtualization",
+        "Control Protection",
     };
     if (vec < sizeof(names) / sizeof(names[0])) return names[vec];
     if (vec < 32) return "Reserved Exception";
@@ -88,15 +90,18 @@ static const char* exc_name(uint64_t vec)
  */
 static void panic_log(const char* msg, cpu_context_t* ctx)
 {
-    LOGF("\n*** KERNEL PANIC ***\n");
-    LOGF("REASON: %s\n", msg);
-    if (ctx)
-        LOGF("%s (#%lu)  ERR=0x%lx  RIP=0x%016lx\n",
-             exc_name(ctx->vector_number),
-             ctx->vector_number,
-             ctx->error_code,
-             ctx->iret_rip);
-    LOGF("********************\n");
+    LOGF("KERNEL PANIC: %s\n", msg);
+    if (!ctx) return;
+
+    log_indent(1);
+    LOGF("%s (#%lu), error 0x%lx, rip 0x%016lx\n",
+         exc_name(ctx->vector_number), ctx->vector_number, ctx->error_code, ctx->iret_rip);
+    if (ctx->vector_number == INT_PAGE_FAULT) {
+        uint64_t cr2;
+        __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+        LOGF("fault address 0x%016lx\n", cr2);
+    }
+    log_indent(-1);
 }
 
 /*
@@ -109,6 +114,14 @@ void panic_c(const char* message, cpu_context_t* context)
 
     // Interrupts off so nothing else corrupts state or interleaves with the panic log
     intr_off();
+
+    // If drawing the panic screen panics too, the second one stops right here
+    static bool panicking = false;
+    if (panicking) {
+        LOGF("[PANIC] Panicked while panicking: %s\n", message);
+        halt_system();
+    }
+    panicking = true;
     panic_log(message, context);
 
     uint16_t screen_width = PNC_WIDTH();

@@ -1,8 +1,8 @@
 /*
  * pmm.h - Physical Memory Manager
  *
- * Buddy allocator over the PHYSMAP region. Internals use virtual addresses, the public
- * API deals in physical ones.
+ * Buddy allocator over [0, end) of physical memory, reached through the physmap.
+ * The public API deals in physical addresses.
  *
  * Must be initialized FIRST, before the slab allocator and the VMM.
  *
@@ -15,10 +15,6 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#ifndef PMM_MIN_ORDER_PAGE_SIZE
-#define PMM_MIN_ORDER_PAGE_SIZE 4096ULL
-#endif
-
 #ifndef PMM_MAX_ORDERS
 #define PMM_MAX_ORDERS 32
 #endif
@@ -27,12 +23,12 @@
 typedef enum {
     PMM_OK = 0,
     PMM_ERR_OOM,           // out of memory (no block large enough)
-    PMM_ERR_INVALID,       // invalid arguments 
+    PMM_ERR_INVALID,       // invalid arguments
     PMM_ERR_NOT_INIT,      // pmm not initialized yet
-    PMM_ERR_ALREADY_INIT,  // pmm_init called twice without pmm_shutdown
-    PMM_ERR_NOT_ALIGNED,   // address/size not aligned to required block size
+    PMM_ERR_ALREADY_INIT,  // pmm_init called twice
+    PMM_ERR_NOT_ALIGNED,   // address not aligned to the block size
     PMM_ERR_OUT_OF_RANGE,  // address outside managed range
-    PMM_ERR_NOT_FOUND      // expected buddy not found during coalescing (internal)
+    PMM_ERR_DOUBLE_FREE    // block (or part of it) is already free
 } pmm_status_t;
 
 typedef struct {
@@ -51,11 +47,10 @@ typedef struct {
     uint64_t prev_phys;
 } pmm_free_header_t;
 
+// Initialization
 
-// Initialization and shutdown
-
-pmm_status_t pmm_init(uint64_t range_start_phys, uint64_t range_end_phys, uint64_t min_block_size);
-void pmm_shutdown(void);
+uint64_t pmm_map_size(uint64_t end);
+pmm_status_t pmm_init(uint64_t end, uint64_t map_phys);
 
 // Exclusion zones
 
@@ -65,16 +60,15 @@ pmm_status_t pmm_exclude_range(uint64_t start, uint64_t end);
 
 pmm_status_t pmm_alloc(size_t size_bytes, uint64_t *out_phys);
 pmm_status_t pmm_free(uint64_t phys, size_t size_bytes);
+pmm_status_t pmm_alloc_exact(size_t size_bytes, uint64_t* out_phys);
+pmm_status_t pmm_free_range(uint64_t phys, size_t size_bytes);
 pmm_status_t pmm_populate(uint64_t start, uint64_t end);
-pmm_status_t pmm_mark_reserved(uint64_t start, uint64_t end);
 
 // Introspection helpers
 
 bool pmm_is_initialized(void);
-uint64_t pmm_managed_base(void);
+bool pmm_is_free(uint64_t phys);
 uint64_t pmm_managed_end(void);
-uint64_t pmm_managed_size(void);
-uint64_t pmm_min_block_size(void);
 
 // Stats
 

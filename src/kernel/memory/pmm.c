@@ -1,7 +1,8 @@
 /*
- * pmm.c - Range-based physical memory manager (buddy allocator)
+ * pmm.c - Physical memory manager (buddy allocator)
  *
- * Buddy allocator over an explicit [start, end) range, rounded to the min block size.
+ * Buddy allocator over [0, end). The free lists live inside the free blocks themselves,
+ * and a page map (one byte per page) records which pages start a free block, and of what order.
  *
  * Author: u/ApparentlyPlus
  */
@@ -18,17 +19,15 @@
 // Magic number for validating free block headers
 #define PMM_FREE_BLOCK_MAGIC 0xFEEDBEEF
 
+// Page map entry, 0 means "not the start of a free block", otherwise PG_FREE | order
+#define PG_FREE 0x80
+
 static bool inited = false;
-static uint64_t range_start = 0;
 static uint64_t range_end = 0;
-static uint64_t min_block = PMM_MIN_ORDER_PAGE_SIZE;
 static uint32_t max_order = 0;
-static uint32_t order_count = 0;
+static uint8_t* pmap = NULL;
 
 static spinlock_t pmm_lock;
-
-// Forward declarations
-static pmm_status_t pmm_mark_free_range(uint64_t start, uint64_t end);
 
 // Free list heads per order. Store physical address of first free block, or EMPTY_SENTINEL for empty.
 static uint64_t free_heads[PMM_MAX_ORDERS];
@@ -36,16 +35,7 @@ static const uint64_t EMPTY_SENTINEL = UINT64_MAX;
 
 static pmm_stats_t stats;
 
-static uint64_t bytes_to_mib_hundredths(uint64_t bytes) {
-    return (bytes * 100ULL) / (1024ULL * 1024ULL);
-}
-
-static uint64_t ratio_to_tenths(uint64_t num, uint64_t den) {
-    return den ? ((num * 1000ULL) / den) : 0;
-}
-
-// We're declaring an exclusion table
-// that we populate before marking free ranges
+// We're declaring an exclusion table that we populate before marking free ranges
 #define PMM_MAX_EXCLUSIONS 8
 
 typedef struct {
@@ -57,101 +47,74 @@ static pmm_exclusion_t exclusions[PMM_MAX_EXCLUSIONS];
 static uint32_t exclusion_count = 0;
 
 static inline uint64_t order_to_size(uint32_t order) {
-    return min_block << order;
+    return (uint64_t)PAGE_SIZE << order;
+}
+
+static inline pmm_free_header_t* hdr_of(uint64_t phys) {
+    return (pmm_free_header_t*)PHYSMAP_P2V(phys);
+}
+
+static uint32_t size_to_order(uint64_t size) {
+    uint32_t order = 0;
+    while (order_to_size(order) < size) order++;
+    return order;
 }
 
 /*
- * validate_block_in_range - Check if a block is within managed range
+ * valid_hdr - Check the in-block header of a block the page map says is free
  */
-static inline bool validate_block_in_range(uint64_t block_phys, uint32_t order) {
-    uint64_t block_size = order_to_size(order);
-    
-    if (block_phys < range_start) {
-        LOGF("[PMM ERROR] Block 0x%lx below managed range (start: 0x%lx)\n",
-               block_phys, range_start);
-        return false;
-    }
+static bool valid_hdr(uint64_t phys, uint32_t order) {
+    pmm_free_header_t* h = hdr_of(phys);
 
-    if (block_phys + block_size > range_end) {
-        LOGF("[PMM ERROR] Block 0x%lx + 0x%lx exceeds managed range (end: 0x%lx)\n",
-               block_phys, block_size, range_end);
-        return false;
-    }
-    
-    return true;
-}
-
-static inline bool validate_free_header(uint64_t block_phys, uint32_t expected_order) {
-    if (!validate_block_in_range(block_phys, expected_order)) {
-        return false;
-    }
-    
-    pmm_free_header_t *header = (pmm_free_header_t *)PHYSMAP_P2V(block_phys);
-    
-    if (header->magic != PMM_FREE_BLOCK_MAGIC) {
-        LOGF("[PMM ERROR] Invalid magic at 0x%lx: 0x%x (expected 0x%x)\n",
-               block_phys, header->magic, PMM_FREE_BLOCK_MAGIC);
+    if (h->magic != PMM_FREE_BLOCK_MAGIC || h->order != order) {
+        LOGF("[PMM ERROR] Bad free header at 0x%lx (magic 0x%x, order %u, expected %u)\n", phys, h->magic, h->order, order);
         stats.corruption_detected++;
         return false;
     }
 
-    if (header->order != expected_order) {
-        LOGF("[PMM ERROR] Order mismatch at 0x%lx: %u (expected %u)\n",
-               block_phys, header->order, expected_order);
+    if ((h->next_phys != EMPTY_SENTINEL && h->next_phys >= range_end) ||
+        (h->prev_phys != EMPTY_SENTINEL && h->prev_phys >= range_end)) {
+        LOGF("[PMM ERROR] Bad free list links at 0x%lx\n", phys);
         stats.corruption_detected++;
         return false;
-    }
-
-    if (header->next_phys != EMPTY_SENTINEL) {
-        if (header->next_phys < range_start || header->next_phys >= range_end) {
-            LOGF("[PMM ERROR] Invalid next pointer at 0x%lx: 0x%lx (range: 0x%lx-0x%lx)\n",
-                   block_phys, header->next_phys, range_start, range_end);
-            stats.corruption_detected++;
-            return false;
-        }
-    }
-
-    if (header->prev_phys != EMPTY_SENTINEL) {
-        if (header->prev_phys < range_start || header->prev_phys >= range_end) {
-            LOGF("[PMM ERROR] Invalid prev pointer at 0x%lx: 0x%lx (range: 0x%lx-0x%lx)\n",
-                   block_phys, header->prev_phys, range_start, range_end);
-            stats.corruption_detected++;
-            return false;
-        }
     }
 
     return true;
 }
 
 /*
- * read_next_word - Next pointer stored at the start of a free block (goes through PHYSMAP_P2V)
+ * push_head - push a block onto the free list for given order
  */
-static inline uint64_t read_next_word(uint64_t block_phys, uint32_t order) {
-    if (!validate_free_header(block_phys, order)) {
-        // Return EMPTY_SENTINEL to break the chain safely on corruption
-        return EMPTY_SENTINEL;
-    }
-    
-    pmm_free_header_t *header = (pmm_free_header_t *)PHYSMAP_P2V(block_phys);
-    return header->next_phys;
+static void push_head(uint32_t order, uint64_t phys) {
+    uint64_t old = free_heads[order];
+    pmm_free_header_t* h = hdr_of(phys);
+
+    h->magic = PMM_FREE_BLOCK_MAGIC;
+    h->order = order;
+    h->next_phys = old;
+    h->prev_phys = EMPTY_SENTINEL;
+
+    if (old != EMPTY_SENTINEL) hdr_of(old)->prev_phys = phys;
+
+    free_heads[order] = phys;
+    pmap[phys / PAGE_SIZE] = PG_FREE | order;
+    stats.free_blocks[order]++;
 }
 
 /*
- * write_next_word - Store the next pointer at the start of a free block (goes through PHYSMAP_P2V)
+ * unlink - Take a free block out of its list, by its own links
  */
-static inline void write_next_word(uint64_t block_phys, uint64_t next_phys, uint32_t order) {
-    pmm_free_header_t *header = (pmm_free_header_t *)PHYSMAP_P2V(block_phys);
-    header->magic = PMM_FREE_BLOCK_MAGIC;
-    header->order = order;
-    header->next_phys = next_phys;
-}
+static void unlink(uint32_t order, uint64_t phys) {
+    pmm_free_header_t* h = hdr_of(phys);
 
-static inline void clear_free_header(uint64_t block_phys) {
-    pmm_free_header_t *header = (pmm_free_header_t *)PHYSMAP_P2V(block_phys);
-    header->magic = 0;
-    header->order = 0xFFFFFFFF;
-    header->next_phys = 0xDEADBEEFDEADBEEF;
-    header->prev_phys = 0xDEADBEEFDEADBEEF;
+    if (h->prev_phys == EMPTY_SENTINEL) free_heads[order] = h->next_phys;
+    else hdr_of(h->prev_phys)->next_phys = h->next_phys;
+
+    if (h->next_phys != EMPTY_SENTINEL) hdr_of(h->next_phys)->prev_phys = h->prev_phys;
+
+    h->magic = 0;
+    pmap[phys / PAGE_SIZE] = 0;
+    stats.free_blocks[order]--;
 }
 
 /*
@@ -161,207 +124,126 @@ static uint64_t pop_head(uint32_t order) {
     uint64_t head = free_heads[order];
     if (head == EMPTY_SENTINEL) return EMPTY_SENTINEL;
 
-    if (!validate_free_header(head, order)) return EMPTY_SENTINEL;
+    // A broken head would hand out garbage, so we cut the whole list loose instead
+    if (!valid_hdr(head, order)) {
+        free_heads[order] = EMPTY_SENTINEL;
+        return EMPTY_SENTINEL;
+    }
 
-    pmm_free_header_t* hdr = (pmm_free_header_t*)PHYSMAP_P2V(head);
-    uint64_t next = hdr->next_phys;
-    free_heads[order] = (next == EMPTY_SENTINEL) ? EMPTY_SENTINEL : next;
-
-    if (next != EMPTY_SENTINEL)
-        ((pmm_free_header_t*)PHYSMAP_P2V(next))->prev_phys = EMPTY_SENTINEL;
-
-    clear_free_header(head);
-    stats.free_blocks[order]--;
+    unlink(order, head);
     return head;
 }
 
 /*
- * push_head - push a block onto the free list for given order
+ * take_buddy - Unlink the buddy if the page map says it's a free block of this exact order
  */
-static void push_head(uint32_t order, uint64_t block_phys) {
-    uint64_t old_head = free_heads[order];
-    pmm_free_header_t* hdr = (pmm_free_header_t*)PHYSMAP_P2V(block_phys);
-    hdr->magic = PMM_FREE_BLOCK_MAGIC;
-    hdr->order = order;
-    hdr->next_phys = (old_head == EMPTY_SENTINEL) ? EMPTY_SENTINEL : old_head;
-    hdr->prev_phys = EMPTY_SENTINEL;
-
-    if (old_head != EMPTY_SENTINEL)
-        ((pmm_free_header_t*)PHYSMAP_P2V(old_head))->prev_phys = block_phys;
-
-    free_heads[order] = block_phys;
-    stats.free_blocks[order]++;
-}
-
-/*
- * remove_specific - O(1) removal of a specific block using its prev/next pointers
- */
-static bool remove_specific(uint32_t order, uint64_t target_phys) {
-    if (!validate_block_in_range(target_phys, order)) return false;
-
-    pmm_free_header_t* hdr = (pmm_free_header_t*)PHYSMAP_P2V(target_phys);
-
-    // Magic/order mismatch means allocated or a different order, not corruption
-    if (hdr->magic != PMM_FREE_BLOCK_MAGIC || hdr->order != order)
-        return false;
-
-    if (!validate_free_header(target_phys, order)) {
-        LOGF("[PMM] Corruption in remove_specific at 0x%lx\n", target_phys);
-        return false;
-    }
-
-    uint64_t prev = hdr->prev_phys;
-    uint64_t next = hdr->next_phys;
-
-    if (prev == EMPTY_SENTINEL) {
-        free_heads[order] = (next == EMPTY_SENTINEL) ? EMPTY_SENTINEL : next;
-    } else {
-        ((pmm_free_header_t*)PHYSMAP_P2V(prev))->next_phys = next;
-    }
-
-    if (next != EMPTY_SENTINEL)
-        ((pmm_free_header_t*)PHYSMAP_P2V(next))->prev_phys = prev;
-
-    clear_free_header(target_phys);
-    stats.free_blocks[order]--;
+static bool take_buddy(uint32_t order, uint64_t buddy) {
+    if (pmap[buddy / PAGE_SIZE] != (PG_FREE | order)) return false;
+    if (!valid_hdr(buddy, order)) return false;
+    unlink(order, buddy);
     return true;
 }
 
-/* 
- * buddy_of - compute buddy address of a block at given order
+/*
+ * free_covering - True if phys lies inside any free block
  */
-static inline uint64_t buddy_of(uint64_t addr, uint32_t order) {
-    uint64_t size = order_to_size(order);
-    return (addr ^ size);
+static bool free_covering(uint64_t phys) {
+    for (uint32_t o = 0; o <= max_order; o++) {
+        uint64_t head = align_down(phys, order_to_size(o));
+        uint8_t m = pmap[head / PAGE_SIZE];
+        if ((m & PG_FREE) && (uint32_t)(m & ~PG_FREE) >= o) return true;
+    }
+    return false;
 }
 
-static uint32_t size_to_order(uint64_t size_bytes) {
-    if (size_bytes == 0) return 0;
-    uint64_t need = min_block;
-    uint32_t order = 0;
-    while (need < size_bytes) {
-        need <<= 1;
-        ++order;
-    }
-    return order;
+/*
+ * free_overlaps - True if any page of [phys, phys + size of order) is already free
+ */
+static bool free_overlaps(uint64_t phys, uint32_t order) {
+    if (free_covering(phys)) return true;
+    for (uint64_t p = phys + PAGE_SIZE; p < phys + order_to_size(order); p += PAGE_SIZE)
+        if (pmap[p / PAGE_SIZE] & PG_FREE) return true;
+    return false;
 }
 
 /*
  * split_range - Greedy split of [start, end) into the largest aligned blocks, pushed to the freelists.
- * Needs start aligned to min_block and end a multiple of it
  */
-static void split_range(uint64_t range_start, uint64_t range_end) {
-    uint64_t cur = range_start;
-
-    while (cur < range_end) {
-        uint64_t remain = range_end - cur;
-        
-        /* choose largest order o such that order_to_size(o) <= remain and cur is aligned to that size */
-        uint32_t chosen = 0;
-        for (int32_t o = (int32_t)max_order; o >= 0; --o) {
-            uint64_t bsize = order_to_size((uint32_t)o);
-            if (bsize > remain) continue;
-            if ((cur & (bsize - 1)) != 0) continue;
-            chosen = (uint32_t)o;
-            break;
-        }
-        
-        push_head(chosen, cur);
-        
-        cur += order_to_size(chosen);
+static void split_range(uint64_t start, uint64_t end) {
+    while (start < end) {
+        uint32_t o = max_order;
+        while (order_to_size(o) > end - start || (start & (order_to_size(o) - 1)))
+            o--;
+        push_head(o, start);
+        start += order_to_size(o);
     }
+}
+
+/*
+ * mark_free - Hand [start, end) to the free lists, minus any exclusion zones
+ */
+static void mark_free(uint64_t start, uint64_t end) {
+    if (end > range_end) end = range_end;
+    start = align_up(start, PAGE_SIZE);
+    end = align_down(end, PAGE_SIZE);
+    if (start >= end) return;
+
+    // Clip the range against all registered exclusions
+    // Author's Note: This is a simple O(n) loop since we expect very few exclusions.
+    for (uint32_t i = 0; i < exclusion_count; i++) {
+        uint64_t ex_start = exclusions[i].start;
+        uint64_t ex_end = exclusions[i].end;
+        if (start < ex_end && ex_start < end) {
+            if (start < ex_start) mark_free(start, ex_start);
+            if (ex_end < end) mark_free(ex_end, end);
+            return;
+        }
+    }
+
+    split_range(start, end);
 }
 
 bool pmm_is_initialized(void) {
     return inited;
 }
 
-/*
- * pmm_managed_base - Returns the start of the managed physical memory range
- */
-uint64_t pmm_managed_base(void) {
-    return range_start;
-}
-
 uint64_t pmm_managed_end(void) {
     return range_end;
 }
 
-uint64_t pmm_managed_size(void) {
-    return range_end - range_start;
+/*
+ * pmm_map_size - Bytes of page map needed to manage [0, end)
+ */
+uint64_t pmm_map_size(uint64_t end) {
+    return end / PAGE_SIZE;
 }
 
 /*
- * pmm_min_block_size - Returns the minimum block size (order 0) in bytes
+ * pmm_init - Set up an empty buddy allocator for [0, end), with its page map at map_phys
  */
-uint64_t pmm_min_block_size(void) {
-    return min_block;
-}
-
-/*
- * pmm_init - Set up the buddy structures for [range_start_phys, range_end_phys)
- * Freelists start empty: pmm_exclude_range() first, then pmm_populate()
- */
-pmm_status_t pmm_init(uint64_t range_start_phys, uint64_t range_end_phys, uint64_t min_block_size) {
+pmm_status_t pmm_init(uint64_t end, uint64_t map_phys) {
+    if (inited) return PMM_ERR_ALREADY_INIT;
     spinlock_init(&pmm_lock, "pmm_global");
-    bool flags = spinlock_acquire(&pmm_lock);
 
-    if (inited) {
-        spinlock_release(&pmm_lock, flags);
-        return PMM_ERR_ALREADY_INIT;
-    }
-    if (range_end_phys <= range_start_phys) {
-        spinlock_release(&pmm_lock, flags);
-        return PMM_ERR_INVALID;
-    }
-    if (min_block_size == 0 || !is_pow2_u64(min_block_size)) {
-        spinlock_release(&pmm_lock, flags);
-        return PMM_ERR_INVALID;
-    }
-    if (min_block_size < sizeof(pmm_free_header_t)) {
-        LOGF("[PMM] min_block_size (%lu) too small for header (%lu)\n",
-               min_block_size, sizeof(pmm_free_header_t));
-        spinlock_release(&pmm_lock, flags);
-        return PMM_ERR_INVALID;
-    }
+    end = align_down(end, PAGE_SIZE);
+    if (end == 0) return PMM_ERR_INVALID;
 
-    min_block = min_block_size;
+    range_end = end;
+    pmap = (uint8_t*)PHYSMAP_P2V(map_phys);
+    kmemset(pmap, 0, pmm_map_size(end));
 
-    uint64_t start_aligned = (uint64_t)align_up(range_start_phys, min_block);
-    uint64_t end_aligned = (uint64_t)align_down(range_end_phys, min_block);
-
-    if (end_aligned <= start_aligned) {
-        LOGF("[PMM] After alignment, range is empty\n");
-        spinlock_release(&pmm_lock, flags);
-        return PMM_ERR_INVALID;
-    }
-
-    range_start = start_aligned;
-    range_end = end_aligned;
-
-    uint64_t span_trimmed = pmm_managed_size();
-    uint64_t blocks = span_trimmed / min_block;
-
-    uint32_t mo = 0;
-    uint64_t tmp = blocks;
-    while (tmp > 1) { tmp >>= 1; ++mo; }
-    if (mo >= PMM_MAX_ORDERS) mo = PMM_MAX_ORDERS - 1;
-
-    max_order = mo;
-    order_count = max_order + 1;
+    max_order = 0;
+    while (max_order + 1 < PMM_MAX_ORDERS && order_to_size(max_order + 1) <= end)
+        max_order++;
 
     for (uint32_t i = 0; i < PMM_MAX_ORDERS; ++i)
         free_heads[i] = EMPTY_SENTINEL;
 
     kmemset(&stats, 0, sizeof(pmm_stats_t));
     exclusion_count = 0;
-
     inited = true;
 
-    LOGF("[PMM] PMM initialized, managing 0x%lx - 0x%lx (%zu MiB)\n",
-           pmm_managed_base(), pmm_managed_end(), pmm_managed_size() / (1024 * 1024));
-
-    spinlock_release(&pmm_lock, flags);
+    LOGF("[PMM] PMM initialized, managing 0x0 - 0x%lx (%lu MiB)\n", end, end / MEASUREMENT_UNIT_MB);
     return PMM_OK;
 }
 
@@ -369,317 +251,177 @@ pmm_status_t pmm_init(uint64_t range_start_phys, uint64_t range_end_phys, uint64
  * pmm_exclude_range - Physical range [start, end) that must never be allocated or written
  */
 pmm_status_t pmm_exclude_range(uint64_t start, uint64_t end) {
+    if (!inited) return PMM_ERR_NOT_INIT;
+    if (end <= start) return PMM_ERR_INVALID;
+
     bool flags = spinlock_acquire(&pmm_lock);
-    if (!inited) {
-        spinlock_release(&pmm_lock, flags);
-        return PMM_ERR_NOT_INIT;
-    }
-    if (end <= start) {
-        spinlock_release(&pmm_lock, flags);
-        return PMM_ERR_INVALID;
-    }
+    pmm_status_t status = PMM_OK;
+
     if (exclusion_count >= PMM_MAX_EXCLUSIONS) {
         LOGF("[PMM] Exclusion table full (max %d)\n", PMM_MAX_EXCLUSIONS);
-        spinlock_release(&pmm_lock, flags);
-        return PMM_ERR_INVALID;
+        status = PMM_ERR_INVALID;
+    } else {
+        exclusions[exclusion_count++] = (pmm_exclusion_t){ align_down(start, PAGE_SIZE), align_up(end, PAGE_SIZE) };
+        LOGF("[PMM] Registered exclusion [0x%lx, 0x%lx)\n", start, end);
     }
 
-    exclusions[exclusion_count].start = start;
-    exclusions[exclusion_count].end = end;
-    exclusion_count++;
+    spinlock_release(&pmm_lock, flags);
+    return status;
+}
 
-    LOGF("[PMM] Registered exclusion [0x%lx, 0x%lx)\n", start, end);
+/*
+ * pmm_populate - Mark a firmware reported available region as free
+ */
+pmm_status_t pmm_populate(uint64_t start, uint64_t end) {
+    if (!inited) return PMM_ERR_NOT_INIT;
+    if (end <= start) return PMM_ERR_INVALID;
+
+    bool flags = spinlock_acquire(&pmm_lock);
+    mark_free(start, end);
     spinlock_release(&pmm_lock, flags);
     return PMM_OK;
 }
 
 /*
- * pmm_shutdown - Reset state so pmm_init may be called again
+ * alloc_order - Find a free block at >= order and split it down (lock held)
  */
-void pmm_shutdown(void) {
-    bool flags = spinlock_acquire(&pmm_lock);
-    if (!inited) {
-        spinlock_release(&pmm_lock, flags);
-        return;
-    }
+static pmm_status_t alloc_order(uint32_t order, uint64_t* out_phys) {
+    for (uint32_t o = order; o <= max_order; o++) {
+        uint64_t block = pop_head(o);
+        if (block == EMPTY_SENTINEL) continue;
 
-    // Zero only free blocks
-    for (uint32_t order = 0; order <= max_order; order++) {
-        uint64_t cur = free_heads[order];
-        while (cur != EMPTY_SENTINEL) {
-            pmm_free_header_t* hdr = (pmm_free_header_t*)PHYSMAP_P2V(cur);
-            uint64_t next = hdr->next_phys;
-            kmemset(hdr, 0, order_to_size(order));
-            cur = (next == EMPTY_SENTINEL) ? EMPTY_SENTINEL : next;
+        // Hand the upper halves back until the block is the size we want
+        while (o > order) {
+            o--;
+            push_head(o, block + order_to_size(o));
         }
+
+        *out_phys = block;
+        return PMM_OK;
     }
-
-    inited = false;
-    range_start = 0;
-    range_end = 0;
-    min_block = PMM_MIN_ORDER_PAGE_SIZE;
-    max_order = 0;
-    order_count = 0;
-    exclusion_count = 0;
-
-    for (uint32_t i = 0; i < PMM_MAX_ORDERS; ++i)
-        free_heads[i] = EMPTY_SENTINEL;
-
-    kmemset(&stats, 0, sizeof(pmm_stats_t));
-
-    LOGF("[PMM] PMM Shutdown\n");
-    spinlock_release(&pmm_lock, flags);
-}
-
-/*
- * alloc_block_of_order - internal allocation helper: find a free block at >= req_order and split down
- */
-static pmm_status_t alloc_block_of_order(uint32_t req_order, uint64_t *out_phys) {
-    if (!inited) return PMM_ERR_NOT_INIT;
-    if (req_order > max_order) return PMM_ERR_OOM;
-
-    for (uint32_t o = req_order; o <= max_order; ++o) {
-        while (free_heads[o] != EMPTY_SENTINEL) {
-            uint64_t block = pop_head(o);
-            if (block == EMPTY_SENTINEL) {
-                break;
-            }
-
-            while (o > req_order) {
-                --o;
-                uint64_t half = order_to_size(o);
-                uint64_t buddy = block + half;
-
-                // Push buddy into freelist at order o
-                push_head(o, buddy);
-            }
-
-            *out_phys = block;
-            return PMM_OK;
-        }
-    }
-
     return PMM_ERR_OOM;
 }
 
 /*
  * pmm_alloc - Allocate a block large enough to satisfy size_bytes
  */
-pmm_status_t pmm_alloc(size_t size_bytes, uint64_t *out_phys) {
+pmm_status_t pmm_alloc(size_t size_bytes, uint64_t* out_phys) {
+    if (!out_phys || size_bytes == 0) return PMM_ERR_INVALID;
+    if (!inited) return PMM_ERR_NOT_INIT;
+
+    uint32_t order = size_to_order(size_bytes);
+    if (order > max_order) return PMM_ERR_OOM;
+
     bool flags = spinlock_acquire(&pmm_lock);
-    if (out_phys == NULL) {
-        spinlock_release(&pmm_lock, flags);
-        return PMM_ERR_INVALID;
-    }
-    if (!inited) {
-        spinlock_release(&pmm_lock, flags);
-        return PMM_ERR_NOT_INIT;
-    }
-    if (size_bytes == 0) {
-        spinlock_release(&pmm_lock, flags);
-        return PMM_ERR_INVALID;
-    }
-
-    uint64_t rounded = (uint64_t)size_bytes;
-    if (rounded & (min_block - 1)) rounded = align_up(rounded, min_block);
-
-    uint32_t order = size_to_order(rounded);
-    if (order > max_order) {
-        spinlock_release(&pmm_lock, flags);
-        return PMM_ERR_OOM;
-    }
-
     stats.alloc_calls++;
-    pmm_status_t status = alloc_block_of_order(order, out_phys);
+    pmm_status_t status = alloc_order(order, out_phys);
     spinlock_release(&pmm_lock, flags);
     return status;
 }
 
-pmm_status_t pmm_free(uint64_t phys, size_t size_bytes) {
-    bool flags = spinlock_acquire(&pmm_lock);
-    if (!inited) {
-        spinlock_release(&pmm_lock, flags);
-        return PMM_ERR_NOT_INIT;
-    }
-    if (size_bytes == 0) {
-        spinlock_release(&pmm_lock, flags);
-        return PMM_ERR_INVALID;
-    }
-
-    if (phys < range_start) {
-        LOGF("[PMM ERROR] Free: address 0x%lx below managed range\n", phys);
-        spinlock_release(&pmm_lock, flags);
-        return PMM_ERR_OUT_OF_RANGE;
-    }
-    if (phys >= range_end) {
-        LOGF("[PMM ERROR] Free: address 0x%lx above managed range\n", phys);
-        spinlock_release(&pmm_lock, flags);
-        return PMM_ERR_OUT_OF_RANGE;
-    }
-
-    // Round size up to nearest block size to determine order and alignment requirements
-    uint64_t rounded = (uint64_t)size_bytes;
-    if (rounded & (min_block - 1)) rounded = align_up(rounded, min_block);
-
-    uint32_t order = size_to_order(rounded);
-    if (order > max_order) {
-        spinlock_release(&pmm_lock, flags);
-        return PMM_ERR_INVALID;
-    }
-
-    uint64_t block_addr = phys;
-    uint64_t block_size = order_to_size(order);
-
-    if ((block_addr & (block_size - 1)) != 0) {
-        LOGF("[PMM ERROR] Free: address 0x%lx not aligned to size 0x%lx\n",
-               block_addr, block_size);
-        spinlock_release(&pmm_lock, flags);
-        return PMM_ERR_NOT_ALIGNED;
+/*
+ * free_order - Coalesce a block with its buddies and put it back (lock held)
+ */
+static pmm_status_t free_order(uint64_t phys, uint32_t order) {
+    if (free_overlaps(phys, order)) {
+        LOGF("[PMM ERROR] Double free at 0x%lx\n", phys);
+        return PMM_ERR_DOUBLE_FREE;
     }
 
     stats.free_calls++;
 
     // Coalesce like a pro heheh
     while (order < max_order) {
-        uint64_t buddy = buddy_of(block_addr, order);
-        uint64_t buddy_size = order_to_size(order);
-
-        if (buddy < range_start || (buddy + buddy_size) > range_end) {
-            break;
-        }
-
-        bool found = remove_specific(order, buddy);
-        if (!found) {
-            push_head(order, block_addr);
-            spinlock_release(&pmm_lock, flags);
-            return PMM_OK;
-        }
+        uint64_t buddy = phys ^ order_to_size(order);
+        if (buddy + order_to_size(order) > range_end) break;
+        if (!take_buddy(order, buddy)) break;
 
         stats.coalesce_success++;
-
-        // Merged block starts at the lower address
-        if (buddy < block_addr) block_addr = buddy;
-        ++order;
+        if (buddy < phys) phys = buddy;
+        order++;
     }
 
-    push_head(order, block_addr);
-    spinlock_release(&pmm_lock, flags);
+    push_head(order, phys);
     return PMM_OK;
 }
 
 /*
- * pmm_mark_reserved - Mark [start, end) as reserved, partial overlaps included
+ * pmm_free - Return a block to the allocator
  */
-pmm_status_t pmm_mark_reserved(uint64_t start, uint64_t end) {
-    bool flags = spinlock_acquire(&pmm_lock);
-    if (!inited) {
-        spinlock_release(&pmm_lock, flags);
-        return PMM_ERR_NOT_INIT;
-    }
-    if (end <= start) {
-        spinlock_release(&pmm_lock, flags);
-        return PMM_ERR_INVALID;
-    }
-
-    if (start < range_start) start = range_start;
-    if (end > range_end) end = range_end;
-    if (start >= end) {
-        spinlock_release(&pmm_lock, flags);
-        return PMM_ERR_INVALID;
-    }
-
-    uint64_t orig_start = start, orig_end = end;
-    start = align_down(start, min_block);
-    end = align_up(end, min_block);
-
-    if (start != orig_start || end != orig_end) {
-        LOGF("[PMM] Adjusted reserved range [0x%lx, 0x%lx) to [0x%lx, 0x%lx)\n",
-               orig_start, orig_end, start, end);
-    }
-
-    for (int32_t o = (int32_t)max_order; o >= 0; --o) {
-        uint64_t block_size = order_to_size((uint32_t)o);
-        uint64_t cur = free_heads[o];
-
-        while (cur != EMPTY_SENTINEL) {
-            uint64_t next = read_next_word(cur, (uint32_t)o);
-            uint64_t block_start = cur;
-            uint64_t block_end = cur + block_size;
-
-            if (!(block_end <= start || block_start >= end)) {
-                remove_specific((uint32_t)o, cur);
-
-                if (block_start < start) {
-                    pmm_mark_free_range(block_start, start);
-                }
-                if (block_end > end) {
-                    pmm_mark_free_range(end, block_end);
-                }
-            }
-
-            cur = (next == EMPTY_SENTINEL) ? EMPTY_SENTINEL : next;
-        }
-    }
-
-    spinlock_release(&pmm_lock, flags);
-    return PMM_OK;
-}
-
-/*
- * pmm_mark_free_range - manually mark a physical range [start,end) as free
- */
-static pmm_status_t pmm_mark_free_range(uint64_t start, uint64_t end) {
+pmm_status_t pmm_free(uint64_t phys, size_t size_bytes) {
     if (!inited) return PMM_ERR_NOT_INIT;
-    if (end <= start) return PMM_ERR_INVALID;
-
-    if (start < range_start) start = range_start;
-    if (end > range_end) end = range_end;
-    if (start >= end) return PMM_ERR_INVALID;
-
-    uint64_t orig_start = start, orig_end = end;
-    start = align_up(start, min_block);
-    end = align_down(end, min_block);
-
-    if (start >= end) {
-        LOGF("[PMM] After alignment, free range [0x%lx, 0x%lx) became empty\n",
-               orig_start, orig_end);
-        return PMM_ERR_INVALID;
+    if (size_bytes == 0) return PMM_ERR_INVALID;
+    if (phys >= range_end) {
+        LOGF("[PMM ERROR] Free: address 0x%lx above managed range\n", phys);
+        return PMM_ERR_OUT_OF_RANGE;
     }
 
-    if (start != orig_start || end != orig_end) {
-        LOGF("[PMM] Adjusted free range [0x%lx, 0x%lx) to [0x%lx, 0x%lx)\n",
-               orig_start, orig_end, start, end);
+    uint32_t order = size_to_order(size_bytes);
+    if (order > max_order) return PMM_ERR_INVALID;
+    if (phys + order_to_size(order) > range_end) return PMM_ERR_OUT_OF_RANGE;
+
+    if (phys & (order_to_size(order) - 1)) {
+        LOGF("[PMM ERROR] Free: address 0x%lx not aligned to size 0x%lx\n", phys, order_to_size(order));
+        return PMM_ERR_NOT_ALIGNED;
     }
 
-    // Clip the range against all registered exclusions
-    // Author's Note: This is a simple O(n) loop since we expect very few exclusions. 
-    // For large exclusion counts, a more efficient data structure would be needed.
-    for (uint32_t i = 0; i < exclusion_count; i++) {
-        uint64_t ex_start = exclusions[i].start;
-        uint64_t ex_end = exclusions[i].end;
-        if (start < ex_end && ex_start < end) {
-            if (start < ex_start) {
-                pmm_mark_free_range(start, ex_start);
-            }
-            if (ex_end < end) {
-                pmm_mark_free_range(ex_end, end);
-            }
-            return PMM_OK;
-        }
-    }
-
-    split_range(start, end);
-    return PMM_OK;
-}
-
-/*
- * pmm_populate - public version
- */
-pmm_status_t pmm_populate(uint64_t start, uint64_t end) {
     bool flags = spinlock_acquire(&pmm_lock);
-    pmm_status_t status = pmm_mark_free_range(start, end);
+    pmm_status_t status = free_order(phys, order);
     spinlock_release(&pmm_lock, flags);
     return status;
+}
+
+/*
+ * pmm_alloc_exact - Like pmm_alloc, but the rounding tail goes straight back to the free lists,
+ * so exactly align_up(size, PAGE_SIZE) bytes stay allocated
+ */
+pmm_status_t pmm_alloc_exact(size_t size_bytes, uint64_t* out_phys) {
+    if (!out_phys || size_bytes == 0) return PMM_ERR_INVALID;
+    if (!inited) return PMM_ERR_NOT_INIT;
+
+    uint32_t order = size_to_order(size_bytes);
+    if (order > max_order) return PMM_ERR_OOM;
+
+    bool flags = spinlock_acquire(&pmm_lock);
+    stats.alloc_calls++;
+    pmm_status_t status = alloc_order(order, out_phys);
+    if (status == PMM_OK)
+        split_range(*out_phys + align_up(size_bytes, PAGE_SIZE), *out_phys + order_to_size(order));
+    spinlock_release(&pmm_lock, flags);
+    return status;
+}
+
+/*
+ * pmm_free_range - Frees any page aligned range, in the largest aligned blocks that fit
+ */
+pmm_status_t pmm_free_range(uint64_t phys, size_t size_bytes) {
+    if (!inited) return PMM_ERR_NOT_INIT;
+    if (phys & (PAGE_SIZE - 1)) return PMM_ERR_NOT_ALIGNED;
+
+    uint64_t end = phys + align_up(size_bytes, PAGE_SIZE);
+    if (end > range_end || end < phys) return PMM_ERR_OUT_OF_RANGE;
+
+    bool flags = spinlock_acquire(&pmm_lock);
+    pmm_status_t status = PMM_OK;
+    while (phys < end && status == PMM_OK) {
+        uint32_t o = max_order;
+        while (order_to_size(o) > end - phys || (phys & (order_to_size(o) - 1))) o--;
+        status = free_order(phys, o);
+        phys += order_to_size(o);
+    }
+    spinlock_release(&pmm_lock, flags);
+    return status;
+}
+
+/*
+ * pmm_is_free - True if the page at phys is currently free
+ */
+bool pmm_is_free(uint64_t phys) {
+    if (!inited || phys >= range_end) return false;
+    bool flags = spinlock_acquire(&pmm_lock);
+    bool free = free_covering(phys);
+    spinlock_release(&pmm_lock, flags);
+    return free;
 }
 
 void pmm_get_stats(pmm_stats_t* out_stats) {
@@ -693,134 +435,77 @@ void pmm_get_stats(pmm_stats_t* out_stats) {
  * pmm_dump_stats - Print detailed PMM statistics
  */
 void pmm_dump_stats(void) {
-    bool flags = spinlock_acquire(&pmm_lock);
     if (!inited) {
         LOGF("[PMM] Not initialized\n");
-        spinlock_release(&pmm_lock, flags);
         return;
     }
 
-    uint64_t managed_span = range_end - range_start;
-    uint64_t managed_span_mib = bytes_to_mib_hundredths(managed_span);
+    bool flags = spinlock_acquire(&pmm_lock);
 
-    LOGF("\n=== PMM Statistics ===\n");
-    LOGF("Managed range: [0x%lx - 0x%lx) (0x%lx bytes, %lu.%02lu MiB)\n",
-           range_start, range_end, managed_span,
-           managed_span_mib / 100ULL, managed_span_mib % 100ULL);
-    LOGF("Min block size: 0x%lx, Max order: %u\n", min_block, max_order);
+    uint64_t free_bytes = 0;
+    for (uint32_t o = 0; o <= max_order; o++) free_bytes += stats.free_blocks[o] * order_to_size(o);
 
-    LOGF("\nOperation counts:\n");
-    LOGF("  Allocations:      %lu\n", stats.alloc_calls);
-    LOGF("  Frees:            %lu\n", stats.free_calls);
-    LOGF("  Coalesces:        %lu\n", stats.coalesce_success);
-    LOGF("  Corruptions:      %lu\n", stats.corruption_detected);
+    LOGF("PMM\n");
+    log_indent(1);
+    LOGF("managing  0x0 - 0x%lx (%lu MiB, max order %u)\n", range_end, range_end / MEASUREMENT_UNIT_MB, max_order);
+    LOGF("free      %lu KiB of %lu KiB\n", free_bytes / MEASUREMENT_UNIT_KB, range_end / MEASUREMENT_UNIT_KB);
+    LOGF("calls     %lu allocs, %lu frees, %lu merges\n", stats.alloc_calls, stats.free_calls, stats.coalesce_success);
+    if (stats.corruption_detected) LOGF("errors    %lu corrupt blocks seen\n", stats.corruption_detected);
 
-    LOGF("\nFree block distribution:\n");
-    LOGF("Order  Size         Free Blocks\n");
-    LOGF("-----  -----------  -----------\n");
-
-    uint64_t total_free_bytes = 0;
-    bool has_free_blocks = false;
-
-    for (uint32_t o = 0; o <= max_order; o++) {
-        uint64_t size = order_to_size(o);
-        uint64_t count = stats.free_blocks[o];
-        
-        if (count > 0) {
-            uint64_t bytes = count * size;
-            total_free_bytes += bytes;
-            LOGF("%-5u  0x%-9lx  %-5lu\n", o, size, count);
-            has_free_blocks = true;
-        }
-    }
-    
-    if (!has_free_blocks) {
-        LOGF("  (no free blocks - all memory allocated)\n");
-    }
-    
-    uint64_t total_managed = pmm_managed_size();
-    uint64_t used_bytes = total_managed - total_free_bytes;
-    
-    uint64_t total_managed_mib = bytes_to_mib_hundredths(total_managed);
-    uint64_t total_free_mib = bytes_to_mib_hundredths(total_free_bytes);
-    uint64_t used_mib = bytes_to_mib_hundredths(used_bytes);
-    uint64_t utilization_tenths = ratio_to_tenths(used_bytes, total_managed);
-
-    LOGF("\nMemory summary:\n");
-    LOGF("  Total managed: %lu bytes (%lu.%02lu MiB)\n",
-           total_managed, total_managed_mib / 100ULL, total_managed_mib % 100ULL);
-    LOGF("  Free:          %lu bytes (%lu.%02lu MiB)\n",
-           total_free_bytes, total_free_mib / 100ULL, total_free_mib % 100ULL);
-    LOGF("  Used:          %lu bytes (%lu.%02lu MiB)\n",
-           used_bytes, used_mib / 100ULL, used_mib % 100ULL);
-    LOGF("  Utilization:   %lu.%01lu%%\n",
-           utilization_tenths / 10ULL, utilization_tenths % 10ULL);
-    LOGF("======================\n");
+    LOGF("free blocks\n");
+    log_indent(1);
+    for (uint32_t o = 0; o <= max_order; o++)
+        if (stats.free_blocks[o]) LOGF("order %-2u %8lu KiB  x%lu\n", o, order_to_size(o) / MEASUREMENT_UNIT_KB, stats.free_blocks[o]);
+    log_indent(-2);
     spinlock_release(&pmm_lock, flags);
 }
 
 /*
- * pmm_verify_integrity - Free-list sanity check, false if anything is off
+ * pmm_verify_integrity - Free lists and page map must agree, false if anything is off
  */
 bool pmm_verify_integrity(void) {
-    bool flags = spinlock_acquire(&pmm_lock);
     if (!inited) {
         LOGF("[PMM] Not initialized\n");
-        spinlock_release(&pmm_lock, flags);
         return false;
     }
 
-    LOGF("[PMM] Checking free-list integrity...\n");
+    bool flags = spinlock_acquire(&pmm_lock);
+    bool ok = true;
+    uint64_t listed = 0;
 
-    bool all_ok = true;
-    uint64_t counted_free[PMM_MAX_ORDERS] = {0};
+    for (uint32_t order = 0; order <= max_order && ok; order++) {
+        uint64_t count = 0;
+        uint64_t prev = EMPTY_SENTINEL;
 
-    for (uint32_t order = 0; order <= max_order; order++) {
-        uint64_t cur = free_heads[order];
-        int count = 0;
-        uint64_t size = order_to_size(order);
-
-        while (cur != EMPTY_SENTINEL) {
-            count++;
-            counted_free[order]++;
-
-            if (count > 100000) {
-                LOGF("[PMM] Order %u: Possible infinite loop detected\n", order);
-                all_ok = false;
+        for (uint64_t cur = free_heads[order]; cur != EMPTY_SENTINEL; cur = hdr_of(cur)->next_phys) {
+            if (cur >= range_end || (cur & (order_to_size(order) - 1)) ||
+                pmap[cur / PAGE_SIZE] != (PG_FREE | order) || !valid_hdr(cur, order) ||
+                hdr_of(cur)->prev_phys != prev || ++count > stats.free_blocks[order]) {
+                LOGF("[PMM] Order %u: broken block at 0x%lx\n", order, cur);
+                ok = false;
                 break;
             }
-
-            if (!validate_free_header(cur, order)) {
-                LOGF("[PMM] Order %u: Invalid header at block 0x%lx\n", order, cur);
-                all_ok = false;
-                break;
-            }
-
-            if ((cur & (size - 1)) != 0) {
-                LOGF("[PMM] Order %u: Block 0x%lx not naturally aligned to size 0x%lx\n",
-                        order, cur, size);
-                all_ok = false;
-            }
-
-            uint64_t next = read_next_word(cur, order);
-            cur = (next == EMPTY_SENTINEL) ? EMPTY_SENTINEL : next;
+            prev = cur;
         }
+
+        if (ok && count != stats.free_blocks[order]) {
+            LOGF("[PMM] Order %u: counted %lu blocks, stats say %lu\n", order, count, stats.free_blocks[order]);
+            ok = false;
+        }
+        listed += count;
     }
 
-    for (uint32_t order = 0; order <= max_order; order++) {
-        if (counted_free[order] != stats.free_blocks[order]) {
-            LOGF("[PMM] Order %u: Statistics mismatch (counted: %lu, stats: %lu)\n",
-                   order, counted_free[order], stats.free_blocks[order]);
-            all_ok = false;
-        }
+    // Every free mark in the page map must belong to a listed block
+    uint64_t marked = 0;
+    for (uint64_t i = 0; ok && i < range_end / PAGE_SIZE; i++)
+        if (pmap[i] & PG_FREE) marked++;
+
+    if (ok && marked != listed) {
+        LOGF("[PMM] Page map has %lu free marks, lists have %lu blocks\n", marked, listed);
+        ok = false;
     }
-    
-    if (all_ok) {
-        LOGF("[PMM] All checks passed\n");
-    } else {
-        LOGF("[PMM] FAILED - integrity compromised!\n");
-    }
-    
+
+    if (!ok) LOGF("[PMM] Integrity check failed\n");
     spinlock_release(&pmm_lock, flags);
-    return all_ok;
+    return ok;
 }

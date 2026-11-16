@@ -31,11 +31,6 @@ void serial_init_port(serial_port_t port) {
     outb(port_base + 4, 0x0B);
 }
 
-void serial_init_all(void) {
-    serial_init_port(SERIAL_COM1);
-    serial_init_port(SERIAL_COM2);
-}
-
 /*
  * serial_is_ready_port - Checks if transmit buffer is empty for specific port
  */
@@ -77,55 +72,4 @@ void serial_write_len_port(serial_port_t port, const char* str, size_t len) {
     }
 }
 
-/*
- * serial_write_hex_digit_port - Internal helper for hex digit output to specific port
- */
-void serial_write_hex_digit_port(serial_port_t port, uint8_t val) {
-    val &= 0xF;
-    if (val < 10)
-        serial_write_char_port(port, '0' + val);
-    else
-        serial_write_char_port(port, 'A' + (val - 10));
-}
-
-/*
- * serial_write_hex8_port - Outputs 8-bit value in hexadecimal to specific port
- */
-void serial_write_hex8_port(serial_port_t port, uint8_t value) {
-    serial_write_hex_digit_port(port, value >> 4);
-    serial_write_hex_digit_port(port, value & 0xF);
-}
-
-/*
- * serial_write_hex16_port - Outputs 16-bit value in hexadecimal to specific port
- */
-void serial_write_hex16_port(serial_port_t port, uint16_t value) {
-    for (int i = 12; i >= 0; i -= 4)
-        serial_write_hex_digit_port(port, (value >> i) & 0xF);
-}
-
-/*
- * serial_write_hex32_port - Outputs 32-bit value in hexadecimal to specific port
- */
-void serial_write_hex32_port(serial_port_t port, uint32_t value) {
-    for (int i = 28; i >= 0; i -= 4)
-        serial_write_hex_digit_port(port, (value >> i) & 0xF);
-}
-
-/*
- * serial_write_hex64_port - Outputs 64-bit value in hexadecimal to specific port
- */
-void serial_write_hex64_port(serial_port_t port, uint64_t value) {
-    for (int i = 60; i >= 0; i -= 4)
-        serial_write_hex_digit_port(port, (value >> i) & 0xF);
-}
-
-// Default implementations (COM1 for backward compatibility)
-int serial_is_ready(void) { return serial_is_ready_port(SERIAL_COM1); }
-void serial_write_char(char c) { serial_write_char_port(SERIAL_COM1, c); }
 void serial_write(const char* str) { serial_write_port(SERIAL_COM1, str); }
-void serial_write_len(const char* str, size_t len) { serial_write_len_port(SERIAL_COM1, str, len); }
-void serial_write_hex8(uint8_t value) { serial_write_hex8_port(SERIAL_COM1, value); }
-void serial_write_hex16(uint16_t value) { serial_write_hex16_port(SERIAL_COM1, value); }
-void serial_write_hex32(uint32_t value) { serial_write_hex32_port(SERIAL_COM1, value); }
-void serial_write_hex64(uint64_t value) { serial_write_hex64_port(SERIAL_COM1, value); }

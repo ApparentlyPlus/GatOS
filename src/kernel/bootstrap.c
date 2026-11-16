@@ -64,10 +64,11 @@ bool kernel_bootstrap(void* mb_info, multiboot_parser_t* mb, bool verbose) {
 		return false;
 	}
 
+	// The multiboot struct lives in the higher half now, so the identity map can go
+	unmap_identity();
+
 	// Early paging and physmap
 	reserve_tables(mb);
-
-	cleanup_kpt(0x0, get_kend(false));
 
 	// With this I cast memory management
 	build_physmap();
@@ -78,13 +79,14 @@ bool kernel_bootstrap(void* mb_info, multiboot_parser_t* mb, bool verbose) {
 #endif
 
 	// Initialize PMM before VMM since VMM needs to allocate memory for page tables
-	pmm_status_t pmm_status = pmm_init(0x0, PHYSMAP_V2P(get_physmap_end()), PAGE_SIZE);
+	// Its page map goes right past the kernel, the same trick as the physmap tables
+	pmm_status_t pmm_status = pmm_init(kmem->ram, kend_grow(mb, pmm_map_size(kmem->ram)));
 	if(pmm_status != PMM_OK) {
 		return false;
 	}
 
-	// Exclude kernel image from the allocator before populating freelists
-	pmm_exclude_range(get_kstart(false), get_kend(false));
+	// Nothing below KEND is ever handed out
+	pmm_exclude_range(0, kmem->kend);
 
 	// Populate freelists from firmware reported available regions
 	for (size_t i = 0; i < mb->memory_map_length; i++) {
@@ -111,7 +113,7 @@ bool kernel_bootstrap(void* mb_info, multiboot_parser_t* mb, bool verbose) {
 	}
 
 	// Initialize VMM and switch to it
-	vmm_status_t vmm_status = vmm_kernel_init(get_kend(true) + PAGE_SIZE, 0xFFFFFFFFFFFFF000);
+	vmm_status_t vmm_status = vmm_kernel_init(KERNEL_P2V(kmem->kend) + PAGE_SIZE, 0xFFFFFFFFFFFFF000);
 	if(vmm_status != VMM_OK) {
 		return false;
 	}

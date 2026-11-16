@@ -64,10 +64,9 @@ typedef struct slab_free_obj {
 typedef struct {
     uint32_t magic;
     uint32_t cache_id;
-    uint64_t alloc_timestamp;
 } slab_alloc_header_t;
 
-// slab cache structure
+// slab cache structure - minor reformatting but same fields
 struct slab_cache {
     uint32_t magic;
     char name[SLAB_CACHE_NAME_LEN];
@@ -89,6 +88,9 @@ struct slab_cache {
 
 static bool slab_inited = false;
 static slab_cache_t* caches = NULL;
+
+// Cache structs live in BSS, a full page each from the PMM would be a waste
+static slab_cache_t cache_pool[SLAB_MAX_CACHES];
 static uint32_t next_cache_id = 1;
 static slab_stats_t stats;
 
@@ -164,13 +166,6 @@ static inline bool validate_free_obj(slab_free_obj_t* obj) {
 }
  
 /*
- * b2kb - Convert bytes to kilobytes with 2 decimal places
- */
-static uint64_t b2kb(uint64_t bytes) {
-    return (bytes * 100ULL) / 1024ULL;
-}
-
-/*
  * b2mb - Convert bytes to megabytes with 2 decimal places
  */
 static uint64_t b2mb(uint64_t bytes) {
@@ -207,7 +202,7 @@ static void slab_remove_from_list(slab_t** list_head, slab_t* slab) {
 }
 
 /*
- * slab_add_to_list - add slab to head of list (LIFO style), records list_id
+ * slab_add_to_list - add slab to head of list (LIFO style); records list_id
  */
 static void slab_add_to_list(slab_t** list_head, slab_t* slab, uint8_t list_id) {
     if (!slab) return;
@@ -224,11 +219,24 @@ static void slab_add_to_list(slab_t** list_head, slab_t* slab, uint8_t list_id) 
 }
 
 /*
- * slab_move_to_list - convenience wrapper (remove then add), records list_id
+ * slab_relist - Move a slab to the list its fill level says it belongs on, counters included
  */
-static void slab_move_to_list(slab_t** from_list, slab_t** to_list, slab_t* slab, uint8_t to_id) {
-    slab_remove_from_list(from_list, slab);
-    slab_add_to_list(to_list, slab, to_id);
+static void slab_relist(slab_cache_t* cache, slab_t* slab) {
+    slab_t** lists[] = { NULL, &cache->slabs_empty, &cache->slabs_partial, &cache->slabs_full };
+    uint64_t* counts[] = { NULL, &cache->stats.empty_slabs, &cache->stats.partial_slabs, &cache->stats.full_slabs };
+
+    uint8_t to = slab->in_use == 0 ? SLAB_LIST_EMPTY
+               : slab->in_use == slab->capacity ? SLAB_LIST_FULL
+               : SLAB_LIST_PARTIAL;
+    uint8_t from = slab->list_id;
+    if (to == from) return;
+
+    if (from != SLAB_LIST_NONE) {
+        slab_remove_from_list(lists[from], slab);
+        (*counts[from])--;
+    }
+    slab_add_to_list(lists[to], slab, to);
+    (*counts[to])++;
 }
 
 static slab_t* slab_allocate_page(slab_cache_t* cache) {
@@ -294,7 +302,6 @@ static slab_t* slab_allocate_page(slab_cache_t* cache) {
     stats.total_pmm_bytes += PAGE_SIZE;
 
     cache->stats.slab_count++;
-    cache->stats.empty_slabs++;
 
     return slab;
 }
@@ -334,35 +341,15 @@ static slab_t* get_slab_from_obj(void* obj) {
 }
 
 /*
- * slab_alloc_cache_struct - Allocate the cache structure itself from PMM
+ * slab_alloc_cache_struct - Grab a free slot in the static cache table, NULL when it's full
  */
 static slab_cache_t* slab_alloc_cache_struct(void) {
-    uint64_t phys = 0;
-    pmm_status_t status = pmm_alloc(sizeof(slab_cache_t), &phys);
-    if (status != PMM_OK) {
-        LOGF("[SLAB] Failed to allocate cache structure from PMM\n");
-        return NULL;
+    for (int i = 0; i < SLAB_MAX_CACHES; i++) {
+        if (cache_pool[i].magic == SLAB_CACHE_MAGIC) continue;
+        kmemset(&cache_pool[i], 0, sizeof(slab_cache_t));
+        return &cache_pool[i];
     }
-
-    slab_cache_t* cache = (slab_cache_t*)PHYSMAP_P2V(phys);
-
-    kmemset(cache, 0, sizeof(slab_cache_t));
-
-    return cache;
-}
-
-/*
- * slab_free_cache_struct - Free the cache structure back to PMM
- */
-static void slab_free_cache_struct(slab_cache_t* cache) {
-    if (!cache) return;
-
-    uint64_t phys = PHYSMAP_V2P((uint64_t)cache);
-
-    uint64_t aligned_phys = align_down(phys, pmm_min_block_size());
-    size_t aligned_size = align_up(sizeof(slab_cache_t), pmm_min_block_size());
-
-    pmm_free(aligned_phys, aligned_size);
+    return NULL;
 }
 
 #pragma endregion
@@ -394,33 +381,6 @@ slab_status_t slab_init(void) {
 
     spinlock_release(&slab_list_lock, flags);
     return SLAB_OK;
-}
-
-/*
- * slab_shutdown - Destroy all caches and mark allocator uninitialized
- */
-void slab_shutdown(void) {
-    bool flags = spinlock_acquire(&slab_list_lock);
-    if (!slab_inited) {
-        spinlock_release(&slab_list_lock, flags);
-        return;
-    }
-
-    // slab_cache_destroy acquires the list lock, so we release before calling it
-    while (caches) {
-        slab_cache_t* cache = caches;
-        spinlock_release(&slab_list_lock, flags);
-        slab_cache_destroy(cache);
-        flags = spinlock_acquire(&slab_list_lock);
-    }
-
-    slab_inited = false;
-    caches = NULL;
-    next_cache_id = 1;
-    kmemset(&stats, 0, sizeof(slab_stats_t));
-
-    LOGF("[SLAB] Slab (System Wide) Allocator shutdown\n");
-    spinlock_release(&slab_list_lock, flags);
 }
 
 /*
@@ -471,7 +431,7 @@ slab_cache_t* slab_cache_create(const char* name, size_t obj_size,
 
     slab_cache_t* cache = slab_alloc_cache_struct();
     if (!cache) {
-        LOGF("[SLAB] Failed to allocate cache structure\n");
+        LOGF("[SLAB] Cache table full (max %d)\n", SLAB_MAX_CACHES);
         spinlock_release(&slab_list_lock, list_flags);
         return NULL;
     }
@@ -544,7 +504,6 @@ void slab_cache_destroy(slab_cache_t* cache) {
     spinlock_release(&cache->lock, cache_flags);
     spinlock_release(&slab_list_lock, list_flags);
 
-    slab_free_cache_struct(cache);
 }
 
 /*
@@ -601,7 +560,6 @@ slab_status_t slab_alloc(slab_cache_t* cache, void** out_obj) {
             spinlock_release(&cache->lock, flags);
             return SLAB_ERR_NO_MEMORY;
         }
-        slab_add_to_list(&cache->slabs_empty, slab, SLAB_LIST_EMPTY);
     }
 
     if (!slab_validate(slab)) {
@@ -631,28 +589,11 @@ slab_status_t slab_alloc(slab_cache_t* cache, void** out_obj) {
     slab_alloc_header_t* header = (slab_alloc_header_t*)obj;
     header->magic = SLAB_ALLOC_MAGIC;
     header->cache_id = cache->cache_id;
-    header->alloc_timestamp = 0;
 
     cache->stats.total_allocs++;
     cache->stats.active_objects++;
 
-    if (slab->in_use == slab->capacity) {
-        if (slab->list_id == SLAB_LIST_PARTIAL) {
-            slab_move_to_list(&cache->slabs_partial, &cache->slabs_full, slab, SLAB_LIST_FULL);
-            cache->stats.partial_slabs--;
-            cache->stats.full_slabs++;
-        } else if (slab->list_id == SLAB_LIST_EMPTY) {
-            slab_move_to_list(&cache->slabs_empty, &cache->slabs_full, slab, SLAB_LIST_FULL);
-            cache->stats.empty_slabs--;
-            cache->stats.full_slabs++;
-        }
-    } else if (slab->in_use == 1) {
-        if (slab->list_id == SLAB_LIST_EMPTY) {
-            slab_move_to_list(&cache->slabs_empty, &cache->slabs_partial, slab, SLAB_LIST_PARTIAL);
-            cache->stats.empty_slabs--;
-            cache->stats.partial_slabs++;
-        }
-    }
+    slab_relist(cache, slab);
 
     *out_obj = (void*)((uint8_t*)obj + sizeof(slab_alloc_header_t));
     
@@ -713,32 +654,12 @@ slab_status_t slab_free(slab_cache_t* cache, void* obj) {
     cache->stats.total_frees++;
     cache->stats.active_objects--;
 
-    // this is interesting here
-    // if slab is now empty, we want to move it to the empty list
-    // if there are already too many empty slabs, we can free it back to PMM to reduce fragmentation
-    if (slab->in_use == 0) {
-        if (slab->list_id == SLAB_LIST_PARTIAL) {
-            slab_move_to_list(&cache->slabs_partial, &cache->slabs_empty, slab, SLAB_LIST_EMPTY);
-            cache->stats.partial_slabs--;
-            cache->stats.empty_slabs++;
-        } else if (slab->list_id == SLAB_LIST_FULL) {
-            slab_move_to_list(&cache->slabs_full, &cache->slabs_empty, slab, SLAB_LIST_EMPTY);
-            cache->stats.full_slabs--;
-            cache->stats.empty_slabs++;
-        }
-
-        if (cache->stats.empty_slabs > 1) {
-            slab_remove_from_list(&cache->slabs_empty, slab);
-            slab_free_page(slab);
-            cache->stats.empty_slabs--;
-        }
-
-    } else if (slab->in_use == slab->capacity - 1) {
-        if (slab->list_id == SLAB_LIST_FULL) {
-            slab_move_to_list(&cache->slabs_full, &cache->slabs_partial, slab, SLAB_LIST_PARTIAL);
-            cache->stats.full_slabs--;
-            cache->stats.partial_slabs++;
-        }
+    // An empty slab goes back to the empty list
+    slab_relist(cache, slab);
+    if (slab->in_use == 0 && cache->stats.empty_slabs > 1) {
+        slab_remove_from_list(&cache->slabs_empty, slab);
+        cache->stats.empty_slabs--;
+        slab_free_page(slab);
     }
 
     spinlock_release(&cache->lock, flags);
@@ -767,6 +688,19 @@ void slab_get_stats(slab_stats_t* out_stats) {
 }
 
 /*
+ * stats_locked - The allocator wide numbers (list lock held)
+ */
+static void stats_locked(void) {
+    uint64_t mib = b2mb(stats.total_pmm_bytes);
+    LOGF("Slab allocator\n");
+    log_indent(1);
+    LOGF("caches    %lu of %d\n", stats.cache_count, SLAB_MAX_CACHES);
+    LOGF("slabs     %lu (%lu.%02lu MiB from the PMM)\n", stats.total_slabs, mib / 100ULL, mib % 100ULL);
+    if (stats.corruption_detected) LOGF("errors    %lu corruptions caught\n", stats.corruption_detected);
+    log_indent(-1);
+}
+
+/*
  * slab_dump_stats - print global stats to klog
  */
 void slab_dump_stats(void) {
@@ -776,16 +710,7 @@ void slab_dump_stats(void) {
         spinlock_release(&slab_list_lock, flags);
         return;
     }
-
-    uint64_t total_pmm_mib = b2mb(stats.total_pmm_bytes);
-
-    LOGF("\n=== Slab Allocator Statistics ===\n");
-    LOGF("Total slabs: %lu\n", stats.total_slabs);
-    LOGF("Total PMM bytes: %lu (%lu.%02lu MiB)\n", stats.total_pmm_bytes,
-         total_pmm_mib / 100ULL, total_pmm_mib % 100ULL);
-    LOGF("Active caches: %lu (dynamic allocation)\n", stats.cache_count);
-    LOGF("Corruption events: %lu\n", stats.corruption_detected);
-    LOGF("=================================\n");
+    stats_locked();
     spinlock_release(&slab_list_lock, flags);
 }
 
@@ -797,33 +722,19 @@ void slab_cache_dump(slab_cache_t* cache) {
 
     bool flags = spinlock_acquire(&cache->lock);
 
-    LOGF("\n=== Slab Cache: %s ===\n", cache->name);
-    LOGF("User object size: %zu bytes\n", cache->user_size);
-    LOGF("Total object size: %zu bytes (align: %zu)\n", cache->obj_size,
-         cache->align);
-    LOGF("Cache ID: %u\n", cache->cache_id);
-    LOGF("\nStatistics:\n");
-    LOGF("  Total allocations: %lu\n", cache->stats.total_allocs);
-    LOGF("  Total frees:       %lu\n", cache->stats.total_frees);
-    LOGF("  Active objects:    %lu\n", cache->stats.active_objects);
-    LOGF("  Slab count:        %lu\n", cache->stats.slab_count);
-    LOGF("  Empty slabs:       %lu\n", cache->stats.empty_slabs);
-    LOGF("  Partial slabs:     %lu\n", cache->stats.partial_slabs);
-    LOGF("  Full slabs:        %lu\n", cache->stats.full_slabs);
+    uint64_t total = cache->stats.slab_count * PAGE_SIZE;
+    uint64_t used = cache->stats.active_objects * cache->obj_size;
+    uint64_t pct = ratio_to_tenths(used, total);
 
-    uint64_t total_bytes = cache->stats.slab_count * PAGE_SIZE;
-    uint64_t used_bytes = cache->stats.active_objects * cache->obj_size;
-    uint64_t total_kib = b2kb(total_bytes);
-    uint64_t used_kib = b2kb(used_bytes);
-    uint64_t utilization_tenths = ratio_to_tenths(used_bytes, total_bytes);
-
-    LOGF("\nMemory usage:\n");
-    LOGF("  Total:        %lu bytes (%lu.%02lu KiB)\n", total_bytes,
-         total_kib / 100ULL, total_kib % 100ULL);
-    LOGF("  Used:         %lu bytes (%lu.%02lu KiB)\n", used_bytes,
-         used_kib / 100ULL, used_kib % 100ULL);
-    LOGF("  Utilization:  %lu.%01lu%%\n", utilization_tenths / 10ULL, utilization_tenths % 10ULL);
-    LOGF("========================\n");
+    LOGF("cache %s (id %u)\n", cache->name, cache->cache_id);
+    log_indent(1);
+    LOGF("objects   %zu bytes, %zu with header (align %zu)\n", cache->user_size, cache->obj_size, cache->align);
+    LOGF("calls     %lu allocs, %lu frees, %lu live\n",
+         cache->stats.total_allocs, cache->stats.total_frees, cache->stats.active_objects);
+    LOGF("slabs     %lu (%lu empty, %lu partial, %lu full)\n", cache->stats.slab_count,
+         cache->stats.empty_slabs, cache->stats.partial_slabs, cache->stats.full_slabs);
+    LOGF("memory    %lu of %lu bytes used (%lu.%01lu%%)\n", used, total, pct / 10ULL, pct % 10ULL);
+    log_indent(-1);
 
     spinlock_release(&cache->lock, flags);
 }
@@ -836,35 +747,20 @@ void slab_dump_all_caches(void) {
         return;
     }
 
-    uint64_t total_pmm_mib = b2mb(stats.total_pmm_bytes);
+    stats_locked();
+    log_indent(1);
+    if (!caches) LOGF("no caches\n");
 
-    LOGF("\n=== Slab Allocator Statistics ===\n");
-    LOGF("Total slabs: %lu\n", stats.total_slabs);
-    LOGF("Total PMM bytes: %lu (%lu.%02lu MiB)\n", stats.total_pmm_bytes,
-         total_pmm_mib / 100ULL, total_pmm_mib % 100ULL);
-    LOGF("Active caches: %lu (dynamic allocation)\n", stats.cache_count);
-    LOGF("Corruption events: %lu\n", stats.corruption_detected);
-    LOGF("=================================\n");
-    LOGF("\n");
-
-    slab_cache_t* cache = caches;
-    if (!cache) {
-        LOGF("No caches created\n");
-        spinlock_release(&slab_list_lock, flags);
-        return;
-    }
-
-    while (cache) {
+    for (slab_cache_t* cache = caches; cache; cache = cache->next) {
         if (!cache_validate(cache)) {
             LOGF("[SLAB ERROR] Corrupted cache in list\n");
             break;
         }
-
         // list lock is held and dump takes the cache lock, safe because the order is list -> cache
         slab_cache_dump(cache);
-        LOGF("\n");
-        cache = cache->next;
     }
+
+    log_indent(-1);
     spinlock_release(&slab_list_lock, flags);
 }
 
@@ -879,7 +775,6 @@ bool slab_verify_integrity(void) {
         return false;
     }
 
-    LOGF("[SLAB VERIFY] Checking slab allocator integrity...\n");
     bool all_ok = true;
 
     slab_cache_t* cache = caches;
@@ -1002,11 +897,7 @@ bool slab_verify_integrity(void) {
         }
     }
 
-    if (all_ok) {
-        LOGF("[SLAB VERIFY] All checks passed (%d caches)\n", cache_count);
-    } else {
-        LOGF("[SLAB VERIFY] FAILED - integrity compromised!\n");
-    }
+    if (!all_ok) LOGF("[SLAB VERIFY] Integrity check failed\n");
 
     spinlock_release(&slab_list_lock, list_flags);
     return all_ok;

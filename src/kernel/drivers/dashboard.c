@@ -8,6 +8,7 @@
 #include <kernel/drivers/dashboard.h>
 #include <kernel/drivers/tty.h>
 #include <kernel/drivers/console.h>
+#include <arch/x86_64/memory/paging.h>
 #include <kernel/memory/pmm.h>
 #include <kernel/memory/vmm.h>
 #include <kernel/memory/heap.h>
@@ -568,18 +569,16 @@ static mem_sec_t mk_mem(const layout_t* L) {
     prow_t phys_rows[3];
     prow_t heap_rows[3];
     pmm_stats_t ps;
-    uint64_t min_blk;
     uint64_t phys_total;
     uint64_t phys_free = 0;
     uint64_t largest = 0;
     size_t ht, hu, hf, ho;
 
     pmm_get_stats(&ps);
-    min_blk = pmm_min_block_size();
-    phys_total = pmm_managed_size();
+    phys_total = pmm_managed_end();
 
     for (int i = PMM_MAX_ORDERS - 1; i >= 0; i--) {
-        uint64_t bsz = min_blk << (uint32_t)i;
+        uint64_t bsz = (uint64_t)PAGE_SIZE << (uint32_t)i;
         phys_free += ps.free_blocks[i] * bsz;
         if (!largest && ps.free_blocks[i]) largest = bsz;
     }

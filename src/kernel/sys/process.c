@@ -90,7 +90,6 @@ process_t* process_create(const char* name, tty_t* existing_tty) {
     process_t* proc = (process_t*)kmalloc(sizeof(process_t));
     if (!proc) return NULL;
 
-    kmemset(proc, 0, sizeof(process_t));
     proc->pid = next_pid++;
     kstrncpy(proc->name, name, MAX_PROCESS_NAME - 1);
 
@@ -120,30 +119,29 @@ process_t* process_create(const char* name, tty_t* existing_tty) {
         if (st != VMM_OK) goto map_fail;
     }
 
+    // .data and .bss are private to each process, so one can't scribble over another's globals
+    // .data starts out as a copy of the image, .bss comes zeroed from vmm_alloc_at
     uintptr_t d_phys = (uintptr_t)&USER_DATA_LOAD_ADDR;
     size_t dsz = align_up((uintptr_t)&USER_DATA_END - (uintptr_t)&USER_DATA_START, PAGE_SIZE);
     if (dsz > 0) {
         void* out = NULL;
         uintptr_t d_virt = (uintptr_t)&USER_DATA_START;
-        vmm_status_t st = vmm_alloc_at(proc->vmm, (void*)d_virt, dsz, VM_FLAG_USER | VM_FLAG_WRITE | VM_FLAG_FOREIGN, (void*)d_phys, &out);
+        vmm_status_t st = vmm_alloc_at(proc->vmm, (void*)d_virt, dsz, VM_FLAG_USER | VM_FLAG_WRITE, NULL, &out);
         if (st != VMM_OK) goto map_fail;
+
+        for (uintptr_t off = 0; off < dsz; off += PAGE_SIZE) {
+            uint64_t phys;
+            if (vmm_get_physical(proc->vmm, (void*)(d_virt + off), &phys))
+                kmemcpy((void*)PHYSMAP_P2V(phys), (void*)PHYSMAP_P2V(d_phys + off), PAGE_SIZE);
+        }
     }
 
     size_t bsz = align_up((uintptr_t)&USER_BSS_END - (uintptr_t)&USER_BSS_START, PAGE_SIZE);
     if (bsz > 0) {
         void* out = NULL;
         uintptr_t b_virt = (uintptr_t)&USER_BSS_START;
-        
-        // Allocate fresh physical pages for bss
         vmm_status_t st = vmm_alloc_at(proc->vmm, (void*)b_virt, bsz, VM_FLAG_USER | VM_FLAG_WRITE, NULL, &out);
         if (st != VMM_OK) goto map_fail;
-
-        // Explicitly zero via physmap
-        for (uintptr_t off = 0; off < bsz; off += PAGE_SIZE) {
-            uint64_t phys;
-            if (vmm_get_physical(proc->vmm, (void*)(b_virt + off), &phys))
-                kmemset((void*)PHYSMAP_P2V(phys), 0, PAGE_SIZE);
-        }
     }
 
     // If the caller provided a TTY, use it. Otherwise, create a new one for this process.
@@ -160,7 +158,7 @@ process_t* process_create(const char* name, tty_t* existing_tty) {
     proc->next = proc_list;
     proc_list = proc;
 
-    LOGF("[PROC] Created process '%s' (PID: %u) with shared code mapping\n", proc->name, proc->pid);
+    LOGF("[PROC] Created process '%s' (PID: %u)\n", proc->name, proc->pid);
     return proc;
 
 map_fail:
@@ -170,17 +168,34 @@ map_fail:
 }
 
 /*
- * thread_create - Creates a new thread using the process's heap
+ * thread_new - A zeroed thread with its id, process and name filled in
  */
-thread_t* thread_create(process_t* process, const char* name, void (*entry)(void*), void* arg, bool is_user, uintptr_t user_rsp) {
+static thread_t* thread_new(process_t* process, const char* name, thread_state_t state) {
     thread_t* thread = (thread_t*)kmalloc(sizeof(thread_t));
     if (!thread) return NULL;
 
-    kmemset(thread, 0, sizeof(thread_t));
     thread->tid = next_tid++;
     thread->process = process;
-    thread->state = T_READY;
+    thread->state = state;
     kstrncpy(thread->name, name, MAX_THREAD_NAME - 1);
+    return thread;
+}
+
+/*
+ * thread_link - Adds a finished thread to its process
+ */
+static void thread_link(thread_t* thread) {
+    thread->next = thread->process->threads;
+    thread->process->threads = thread;
+    proc_hdr_update(thread->process);
+}
+
+/*
+ * thread_create - Creates a new thread using the process's heap
+ */
+thread_t* thread_create(process_t* process, const char* name, void (*entry)(void*), void* arg, bool is_user, uintptr_t user_rsp) {
+    thread_t* thread = thread_new(process, name, T_READY);
+    if (!thread) return NULL;
 
     /*
      * Clean FPU state. The thread is already zeroed, so only the two control words with non-zero
@@ -196,7 +211,6 @@ thread_t* thread_create(process_t* process, const char* name, void (*entry)(void
         kfree(thread);
         return NULL;
     }
-    kmemset(thread->kstack, 0, KERNEL_STACK_SIZE);
 
     uintptr_t stack_top = (uintptr_t)thread->kstack + KERNEL_STACK_SIZE;
 
@@ -205,7 +219,6 @@ thread_t* thread_create(process_t* process, const char* name, void (*entry)(void
     restores the real RSP */
     
     // So kstack can be freed at any time without corrupting persistent context state
-    kmemset(&thread->context, 0, sizeof(cpu_context_t));
 
     thread->context.iret_flags = 0x202; // IF enabled
 
@@ -253,9 +266,7 @@ thread_t* thread_create(process_t* process, const char* name, void (*entry)(void
         thread->context.rsi = (uint64_t)arg;
     }
 
-    thread->next = process->threads;
-    process->threads = thread;
-    proc_hdr_update(process);
+    thread_link(thread);
 
     LOGF("[PROC] Created %s thread '%s' (TID: %u) in PID %u\n",
          is_user ? "USER" : "KERNEL", thread->name, thread->tid, process->pid);
@@ -266,25 +277,15 @@ thread_t* thread_create(process_t* process, const char* name, void (*entry)(void
  * thread_create_bootstrap - Internal helper to wrap the current execution context into a thread
  */
 thread_t* thread_create_bootstrap(process_t* process, const char* name) {
-    thread_t* thread = (thread_t*)kmalloc(sizeof(thread_t));
+    thread_t* thread = thread_new(process, name, T_RUNNING);
     if (!thread) return NULL;
-
-    kmemset(thread, 0, sizeof(thread_t));
-    thread->tid = next_tid++;
-    thread->process = process;
-    thread->state = T_RUNNING; 
-    kstrncpy(thread->name, name, MAX_THREAD_NAME - 1);
 
     __asm__ volatile (
         "fxsave %0 \n"
         : "=m"(thread->fpu)
     );
 
-    thread->kstack = NULL;
-
-    thread->next = process->threads;
-    process->threads = thread;
-    proc_hdr_update(process);
+    thread_link(thread);
 
     LOGF("[PROC] Bootstrapped current context as thread '%s' (TID: %u)\n", thread->name, thread->tid);
     return thread;

@@ -19,7 +19,6 @@
 // TTY Manager State
 static tty_t* tty_list = NULL;
 static spinlock_t tty_lock = {0};
-static bool tty_lock_ok = false;
 
 tty_t* volatile active_tty = NULL;
 tty_t* kernel_tty = NULL;
@@ -53,16 +52,6 @@ static void tty_init(tty_t* tty, console_t* console) {
 }
 
 /*
- * ensure_lock - Init the global list lock on first use
- */
-static void ensure_lock(void) {
-    if (!tty_lock_ok) {
-        spinlock_init(&tty_lock, "tty_list_lock");
-        tty_lock_ok = true;
-    }
-}
-
-/*
  * wake_all - Hand every thread on a wait list back to the scheduler. Call with interrupts off
  */
 static void wake_all(thread_t** head) {
@@ -77,11 +66,7 @@ static void wake_all(thread_t** head) {
 }
 
 tty_t* tty_create(void) {
-    if (heap_kernel_get() == NULL) {
-        panic("Attempted to create TTY before heap was ready!");
-    }
 
-    ensure_lock();
 
     tty_t* tty = (tty_t*)kmalloc(sizeof(tty_t));
     if (!tty) return NULL;
@@ -140,7 +125,6 @@ void tty_destroy(tty_t* tty) {
     spinlock_release(&o->lock, oflags);
     intr_restore(iflags);
 
-    ensure_lock();
     bool flags = spinlock_acquire(&tty_lock);
 
     if (tty->next == tty) {
@@ -162,11 +146,12 @@ void tty_destroy(tty_t* tty) {
 
     spinlock_release(&tty_lock, flags);
 
+#ifdef GATA_CAP_FRAMEBUFFER
     if (tty->console) {
-        if (tty->console->buffer) kfree(tty->console->buffer);
-        if (tty->console->dirty) kfree(tty->console->dirty);
+        con_destroy(tty->console);
         kfree(tty->console);
     }
+#endif
     kfree(tty);
 }
 
@@ -189,7 +174,6 @@ void tty_switch(tty_t* tty) {
  * tty_cycle - Cycles focus to the next available non-hidden TTY
  */
 void tty_cycle(void) {
-    ensure_lock();
     bool flags = spinlock_acquire(&tty_lock);
     if (active_tty) {
         tty_t* next = active_tty->next;

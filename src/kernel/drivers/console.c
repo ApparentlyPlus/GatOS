@@ -108,6 +108,32 @@ static inline void put_pixel(uint32_t x, uint32_t y, uint32_t color) {
 }
 
 /*
+ * fill_rect - Paints a w x h pixel rectangle at (px, py) one color, clipped to the screen.
+ * At 32bpp pixels go out in pairs, as single 64-bit stores
+ */
+static void fill_rect(uint32_t px, uint32_t py, uint32_t w, uint32_t h, uint32_t color) {
+    if (!fb || px >= fb_w || py >= fb_h) return;
+    if (w > fb_w - px) w = fb_w - px;
+    if (h > fb_h - py) h = fb_h - py;
+
+    if (fb_bpp != 32) {
+        for (uint32_t y = py; y < py + h; y++)
+            for (uint32_t x = px; x < px + w; x++)
+                put_pixel(x, y, color);
+        return;
+    }
+
+    uint64_t c2 = (uint64_t)color | ((uint64_t)color << 32);
+    for (uint32_t y = py; y < py + h; y++) {
+        uint32_t* row = (uint32_t*)(fb + (size_t)y * fb_pitch) + px;
+        uint32_t x = 0;
+        if (((uintptr_t)row & 7) && w) row[x++] = color;
+        for (; x + 1 < w; x += 2) *(uint64_t*)&row[x] = c2;
+        if (x < w) row[x] = color;
+    }
+}
+
+/*
  * draw_glyph - Renders a PSF1 glyph at pixel coordinates (px, py)
  */
 static void draw_glyph(uint8_t* glyph, size_t px, size_t py, uint32_t fg, uint32_t bg) {
@@ -176,26 +202,7 @@ static void render_cursor(console_t* con, bool on) {
     size_t py = con->cy * (fh + PADDING_Y);
     
     if (on) {
-        // If the framebuffer is 32bpp and the glyph fits entirely onscreen
-        // we can do a single memset for the entire cursor block
-        bool clipped = (px + fw > fb_w) || (py + fh > fb_h);
-        if (fb_bpp == 32 && !clipped) {
-            uint32_t color = VGA_PALETTE[con->fg];
-            uint64_t c2 = (uint64_t)color | ((uint64_t)color << 32);
-            uint32_t* row_ptr = (uint32_t*)(fb + py * fb_pitch + px * 4);
-            size_t pitch_u32 = fb_pitch / 4;
-            for (size_t y = 0; y < fh; y++) {
-                uint64_t* p = (uint64_t*)row_ptr;
-                p[0] = c2; p[1] = c2; p[2] = c2; p[3] = c2;
-                row_ptr += pitch_u32;
-            }
-        } else {
-            // fallback, much slower
-            uint32_t color = VGA_PALETTE[con->fg];
-            for (size_t y = 0; y < fh; y++)
-                for (size_t x = 0; x < fw; x++)
-                    put_pixel(px + x, py + y, color);
-        }
+        fill_rect(px, py, fw, fh, VGA_PALETTE[con->fg]);
     } else {
         // when erasing the cursor, we have to redraw the underlying glyph from the backbuffer
         console_char_t c = con->buffer[con->cy * con->width + con->cx];
@@ -441,10 +448,19 @@ bool con_init(console_t* con) {
     if (!con->buffer) return false;
     size_t dirty_bytes = ((con->width * con->height + 63) / 64) * 8;
     con->dirty = kmalloc(dirty_bytes);
-    if (con->dirty) kmemset(con->dirty, 0, dirty_bytes);
     spinlock_init(&con->lock, "console_lock");
     con_clear(con, CONSOLE_COLOR_BLACK);
     return true;
+}
+
+/*
+ * con_destroy - Frees what con_init allocated (the console struct itself is the caller's)
+ */
+void con_destroy(console_t* con) {
+    kfree(con->buffer);
+    kfree(con->dirty);
+    con->buffer = NULL;
+    con->dirty = NULL;
 }
 
 /*
@@ -466,22 +482,8 @@ void con_clear(console_t* con, uint8_t background) {
 
     // If this console is active and we're not deferring rendering, we can also clear the framebuffer immediately
     if (active_tty && active_tty->console == con && !con->defer_render) {
-        uint32_t bg_color = VGA_PALETTE[con->bg];
-        size_t start_py = con->header_rows * (fh + PADDING_Y);
-        if (fb_bpp == 32) {
-            size_t off = start_py * fb_pitch / 4;
-            size_t count = (fb_sz / 4) - off;
-            uint32_t* p = (uint32_t*)fb + off;
-            uint64_t c2 = (uint64_t)bg_color | ((uint64_t)bg_color << 32);
-            size_t pairs = count / 2;
-            uint64_t* q = (uint64_t*)p;
-            for (size_t i = 0; i < pairs; i++) q[i] = c2;
-            if (count & 1) p[count - 1] = bg_color;
-        } else {
-            for (uint32_t y = (uint32_t)start_py; y < fb_h; y++)
-                for (uint32_t x = 0; x < fb_w; x++)
-                    put_pixel(x, y, bg_color);
-        }
+        uint32_t start_py = con->header_rows * (fh + PADDING_Y);
+        fill_rect(0, start_py, fb_w, fb_h - start_py, VGA_PALETTE[con->bg]);
         if (con->on) render_cursor(con, true);
 
         // Since we've directly updated the framebuffer, we can clear all dirty flags to avoid redundant redraws until the next change
@@ -819,12 +821,7 @@ static uint8_t cu8lead = 0;
 static void crash_cursor_draw(bool on) {
     if (!fb) return;
     uint32_t row_h = (uint32_t)fh + PADDING_Y;
-    uint32_t px = ccx * 8;
-    uint32_t py = ccy * row_h;
-    uint32_t color = on ? VGA_PALETTE[cfg] : VGA_PALETTE[cbg];
-    for (uint32_t y = 0; y < row_h; y++)
-        for (uint32_t x = 0; x < 8; x++)
-            crash_pix(px + x, py + y, color);
+    fill_rect(ccx * 8, ccy * row_h, 8, row_h, on ? VGA_PALETTE[cfg] : VGA_PALETTE[cbg]);
 }
 #endif
 
@@ -900,21 +897,7 @@ void con_crash_clear(uint8_t bg) {
         size_t cells = crash_sh_cols * crash_sh_rows;
         for (size_t i = 0; i < cells; i++) crash_shadow[i] = blank;
     }
-    uint32_t color = VGA_PALETTE[cbg];
-    size_t total = (size_t)fb_h * fb_pitch;
-    if (fb_bpp == 32) {
-        size_t count = total / 4;
-        uint32_t* p = (uint32_t*)fb;
-        uint64_t c2 = (uint64_t)color | ((uint64_t)color << 32);
-        size_t pairs = count / 2;
-        uint64_t* q = (uint64_t*)p;
-        for (size_t i = 0; i < pairs; i++) q[i] = c2;
-        if (count & 1) p[count - 1] = color;
-    } else {
-        for (uint32_t y = 0; y < fb_h; y++)
-            for (uint32_t x = 0; x < fb_w; x++)
-                crash_pix(x, y, color);
-    }
+    fill_rect(0, 0, fb_w, fb_h, VGA_PALETTE[cbg]);
 }
 
 /*

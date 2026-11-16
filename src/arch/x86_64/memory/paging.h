@@ -56,7 +56,6 @@
 #define PAGE_SIZE           0x1000UL
 #define PAGE_2MB            0x200000UL
 #define PAGE_ENTRIES        512
-#define FRAME_MASK          0xFFFFF000
 #define ADDR_MASK           0x000FFFFFFFFFF000UL
 
 #define PREALLOC_PML4s  1
@@ -83,7 +82,7 @@
 #include <arch/x86_64/multiboot2.h>
 #include <stdbool.h>
 
-#define CEIL_DIV(x, y) (((x) + (y) - 1) / (y)) // this is hacky and must be removed eventually (it was never removed lol)
+#define CEIL_DIV(x, y) (((x) + (y) - 1) / (y))
 
 /*
  * invlpg - Invalidate a single TLB entry for the given virtual address
@@ -92,9 +91,7 @@ static inline void invlpg(void* addr) {
     __asm__ volatile("invlpg (%0)" :: "r"(addr) : "memory");
 }
 
-uint64_t get_physmap_start(void);
-uint64_t get_physmap_end(void);
-
+uint64_t kend_grow(multiboot_parser_t* mb, uint64_t bytes);
 uint64_t reserve_tables(multiboot_parser_t* multiboot);
 
 uint64_t* getPML4();
@@ -103,25 +100,7 @@ void flush_tlb(void);
 void PML4_switch(uint64_t pml4);
 void QEMU_DUMP_PML4(void);
 
-void cleanup_kpt(uintptr_t start, uintptr_t end);
+void unmap_identity(void);
 void build_physmap();
 
-typedef struct{
-    uint64_t total_RAM;   // usable RAM (PMM boundary)
-    uint64_t fb_phys;     // framebuffer physical base (crash console)
-    uint64_t fb_size;     // framebuffer size in bytes
-    uint64_t total_pages;
-    uintptr_t tables_base;
-    uint64_t total_PTs;
-    uint64_t total_PDs;
-    uint64_t total_PDPTs;
-    uint64_t total_PML4s;
-    uint64_t total_kernel_PTs;
-} physmap_t;
-
-static physmap_t physmap = {0};
 #endif
-
-/*
- * TODO: flush_tlb() should have an mfence around the cr3 reload for SMP safety.
- */

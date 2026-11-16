@@ -56,6 +56,31 @@ void syscall_init(void) {
 }
 
 /*
+ * copy_user - Copies n bytes between a user buffer and the kernel, 1KiB at a time with interrupts
+ * off, checking each chunk right before touching it (another thread may unmap it in between)
+ */
+static bool copy_user(vmm_t* vmm, void* dst, const void* src, size_t n, bool to_user) {
+    uintptr_t user = (uintptr_t)(to_user ? dst : src);
+    size_t need = VM_FLAG_USER | (to_user ? VM_FLAG_WRITE : 0);
+
+    for (size_t done = 0; done < n; ) {
+        size_t c = n - done < 1024 ? n - done : 1024;
+        bool ints = intr_save();
+        if (!vmm_check_buffer(vmm, (void*)(user + done), c, need)) {
+            intr_restore(ints);
+            return false;
+        }
+        // SMAP must be relaxed while touching user memory
+        smap_allow();
+        kmemcpy((uint8_t*)dst + done, (const uint8_t*)src + done, c);
+        smap_deny();
+        intr_restore(ints);
+        done += c;
+    }
+    return true;
+}
+
+/*
  * syscall_dispatcher - Called from syscall_entry.S with the cpu_context_t from the thread's kernel stack
  */
 void syscall_dispatcher(cpu_context_t* regs) {
@@ -72,50 +97,23 @@ void syscall_dispatcher(cpu_context_t* regs) {
         case SYS_WRITE: {
             const char* buf = (const char*)regs->rdi;
             size_t len = (size_t)regs->rsi;
-
-            if (!buf || len == 0) {
+            tty_t* tty = current->process ? current->process->tty : NULL;
+            if (!buf || len == 0 || !current->process) {
                 regs->rax = (uint64_t)-1;
                 break;
             }
-
             if (len > 65536) len = 65536;
 
-            // Copy through a fixed stack buffer instead of a per-call kmalloc. Validated and copied
-            // in small sub-chunks with interrupts off (can't be remapped mid-copy, IRQ-off window
-            // stays bounded), but each filled buffer goes to the TTY in one call so the console
-            // flushes once per buffer.
-            char kbuf[4096];
-            size_t done = 0;
-
             // Own the TTY for the whole write, so its 4KB chunks stay together
-            tty_t* tty = current->process ? current->process->tty : NULL;
+            char kbuf[4096];
             bool held = tty_lock_output(tty);
-
-            while (done < len) {
-                size_t block = len - done;
-                if (block > sizeof(kbuf)) block = sizeof(kbuf);
-
-                size_t filled = 0;
-                while (filled < block) {
-                    size_t n = block - filled;
-                    if (n > 1024) n = 1024;
-
-                    bool ints = intr_save();
-                    if (!vmm_check_buffer(current->process->vmm, buf + done + filled, n, VM_FLAG_USER)) {
-                        intr_restore(ints);
-                        tty_unlock_output(tty, held);
-                        LOGF("[SYSCALL] SYS_WRITE: Invalid buffer pointer 0x%lx (len: %zu) from thread '%s' (PID %u)\n", (uintptr_t)buf, len, current->name, current->process ? current->process->pid : 0);
-                        sched_exit();
-                    }
-
-                    // SMAP must be relaxed while touching user memory
-                    smap_allow();
-                    kmemcpy(kbuf + filled, buf + done + filled, n);
-                    smap_deny();
-                    intr_restore(ints);
-                    filled += n;
+            for (size_t done = 0; done < len; ) {
+                size_t block = len - done < sizeof(kbuf) ? len - done : sizeof(kbuf);
+                if (!copy_user(current->process->vmm, kbuf, buf + done, block, false)) {
+                    tty_unlock_output(tty, held);
+                    LOGF("[SYSCALL] SYS_WRITE: Invalid buffer pointer 0x%lx (len: %zu) from thread '%s' (PID %u)\n", (uintptr_t)buf, len, current->name, current->process->pid);
+                    sched_exit();
                 }
-
                 // Serial builds too: their TTY has no console, so tty_write sends it to COM1
                 if (tty) tty_write(tty, kbuf, block);
                 done += block;
@@ -124,7 +122,7 @@ void syscall_dispatcher(cpu_context_t* regs) {
             regs->rax = (uint64_t)len;
             break;
         }
-            
+
         case SYS_MMAP: {
             void* addr = (void*)regs->rdi;
             size_t length = (size_t)regs->rsi;
@@ -177,8 +175,8 @@ void syscall_dispatcher(cpu_context_t* regs) {
         case SYS_READ: {
             char* buf = (char*)regs->rdi;
             size_t count = (size_t)regs->rsi;
-
-            if (!buf || count == 0) {
+            tty_t* tty = current->process ? current->process->tty : NULL;
+            if (!buf || count == 0 || !tty) {
                 regs->rax = (uint64_t)-1;
                 break;
             }
@@ -186,46 +184,20 @@ void syscall_dispatcher(cpu_context_t* regs) {
             // Don't allow reading more than 4096 bytes at once to prevent abuse
             // The TTY buffer is only 1024 bytes anyway, so this is more than enough
             if (count > 4096) count = 4096;
-
             if (!vmm_check_buffer(current->process->vmm, buf, count, VM_FLAG_USER | VM_FLAG_WRITE)) {
                 LOGF("[SYSCALL] SYS_READ: invalid buffer 0x%lx (len: %zu) from '%s'\n", (uintptr_t)buf, count, current->name);
                 regs->rax = (uint64_t)-1;
                 break;
             }
 
-            tty_t* tty = current->process->tty;
-            if (!tty) {
-                regs->rax = (uint64_t)-1;
-                break;
-            }
-
-            // Read into a stack buffer instead of a per-call kmalloc, then
-            // copy out in bounded chunks with interrupts disabled per chunk
+            // Read into a stack buffer instead of a per call kmalloc, then copy out
             char kbuf[4096];
             size_t n = tty_read(tty, kbuf, count);
-
-            size_t done = 0;
-            while (done < n) {
-                size_t c = n - done;
-                if (c > 1024) c = 1024;
-
-                bool ints = intr_save();
-                if (!vmm_check_buffer(current->process->vmm, buf + done, c, VM_FLAG_USER | VM_FLAG_WRITE)) {
-                    intr_restore(ints);
-                    sched_exit();
-                }
-
-                smap_allow();
-                kmemcpy(buf + done, kbuf + done, c);
-                smap_deny();
-                intr_restore(ints);
-                done += c;
-            }
-
+            if (!copy_user(current->process->vmm, buf, kbuf, n, true)) sched_exit();
             regs->rax = (uint64_t)n;
             break;
         }
-        
+
         case SYS_TTY_CTRL: {
             uint64_t cmd = regs->rdi;
             uint64_t arg2 = regs->rsi;
@@ -349,27 +321,14 @@ void syscall_dispatcher(cpu_context_t* regs) {
             }
             if (len > 4096) len = 4096;
 
-            // Validate and copy per chunk with interrupts disabled, so the
-            // user can't remap the buffer between check and copy
             char kbuf[1024];
-            size_t done = 0;
-            while (done < len) {
-                size_t n = len - done;
-                if (n > sizeof(kbuf)) n = sizeof(kbuf);
-
-                bool ints = intr_save();
-                if (!vmm_check_buffer(current->process->vmm, buf + done, n, VM_FLAG_USER)) {
-                    intr_restore(ints);
+            for (size_t done = 0; done < len; ) {
+                size_t n = len - done < sizeof(kbuf) ? len - done : sizeof(kbuf);
+                if (!copy_user(current->process->vmm, kbuf, buf + done, n, false)) {
                     LOGF("[SYSCALL] SYS_DEBUG_WRITE: invalid buffer 0x%lx (len: %zu) from '%s'\n", (uintptr_t)buf, len, current->name);
                     regs->rax = (uint64_t)-1;
                     goto debug_write_done;
                 }
-
-                smap_allow();
-                kmemcpy(kbuf, buf + done, n);
-                smap_deny();
-                intr_restore(ints);
-
                 serial_write_len_port(SERIAL_COM3, kbuf, n);
                 done += n;
             }
