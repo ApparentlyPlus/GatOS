@@ -7,6 +7,7 @@
 #include <kernel/drivers/pci.h>
 #include <arch/x86_64/cpu/io.h>
 #include <arch/x86_64/memory/paging.h>
+#include <kernel/memory/vmm.h>
 #include <kernel/debug.h>
 
 #pragma region I dont even know bro
@@ -51,27 +52,36 @@ void pci_write32(pci_dev_t *d, uint8_t o, uint32_t v) { w32(d->bus, d->dev, d->f
 /*
  * decode_bar - Decodes a PCI BAR (Base Address Register)
  */
-static bool decode_bar(uint8_t b, uint8_t d, uint8_t f, uint8_t idx, uint64_t *phys, uint32_t *sz) {
+static bool decode_bar(uint8_t b, uint8_t d, uint8_t f, uint8_t idx, uint64_t *phys, uint64_t *sz) {
     uint8_t off = PCI_BAR0 + idx * 4;
     uint32_t lo = r32(b, d, f, off);
 
     if (lo & 1) return false;
 
     uint8_t type = (lo >> 1) & 3;
+    uint32_t hi = (type == 2) ? r32(b, d, f, off + 4) : 0;
+
+    // Stop the device decoding while the BAR holds all ones, or it claims a bogus range
+    uint16_t cmd = r16(b, d, f, PCI_COMMAND);
+    w16(b, d, f, PCI_COMMAND, cmd & ~(PCI_CMD_IO | PCI_CMD_MEM));
+
     w32(b, d, f, off, 0xFFFFFFFF);
     uint32_t sz_lo = r32(b, d, f, off);
     w32(b, d, f, off, lo);
 
-    if (!sz_lo || sz_lo == 0xFFFFFFFF) return false;
-
-    *sz = ~(sz_lo & 0xFFFFFFF0) + 1;
-    *phys = lo & 0xFFFFFFF0;
-
+    uint32_t sz_hi = 0xFFFFFFFF;
     if (type == 2) {
-        uint32_t hi = r32(b, d, f, off + 4);
-        *phys |= (uint64_t)hi << 32;
+        w32(b, d, f, off + 4, 0xFFFFFFFF);
+        sz_hi = r32(b, d, f, off + 4);
+        w32(b, d, f, off + 4, hi);
     }
 
+    w16(b, d, f, PCI_COMMAND, cmd);
+
+    if (!sz_lo || sz_lo == 0xFFFFFFFF) return false;
+
+    *sz = ~(((uint64_t)sz_hi << 32) | (sz_lo & 0xFFFFFFF0)) + 1;
+    *phys = ((uint64_t)hi << 32) | (lo & 0xFFFFFFF0);
     return true;
 }
 
@@ -135,14 +145,22 @@ int pci_find_xhci(pci_dev_t *out_arr, int max_out) {
                 out->prog_if = PCI_PROGIF_XHCI;
                 out->int_line = r8(b, d, f, PCI_INT_LINE);
                 out->msi_cap = find_cap(b, d, f, PCI_CAP_MSI);
+                out->msix_cap = find_cap(b, d, f, PCI_CAP_MSIX);
 
-                LOGF("[PCI] xHCI at %02x:%02x.%x BAR0=0x%lx (%u B) MSI=0x%02x\n",
-                     b, d, f, out->bar0_phys, out->bar0_size, out->msi_cap);
+                LOGF("[PCI] xHCI at %02x:%02x.%x BAR0=0x%lx (%lu B) MSI=0x%02x MSI-X=0x%02x\n",
+                     b, d, f, out->bar0_phys, out->bar0_size, out->msi_cap, out->msix_cap);
                 found++;
             }
         }
     }
     return found;
+}
+
+/*
+ * pci_decode_bar - Address and size of one of a device's memory BARs
+ */
+bool pci_decode_bar(pci_dev_t *d, uint8_t idx, uint64_t *phys, uint64_t *sz) {
+    return decode_bar(d->bus, d->dev, d->func, idx, phys, sz);
 }
 
 /*
@@ -155,12 +173,47 @@ void pci_enable(pci_dev_t *d) {
     pci_write16(d, PCI_COMMAND, cmd);
 }
 
+/*
+ * cfg_msix - Points entry 0 of the MSI-X table at the LAPIC, used when there is no plain MSI
+ */
+static bool cfg_msix(pci_dev_t *d, uint8_t vec, uint32_t addr) {
+    uint8_t c = d->msix_cap;
+    uint32_t tbl = pci_read32(d, c + PCI_MSIX_TABLE);
+    uint8_t bir = tbl & 7;
+    if (bir > 5) return false;
+
+    // The table lives inside one of the device's own BARs
+    uint8_t off = PCI_BAR0 + bir * 4;
+    uint32_t lo = pci_read32(d, off);
+    if (lo & 1) return false;
+    uint64_t bar = lo & 0xFFFFFFF0;
+    if (((lo >> 1) & 3) == 2) bar |= (uint64_t)pci_read32(d, off + 4) << 32;
+
+    uint64_t phys = bar + (tbl & ~7u);
+    void *page;
+    if (vmm_alloc(NULL, PAGE_SIZE, VM_FLAG_WRITE | VM_FLAG_FOREIGN | VM_FLAG_DEVICE,
+                  (void *)(phys & ~(uint64_t)(PAGE_SIZE - 1)), &page) != VMM_OK) return false;
+    volatile uint32_t *ent = (volatile uint32_t *)((uint8_t *)page + (phys & (PAGE_SIZE - 1)));
+
+    // Mask the whole function while entry 0 is half written
+    uint16_t ctrl = pci_read16(d, c + PCI_MSIX_CTRL);
+    pci_write16(d, c + PCI_MSIX_CTRL, ctrl | PCI_MSIX_EN | PCI_MSIX_FMASK);
+    ent[0] = addr;
+    ent[1] = 0;
+    ent[2] = vec;
+    ent[3] = 0; // unmask entry 0
+    pci_write16(d, c + PCI_MSIX_CTRL, (ctrl | PCI_MSIX_EN) & ~PCI_MSIX_FMASK);
+
+    LOGF("[PCI] MSI-X cfg: vec=0x%02x\n", vec);
+    return true;
+}
+
 bool pci_cfg_msi(pci_dev_t *d, uint8_t vec, uint32_t lapic_id) {
-    if (!d->msi_cap) return false;
+    uint32_t addr = 0xFEE00000 | ((lapic_id & 0xFF) << 12);
+    if (!d->msi_cap) return d->msix_cap && cfg_msix(d, vec, addr);
     uint8_t c = d->msi_cap;
 
     uint16_t ctrl = pci_read16(d, c + PCI_MSI_CTRL);
-    uint32_t addr = 0xFEE00000 | ((lapic_id & 0xFF) << 12);
 
     if (ctrl & PCI_MSI_64BIT) {
         pci_write32(d, c + PCI_MSI_ADDR_LO, addr);

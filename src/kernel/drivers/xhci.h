@@ -91,6 +91,7 @@ typedef struct {
 #define TRB_SLOT(x)         (((x) & 0xFF) << 24)
 #define GET_SLOT(c)         (((c) >> 24) & 0xFF)
 #define GET_EP(c)           (((c) >> 16) & 0x1F)
+#define TRB_EP(x)           (((x) & 0x1F) << 16)
 #define TRB_INTR(x)         (((x) & 0x3FF) << 22)
 
 #define TRB_NORMAL          1
@@ -103,11 +104,14 @@ typedef struct {
 #define TRB_ADDR_DEV        11
 #define TRB_CFG_EP          12
 #define TRB_EVAL_CTX        13
+#define TRB_RESET_EP        14
+#define TRB_SET_DEQ         16
 #define TRB_EV_XFER         32
 #define TRB_EV_CMD          33
 #define TRB_EV_PORT         34
 
 #define CC_SUCCESS          1
+#define CC_STALL            6
 #define CC_SHORT_PKT        13
 #define GET_CC(d)           (((d) >> 24) & 0xFF)
 
@@ -132,6 +136,9 @@ typedef struct {
 #define SLOT_SPD(x)         (((x) & 0xF) << 20)
 #define SLOT_CTX_ENT(x)     (((x) & 0x1F) << 27)
 #define SLOT_PORT(x)        (((x) & 0xFF) << 16)
+#define SLOT_HUB            (1u << 26)
+#define SLOT_NPORTS(x)      (((x) & 0xFF) << 24)
+#define SLOT_TTT(x)         (((x) & 0x3) << 16)
 
 #define EP_IVAL(x)          (((x) & 0xFF) << 16)
 #define EP_CERR(x)          (((x) & 0x3) << 1)
@@ -140,6 +147,9 @@ typedef struct {
 #define EP_DCS              1
 #define EP_AVG(x)           ((x) & 0xFFFF)
 #define EP_ESIT(x)          (((x) & 0xFFFF) << 16)
+
+#define EP_STATE(dw0)       ((dw0) & 0x7)
+#define EP_HALTED           2
 
 #define EP_CTRL             4
 #define EP_INTR_IN          7
@@ -176,6 +186,11 @@ typedef struct {
     // Hub support
     bool is_hub;
     uint8_t hub_num_ports;
+
+    // Interrupt endpoint error recovery, done by the hotplug worker
+    volatile bool needs_reset;
+    uint8_t halt_cc;
+    uint8_t resets; // back to back resets without a good transfer
 } xhci_slot_t;
 
 // IRQ driven completion slot
@@ -183,6 +198,7 @@ typedef struct {
     volatile int  done;
     trb_t         result;
     thread_t     *waiter;
+    uint8_t       slot, ep; // which transfer we are waiting on (0, 0 for commands)
 } xhci_completion_t;
 
 typedef struct {
@@ -217,10 +233,15 @@ typedef struct {
     thread_t *worker;
     volatile uint32_t pending_ports;     // bitmask, bit N = root port N needs attention
     volatile uint32_t pending_hub_slots; // bitmask, bit N = hub in slot N has port changes
+    volatile bool pending_resets;        // some slot has needs_reset set
 } xhci_hc_t;
 
-#define XHCI_MSI_VEC_BASE   50
+#define XHCI_MSI_VEC_BASE   0x60 // past every vector the I/O APIC hands out (32 + GSI)
+
+#include <kernel/drivers/keyboard.h>
 
 bool xhci_init(void);
+uint32_t xhci_route_child(uint32_t route, uint8_t port);
+int usb_kbd_feed(uint8_t prev[8], const uint8_t r[8], uint8_t *locks, key_event_t *out, int max);
 void xhci_hotplug_init(void);
 cpu_context_t *xhci_irq_handler(cpu_context_t *ctx);

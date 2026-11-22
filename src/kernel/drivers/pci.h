@@ -46,6 +46,11 @@
 #define PCI_MSI_EN          (1u << 0)
 #define PCI_MSI_64BIT       (1u << 7)
 
+#define PCI_MSIX_CTRL       0x02
+#define PCI_MSIX_TABLE      0x04
+#define PCI_MSIX_EN         (1u << 15)
+#define PCI_MSIX_FMASK      (1u << 14)
+
 #define PCI_CLASS_USB       0x0C
 #define PCI_SUBCLASS_USB    0x03
 #define PCI_PROGIF_UHCI     0x00
@@ -58,9 +63,10 @@ typedef struct {
     uint16_t vendor_id, device_id;
     uint8_t class_code, subclass, prog_if;
     uint64_t bar0_phys;
-    uint32_t bar0_size;
+    uint64_t bar0_size;
     uint8_t int_line;
     uint8_t msi_cap;
+    uint8_t msix_cap;
 } pci_dev_t;
 
 void pci_init(void);
@@ -71,5 +77,6 @@ uint32_t pci_read32(pci_dev_t *d, uint8_t off);
 void pci_write16(pci_dev_t *d, uint8_t off, uint16_t v);
 void pci_write32(pci_dev_t *d, uint8_t off, uint32_t v);
 
+bool pci_decode_bar(pci_dev_t *d, uint8_t idx, uint64_t *phys, uint64_t *sz);
 void pci_enable(pci_dev_t *d);
 bool pci_cfg_msi(pci_dev_t *d, uint8_t vec, uint32_t lapic_id);

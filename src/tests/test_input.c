@@ -6,6 +6,8 @@
 
 #include <kernel/drivers/keyboard.h>
 #include <kernel/drivers/i8042.h>
+#include <kernel/drivers/xhci.h>
+#include <kernel/drivers/pci.h>
 #include <kernel/debug.h>
 #include <tests/tests.h>
 #include <stdbool.h>
@@ -135,6 +137,87 @@ static bool t_ps2_config(void) {
 
 #pragma endregion
 
+#pragma region USB
+
+static bool t_usb_make_break(void) {
+    uint8_t prev[8] = {0}, locks = 0;
+    key_event_t ev[22];
+    const uint8_t down[8] = { 0x02, 0, 0x04, 0, 0, 0, 0, 0 }; // LShift + A
+    const uint8_t up[8] = {0};
+
+    TEST_ASSERT(usb_kbd_feed(prev, down, &locks, ev, 22) == 2);
+    TEST_ASSERT(ev[0].keycode == KEY_LEFT_SHIFT && ev[0].pressed);
+    TEST_ASSERT(ev[1].keycode == KEY_A && ev[1].pressed && (ev[1].modifiers & MOD_LSHIFT));
+
+    // Holding the same keys is a new report but no new events
+    TEST_ASSERT(usb_kbd_feed(prev, down, &locks, ev, 22) == 0);
+
+    TEST_ASSERT(usb_kbd_feed(prev, up, &locks, ev, 22) == 2);
+    TEST_ASSERT(ev[0].keycode == KEY_LEFT_SHIFT && !ev[0].pressed);
+    TEST_ASSERT(ev[1].keycode == KEY_A && !ev[1].pressed);
+    return true;
+}
+
+static bool t_usb_rollover(void) {
+    // Too many keys: every slot reads ErrorRollOver. Nothing may be released or pressed
+    uint8_t prev[8] = {0}, locks = 0;
+    key_event_t ev[22];
+    const uint8_t ab[8] = { 0, 0, 0x04, 0x05, 0, 0, 0, 0 };
+    const uint8_t err[8] = { 0, 0, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01 };
+    const uint8_t abc[8] = { 0, 0, 0x04, 0x05, 0x06, 0, 0, 0 };
+
+    TEST_ASSERT(usb_kbd_feed(prev, ab, &locks, ev, 22) == 2);
+    TEST_ASSERT(usb_kbd_feed(prev, err, &locks, ev, 22) == 0);
+    TEST_ASSERT(usb_kbd_feed(prev, abc, &locks, ev, 22) == 1);
+    TEST_ASSERT(ev[0].keycode == KEY_C && ev[0].pressed);
+    return true;
+}
+
+static bool t_usb_caps(void) {
+    // USB keyboards don't repeat, holding Caps Lock is one report, one toggle
+    uint8_t prev[8] = {0}, locks = 0;
+    key_event_t ev[22];
+    const uint8_t caps[8] = { 0, 0, 0x39, 0, 0, 0, 0, 0 }, none[8] = {0};
+
+    usb_kbd_feed(prev, caps, &locks, ev, 22);
+    usb_kbd_feed(prev, caps, &locks, ev, 22);
+    TEST_ASSERT(locks & LOCK_CAPS);
+    usb_kbd_feed(prev, none, &locks, ev, 22);
+    usb_kbd_feed(prev, caps, &locks, ev, 22);
+    TEST_ASSERT(!(locks & LOCK_CAPS));
+    return true;
+}
+
+static bool t_usb_route(void) {
+    // One nibble per hub tier, starting from the lowest
+    TEST_ASSERT(xhci_route_child(0, 2) == 0x2);
+    TEST_ASSERT(xhci_route_child(0x2, 4) == 0x42);
+    TEST_ASSERT(xhci_route_child(0x42, 7) == 0x742);
+    TEST_ASSERT(xhci_route_child(0, 20) == 0xF);           // ports past 15 share nibble 15
+    TEST_ASSERT(xhci_route_child(0x11111, 3) == 0x11111);  // five hubs deep is the limit
+    return true;
+}
+
+static bool t_pci_bar(void) {
+    // QEMU's VGA card sits at 00:02.0 with a 16 MiB framebuffer BAR
+    pci_dev_t vga = { .bus = 0, .dev = 2, .func = 0 };
+    if (pci_read16(&vga, PCI_VENDOR_ID) != 0x1234) return true;
+
+    uint16_t cmd = pci_read16(&vga, PCI_COMMAND);
+    uint32_t raw = pci_read32(&vga, PCI_BAR0);
+    uint64_t phys, sz;
+    TEST_ASSERT(pci_decode_bar(&vga, 0, &phys, &sz));
+    TEST_ASSERT(sz == 16 * 1024 * 1024);
+    TEST_ASSERT(phys == (raw & 0xFFFFFFF0));
+
+    // Sizing must put everything back the way it was
+    TEST_ASSERT(pci_read32(&vga, PCI_BAR0) == raw);
+    TEST_ASSERT(pci_read16(&vga, PCI_COMMAND) == cmd);
+    return true;
+}
+
+#pragma endregion
+
 #pragma region Runner
 
 static void run_test(const char* name, bool (*fn)(void)) {
@@ -152,6 +235,11 @@ void test_input(void) {
     run_test("locks: auto-repeat toggles once",t_caps_repeat);
     run_test("leds: PS/2 bit order",          t_led_order);
     run_test("i8042: config keeps port 2 off",t_ps2_config);
+    run_test("usb: make and break",           t_usb_make_break);
+    run_test("usb: rollover report ignored",  t_usb_rollover);
+    run_test("usb: caps toggles once",        t_usb_caps);
+    run_test("usb: hub route strings",        t_usb_route);
+    run_test("pci: BAR sizing restores state",t_pci_bar);
 
     suite_end(&suite);
 }
