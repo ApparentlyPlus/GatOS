@@ -1,6 +1,6 @@
 # Chapter 8: The Virtual Memory Manager
 
-Last chapter promised a boss fight, and here it is. Welcome! If you made it through the buddy allocator and the slab, you are more ready for this than you think. Grab a coffee, though. It's a long one.
+Last chapter promised a boss fight, so let's load the healthbar. Welcome! If you made it through the buddy allocator and the slab, you are more ready for this than you think. Grab a coffee, though. It's a long one.
 
 So far, every allocator we have built deals in physical memory. The PMM hands out pages and merges buddies as it goes. The slab packs small objects into those pages, so a 40 byte struct no longer costs us 4 KiB. Both of them reach memory through the physmap.
 
