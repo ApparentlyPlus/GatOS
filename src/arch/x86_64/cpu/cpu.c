@@ -31,6 +31,28 @@ uint64_t read_msr(uint32_t msr)
     return ((uint64_t)hi << 32) | lo;
 }
 
+/*
+ * rdmsr_safe - rdmsr for MSRs that might not exist
+ */
+__attribute__((noinline, noclone)) bool rdmsr_safe(uint32_t msr, uint64_t* out)
+{
+    uint32_t lo = 0, hi = 0;
+    uint32_t ok;
+    __asm__ volatile(
+        "mov $1, %[ok]\n"
+        ".global msr_safe_insn\n"
+        "msr_safe_insn: rdmsr\n"
+        "jmp 1f\n"
+        ".global msr_safe_fail\n"
+        "msr_safe_fail: xor %[ok], %[ok]\n"
+        "1:\n"
+        : [ok] "=&r"(ok), "+a"(lo), "+d"(hi)
+        : "c"(msr)
+        : "memory");
+    if (ok && out) *out = ((uint64_t)hi << 32) | lo;
+    return ok != 0;
+}
+
 void write_msr(uint32_t msr, uint64_t value)
 {
     uint32_t lo = (uint32_t)value;

@@ -261,6 +261,10 @@ static void split_block(block_t *b, size_t size) {
 
     fl_insert(nb);
     if (was_free) fl_insert(b);
+
+    // A tail cut off a used block (realloc shrinking in place) can land right before a block
+    // that is already free. Merge them, or the heap ends up with two free neighbours that never join.
+    else coalesce(nb);
 }
 
 #pragma endregion

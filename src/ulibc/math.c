@@ -600,13 +600,13 @@ double log1p(double x)
         if (hu < 0x6a09e) {
             dbl_cast dcu;
             dcu.f = u;
-            dcu.u = (dcu.u & 0x800fffff00000000ULL) | 0x3ff0000000000000ULL;
+            dcu.u = (dcu.u & 0x000fffffffffffffULL) | 0x3ff0000000000000ULL; // __HI(u) = hu | 0x3ff00000, low word kept
             u = dcu.f;
         } else {
             k += 1;
             dbl_cast dcu;
             dcu.f = u;
-            dcu.u = (dcu.u & 0x800fffff00000000ULL) | 0x3fe0000000000000ULL;
+            dcu.u = (dcu.u & 0x000fffffffffffffULL) | 0x3fe0000000000000ULL; // __HI(u) = hu | 0x3fe00000, low word kept
             u = dcu.f;
             hu = (0x00100000 - hu) >> 2;
         }
@@ -637,36 +637,13 @@ double log1p(double x)
  */
 
 
-double sqrt(double number) 
+double sqrt(double number)
 {
-    if (number < 0) return (number - number) / (number - number);
-    if (number == 0) return 0.0;
-    
-    dbl_cast dc = {.f = number};
-    uint64_t i = dc.u;
-    
-    // Handle denormals by scaling
-    if ((i & 0x7FF0000000000000ULL) == 0) {  // exponent is zero
-        number *= 0x1p54;  // scale up by 2^54
-        dc.f = number;
-        i = dc.u;
-        i = 0x5fe6eb50c7b537a9 - (i >> 1);
-        double y = *(double*)&i;
-        y = y * (1.5 - (number * 0.5 * y * y));
-        y = y * (1.5 - (number * 0.5 * y * y));
-        y = y * (1.5 - (number * 0.5 * y * y));
-        y = y * (1.5 - (number * 0.5 * y * y));
-        return (number * y) * 0x1p-27;  // scale result back down
-    }
-    
-    // Normal path
-    i = 0x5fe6eb50c7b537a9 - (i >> 1);
-    double y = *(double*)&i;
-    y = y * (1.5 - (number * 0.5 * y * y));
-    y = y * (1.5 - (number * 0.5 * y * y));
-    y = y * (1.5 - (number * 0.5 * y * y));
-    y = y * (1.5 - (number * 0.5 * y * y));
-    return number * y;
+    // sqrtsd is correctly rounded by IEEE 754, handles -0, NaN, infinity and denormals,
+    // and negative inputs give NaN, exactly what sqrt has to return
+    double r;
+    __asm__("sqrtsd %1, %0" : "=x"(r) : "x"(number));
+    return r;
 }
 
 /* 
@@ -1407,7 +1384,7 @@ double asinh(double x)
             return x;
     }
     if (ix > 0x41b00000) {
-        w = log(fabs(x)) + ln2_hi;
+        w = log(fabs(x)) + 6.93147180559945286227e-01; // the full ln2, ln2_hi alone is short by 1.9e-10
     } else if (ix > 0x40000000) {
         t = fabs(x);
         w = log(2.0 * t + one / (sqrt(x * x + one) + t));
@@ -1435,7 +1412,7 @@ double acosh(double x)
         if (hx >= 0x7ff00000) {
             return x + x;
         } else
-            return log(x) + ln2_hi;
+            return log(x) + 6.93147180559945286227e-01; // the full ln2, ln2_hi alone is short by 1.9e-10
     } else if (((hx - 0x3ff00000) | lx) == 0) {
         return 0.0;
     } else if (hx > 0x40000000) {
@@ -1545,9 +1522,10 @@ double cosh(double x)
         return 0.5 * exp(fabs(x));
 
     /* |x| in [log(maxdouble), overflowthreshold] */
-    if (ix <= 0x408633CE) {
+    if (ix < 0x408633CE || (ix == 0x408633CE && (uint32_t)dc.u <= 0x8fb9f87dU)) {
         w = exp(0.5 * fabs(x));
-        return w * w * 0.5;
+        t = 0.5 * w;
+        return t * w; // halve first, w * w alone overflows near the threshold
     }
 
     return huge * huge;
@@ -1785,7 +1763,7 @@ double pow(double x, double y)
     }
 
     s = one;
-    if (((((unsigned)hy >> 31) - 1) | (yisint - 1)) == 0)
+    if (((((unsigned)hx >> 31) - 1) | (yisint - 1)) == 0) // x negative, y an odd integer
         s = -one;
 
     y1 = y;

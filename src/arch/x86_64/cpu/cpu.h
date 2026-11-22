@@ -70,6 +70,7 @@ void tsc_deadline_arm(uint64_t target_tsc);
 // Register access functions
 void cpuid(uint32_t eax, uint32_t ecx, uint32_t* a, uint32_t* b, uint32_t* c, uint32_t* d);
 uint64_t read_msr(uint32_t msr);
+bool rdmsr_safe(uint32_t msr, uint64_t* out);
 void write_msr(uint32_t msr, uint64_t value);
 uint64_t read_cr0(void);
 void write_cr0(uint64_t val);

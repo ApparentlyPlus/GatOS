@@ -9,6 +9,8 @@
 
 #include <arch/x86_64/memory/paging.h>
 #include <arch/x86_64/cpu/interrupts.h>
+#include <arch/x86_64/cpu/cpu.h>
+#include <arch/x86_64/cpu/msr.h>
 #include <kernel/memory/pmm.h>
 #include <kernel/debug.h>
 #include <tests/tests.h>
@@ -131,6 +133,19 @@ static bool t_idt_dpl(void) {
 }
 #pragma endregion
 
+static bool t_rdmsr_safe(void) {
+    // A real MSR reads normally, and EFER always has long mode on by now
+    uint64_t efer = 0;
+    TEST_ASSERT(rdmsr_safe(MSR_EFER, &efer));
+    TEST_ASSERT(efer & EFER_LMA);
+
+    // An MSR that doesn't exist raises #GP on real hardware and KVM, which rdmsr_safe has to survive.
+    // QEMU's emulator just returns 0 instead, so a successful read is fine too. A panic is not
+    uint64_t junk = 0x1234;
+    if (!rdmsr_safe(0x12345678, &junk)) TEST_ASSERT(junk == 0x1234);
+    return true;
+}
+
 #pragma region Runner
 
 static void run_test(const char* name, bool (*fn)(void)) {
@@ -149,6 +164,7 @@ void test_boot(void) {
     run_test("idt: every vector -> its stub", t_idt_stubs);
     run_test("idt: IST only on #DF and #PF",  t_idt_ist);
     run_test("idt: DPL 3 only on #BP and #DB",t_idt_dpl);
+    run_test("msr: rdmsr_safe survives #GP",  t_rdmsr_safe);
 
     suite_end(&suite);
 }

@@ -169,6 +169,13 @@ cpu_context_t* interrupt_dispatcher(cpu_context_t* context)
         return context;
     }
 
+    // rdmsr_safe probing an MSR that doesn't exist
+    extern char msr_safe_insn[], msr_safe_fail[];
+    if (vec == INT_GENERAL_PROTECTION && context->iret_rip == (uint64_t)msr_safe_insn) {
+        context->iret_rip = (uint64_t)msr_safe_fail;
+        return context;
+    }
+
     // A broken program only takes itself down, not the whole system
     if ((context->iret_cs & 3) == 3 && user_fault) {
         cpu_context_t* next = user_fault(context);

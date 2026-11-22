@@ -52,7 +52,11 @@ void donut(void) {
 
     syscall_tty_ctrl(TTY_CTRL_CLEAR, 0);
 
+    // 60 frames a second, 16 ms each
+    const uint64_t FRAME_NS = 16 * 1000 * 1000;
+
     for (;;) {
+        uint64_t frame_start = syscall_time_ns();
         memset(b, 32, buffer_size);
         memset(z, 0, buffer_size * sizeof(float));
 
@@ -112,6 +116,9 @@ void donut(void) {
 
         A += 0.04f;
         B += 0.02f;
+
+        uint64_t spent = syscall_time_ns() - frame_start;
+        if (spent < FRAME_NS) syscall_sleep((FRAME_NS - spent) / 1000000);
     }
 }
 
@@ -127,7 +134,7 @@ void demo_threadA(void* arg) {
 }
 
 /*
- * demo_threadB - mmap/munmap, then touch the page on purpose to take a page fault
+ * demo_threadB - Prints a few greetings, then asks for a name to show off blocking reads
  */
 void demo_threadB(void* arg) {
     (void)arg;

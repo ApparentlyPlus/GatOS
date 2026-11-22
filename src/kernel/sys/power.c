@@ -45,8 +45,14 @@ static bool power_get_s5(uint16_t* slp_typa, uint16_t* slp_typb) {
     uint8_t* end = dsdt + dsdt_len;
     bool found = false;
 
+    // Only the definition counts, Name(_S5_, Package(...)), which is NameOp (0x08) right before the
+    // name, sometimes with a root prefix '\' in between
     while (ptr < end - 4) {
-        if (kmemcmp(ptr, "_S5_", 4) == 0) { found = true; break; }
+        if (kmemcmp(ptr, "_S5_", 4) == 0 &&
+            (ptr[-1] == 0x08 || (ptr[-1] == '\\' && ptr - 2 >= dsdt && ptr[-2] == 0x08))) {
+            found = true;
+            break;
+        }
         ptr++;
     }
 
@@ -92,20 +98,19 @@ void reboot(void) {
     // let's not get preemted
     intr_off();
 
-    // Port 0xCF9, PIIX4/ICH9 reset register
-    // supposedly works on QEMU but I don't see it
-    outb(0xCF9, 0x02);
-    io_wait();
-    outb(0xCF9, 0x06);
-    io_wait();
-
-    // ACPI FADT reset register, the most reliable method
-    // this usually works on real hardware
+    // ACPI FADT reset register, the most reliable method, since the firmware tells us exactly
+    // where it is. This usually works on real hardware
     acpi_fadt_t* fadt = (acpi_fadt_t*)acpi_find_table("FACP");
     if (fadt && fadt->header.Revision >= 2 && (fadt->flags & (1 << 10))) {
         if (fadt->reset_reg.address_space == 1) // I/O space
             outb((uint16_t)fadt->reset_reg.address, fadt->reset_value);
     }
+
+    // Port 0xCF9, the PIIX4/ICH9 reset register
+    outb(0xCF9, 0x02);
+    io_wait();
+    outb(0xCF9, 0x06);
+    io_wait();
 
     // PS/2 controller reset, works on some hardware but is generally unreliable
     for (int i = 0; i < 0x10000; i++) {
@@ -137,10 +142,10 @@ void power_off(void) {
     acpi_fadt_t* fadt = (acpi_fadt_t*)acpi_find_table("FACP");
     if (!fadt) return;
 
-    // Enable ACPI mode if not already active
-    if (fadt->smi_cmd && fadt->acpi_enable) {
+    // Enable ACPI mode, unless the firmware already did (SCI_EN, bit 0 of PM1a_CNT)
+    if (fadt->smi_cmd && fadt->acpi_enable && !(inw((uint16_t)fadt->pm1a_cnt_blk) & 1)) {
         outb((uint16_t)fadt->smi_cmd, fadt->acpi_enable);
-        for (int i = 0; i < 1000; i++) {
+        for (int i = 0; i < 300000; i++) {
             if (inw((uint16_t)fadt->pm1a_cnt_blk) & 1) break;
             io_wait();
         }
@@ -174,13 +179,14 @@ void power_rapl_init(void) {
     bool is_amd = (kstrcmp(vendor, "AuthenticAMD") == 0);
 
     if (is_intel) {
-        uint32_t a, b, c, d;
-        cpuid(6, 0, &a, &b, &c, &d);
-        if (!(a & (1u << 3))) {
-            LOGF("[POWER] RAPL not advertised by CPUID.06H (Intel).\n");
+        // Intel has no CPUID bit for RAPL (Linux goes by model number), so we just try the MSRs
+        uint64_t unit_msr, energy;
+        // Emulators may answer with zeros instead of faulting, and a zero energy unit means no RAPL either
+        if (!rdmsr_safe(MSR_RAPL_POWER_UNIT, &unit_msr) || !rdmsr_safe(MSR_PKG_ENERGY_STATUS, &energy) ||
+            ((unit_msr >> 8) & 0x1F) == 0) {
+            LOGF("[POWER] RAPL MSRs not present (Intel).\n");
             return;
         }
-        uint64_t unit_msr = read_msr(MSR_RAPL_POWER_UNIT);
         rapl_esu = (uint32_t)((unit_msr >> 8) & 0x1F);
         rapl_vendor = RAPL_INTEL;
         LOGF("[POWER] Intel RAPL ready. ESU=%u\n", rapl_esu);
@@ -195,7 +201,12 @@ void power_rapl_init(void) {
             LOGF("[POWER] RAPL not advertised by CPUID.80000007H (AMD).\n");
             return;
         }
-        uint64_t unit_msr = read_msr(MSR_AMD_ENERGY_UNIT);
+        uint64_t unit_msr, energy;
+        if (!rdmsr_safe(MSR_AMD_ENERGY_UNIT, &unit_msr) || !rdmsr_safe(MSR_AMD_PKG_ENERGY, &energy) ||
+            ((unit_msr >> 8) & 0x1F) == 0) {
+            LOGF("[POWER] RAPL MSRs not present (AMD).\n");
+            return;
+        }
         rapl_esu = (uint32_t)((unit_msr >> 8) & 0x1F);
         rapl_vendor = RAPL_AMD;
         LOGF("[POWER] AMD RAPL ready. ESU=%u\n", rapl_esu);
