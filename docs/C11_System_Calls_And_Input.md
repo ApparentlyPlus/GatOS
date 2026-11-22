@@ -4,7 +4,7 @@ You survived the acronyms, congrats! This is the chapter where GatOS starts to f
 
 A program running in ring 3 is, by design, almost completely powerless. It cannot touch kernel memory, it cannot talk to devices, and it cannot even turn interrupts off. If it wants to print "Hello", someone with more privilege has to do it on its behalf. Right now, nobody is listening.
 
-The first half of this chapter gives it a way to ask. We set up the `syscall` instruction (finally explaining all those stack switches from Chapter 9), and look at everything the kernel has to check before it believes a word a program says.
+The first half of this chapter gives it a way to ask. We set up the `syscall` instruction, and look at everything the kernel has to check before it believes a word a program says.
 
 The second half is the keyboard. We bring up the ancient PS/2 controller, decode the bytes a keyboard sends, and build a small hub that decides where each keypress ends up.
 

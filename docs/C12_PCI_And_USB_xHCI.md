@@ -1000,4 +1000,4 @@ MSI lets the controller reach the LAPIC directly, without any of the I/O APIC ro
 
 We now have two keyboards, text input, system calls and a way to route every keypress. What we still lack is a decent way to *show* things. The console has been quietly drawing every log line in this book, but we have never looked at how.
 
-In the next chapter, we finally open it up, along with the TTYs behind Alt+Tab, the line discipline that turns keypresses into lines, and the escape sequences that let a program paint the screen.
+The next chapter opens it up, along with the TTYs behind Alt+Tab, the line discipline that turns keypresses into lines, and the escape sequences that let a program paint the screen.

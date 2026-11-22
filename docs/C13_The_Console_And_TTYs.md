@@ -4,7 +4,7 @@ Here is a fun thing to think about. Every screenshot, every log line and every p
 
 This chapter is where we open it up. It is a lighter one than the last two, I promise. There is no spec to wrestle with and no hardware that lies to us. Most of the code is plain C operating on plain memory. Still, there is a surprising amount of thought behind "put text on a screen", and a few of the bugs I found in it were genuinely sneaky.
 
-Chapter 6 ended its framebuffer section by saying that the full console (double buffering, dirty tracking, UTF-8 decoding, ANSI escape processing) needs dynamic memory and would come later. We have had a heap for a while now. Time to pay that back, along with the layer on top of the console, the **TTY**. That is what Alt+Tab has been switching between all along.
+There are two layers to it. The **console** draws text on the screen, with a few more tricks than `draw_glyph` lets on. The **TTY** sits on top of it and decides whose text it is, and TTYs are also what Alt+Tab has been switching between all along.
 
 >[!NOTE]
 >The code for this chapter lives in [`console.c`](/src/kernel/drivers/console.c), [`font.c`](/src/kernel/drivers/font.c) and [`tty.c`](/src/kernel/drivers/tty.c), along with their headers and [`ldisc.h`](/src/kernel/drivers/ldisc.h).
@@ -907,7 +907,7 @@ The owner can take the lock again (`depth` counts how many times), which lets a 
 
 Interrupt handlers are the exception, because they cannot block. If an interrupt handler wants to print while some thread owns the output, `tty_write` copies its text into `held`, a small 512 byte buffer on the side. The owner writes it out when it lets go. Anything past 512 bytes is dropped, which is fine for the occasional line from an interrupt.
 
-This is also where `kprintf` gets its destination. Chapter 4 wired it straight to the serial port and promised to talk about the changes later. Here they are. `kprintf` now writes to the calling thread's own TTY when the scheduler is running and the thread belongs to a process. Otherwise, it writes to the active TTY:
+This is also where `kprintf` gets its destination. Back in Chapter 4, it wrote straight to the serial port. Today, it writes to the calling thread's own TTY when the scheduler is running and the thread belongs to a process. Otherwise, it writes to the active TTY:
 
 ```c
 static tty_t* _out_tty(void) {
@@ -962,4 +962,4 @@ Each piece builds on one before it. The physmap gives us the framebuffer, and th
 
 The UTF-8 decoder and the escape sequence parser turn a stream of bytes into characters and commands. The font, generated glyphs included, turns characters into pixels. On top of all of that, the TTY gives each program its own screen, its own input and its own rules for both, with Alt+Tab to move between them.
 
-We have now leaned on threads, processes, blocking and `sched_yield` for several chapters, promising every time that they would be explained later. It is finally time. In the next chapter, we build the scheduler, the processes and threads it runs, and the context switch that makes many programs look like they run at once on a single core.
+Every program in this chapter had a TTY of its own, and all of them ran at the same time on a single core. How that works is the last big piece of the kernel. In the next chapter, we build the scheduler, the processes and threads it runs, and the context switch that makes many programs look like they run at once on a single core.

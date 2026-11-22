@@ -2,9 +2,9 @@
 
 You beat the VMM, so take a breather. This chapter is a much gentler ride, and I promise there's not a single tree in it.
 
-I have also left a little trail of promises over the last few chapters. The TSS was always "coming later" whenever the IST came up, `cpu_init` was supposed to run before the VMM and quietly never did, and a 4 byte allocation still eats a whole page. None of these is as big as the VMM, but all three need memory to work with, and until the VMM was online, we had none to give them.
+GatOS can allocate memory now, but it still has three rough edges. The GDT is the bare-bones one from Chapter 3, with no TSS, so the kernel has no safe stack to fall back on when something goes badly wrong. Nobody has asked the CPU what it can actually do. And a 4 byte allocation still eats a whole page. None of these is as big as the VMM, but all three need memory to work with, and until now we had none to give them.
 
-This chapter pays all three back, in the order `kernel_bootstrap()` runs them, right after `vmm_kernel_init`:
+This chapter smooths out all three, in the order `kernel_bootstrap()` runs them, right after `vmm_kernel_init`:
 
 1. We rebuild the GDT. The one from Chapter 3 was the bare minimum needed to get into long mode, with no segments for ring 3 and no TSS, and the TSS needs real memory for its stacks.
 2. `cpu_init` asks the CPU what it can do, turns on a few protections, and sets up a small per-CPU data area through the `GS` register.

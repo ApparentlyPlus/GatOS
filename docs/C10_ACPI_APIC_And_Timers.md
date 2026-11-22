@@ -4,9 +4,7 @@ Welcome to acronym land! ACPI, RSDP, MADT, LAPIC, I/O APIC, PIT, HPET, TSC... By
 
 Right now, there is no way to write `sleep_ms(100)` in GatOS. There is no clock to count those 100 milliseconds, and even if there was, nothing could interrupt the kernel to say they are up. Since Chapter 6, the old PIC has been masked off and interrupts have been disabled. A scheduler would have nothing to wake it up either.
 
-Chapter 6 also left two loose ends behind. It called `disable_pic()` without explaining a single line of it, then sent an EOI after every hardware interrupt with nothing more than "we will explain the significance of EOIs in the APIC chapter".
-
-This is the APIC chapter. It takes three steps, and each one needs the one before it:
+Fixing that takes three steps, and each one needs the one before it:
 
 1. **ACPI**, to find the hardware. Modern interrupt controllers and timers do not live at fixed addresses. To learn where everything is, we have to read the tables the firmware left behind.
 2. **The APIC**, to route interrupts. One controller sits inside every CPU core and another sits out by the devices, with a firmware table telling us how the wires between them are actually connected.
@@ -509,7 +507,7 @@ That leaves the **Task Priority Register** (TPR), set to `0`. To explain what th
 
 ## Priorities, and Why We Send an EOI
 
-This is the promise from Chapter 6. Why does the dispatcher have to send an **EOI** (End of Interrupt) after every hardware interrupt, and what happens if it does not?
+Why does the dispatcher have to send an **EOI** (End of Interrupt) after every hardware interrupt, and what happens if it does not?
 
 The LAPIC groups the 256 vectors into 16 **priority classes**, using the top 4 bits of the vector. Vectors `0x20` to `0x2F` are class 2, vectors `0x30` to `0x3F` are class 3, and so on, all the way up to `0xF0` to `0xFF` in class 15. A higher class means a higher priority.
 
@@ -1340,4 +1338,4 @@ By the time `apic_init` returns, the PIC has been remapped out of the exception 
 
 The EOI finally makes sense too. Every hardware interrupt marks itself "in service" in the LAPIC, and holds back everything of equal or lower priority until the EOI clears it.
 
-The kernel can hear now. In the next chapter, we give it something to listen to. User programs will talk to the kernel through the `syscall` instruction, finally explaining all those stack switches and that `swapgs` from Chapter 9. The keyboard will also become the first device in the system with a real, unmasked I/O APIC pin.
+The kernel can hear now. In the next chapter, we give it something to listen to. User programs will talk to the kernel through the `syscall` instruction, and the keyboard will become the first device in the system with a real, unmasked I/O APIC pin.
