@@ -172,6 +172,10 @@ void kernel_test(void* mb_info, char* KERNEL_VERSION) {
     test_tty();
     QEMU_LOG("TTY Test Suite Completed", TOTAL_DBG);
 
+    kprintf("Running PS/2 and Keyboard tests...\n");
+    test_input();
+    QEMU_LOG("Input Test Suite Completed", TOTAL_DBG);
+
     kprintf("Running Multitasking & Userspace tests...\n");
     syscall_init();
     process_init();

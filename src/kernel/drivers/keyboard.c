@@ -7,28 +7,21 @@
 #include <kernel/drivers/keyboard.h>
 #include <kernel/drivers/i8042.h>
 #include <kernel/drivers/input.h>
-#include <kernel/sys/spinlock.h>
 #include <kernel/sys/timers.h>
-#include <kernel/sys/apic.h>
 #include <kernel/debug.h>
-#include <klibc/string.h>
 #include <arch/x86_64/cpu/io.h>
 
-#define EVENT_BUFFER_SIZE 256
-
 #pragma region Internal State
-
-// Circular buffer for key events (Producer: IRQ handler, Consumer: input handler)
-static struct {
-    key_event_t buffer[EVENT_BUFFER_SIZE];
-    uint32_t head;
-    uint32_t tail;
-    spinlock_t lock;
-} key_events;
 
 static uint8_t modifiers = 0;
 static uint8_t locks = 0;
 static bool extended = false;
+
+// Lock keys currently held down. Holding a key repeats its make code, which must not toggle the lock again
+static uint8_t lock_held = 0;
+
+// Bytes left to drop after an 0xE1 prefix
+static uint8_t e1_skip = 0;
 
 #pragma endregion
 
@@ -53,35 +46,30 @@ static const keycode_t scancode_set1[] = {
 
 #pragma region Internal Helpers
 
-static void update_leds(void) {
-    // Gotta love this hardware interface!
-    // we have to send a command to set LED state, 
-    // then wait for an ACK, then send the actual LED state
-    i8042_write_data(0xED);
-    i8042_wait_read();
-    if (i8042_read_data() == 0xFA) {
-        i8042_write_data(locks & 0x07);
-        i8042_wait_read();
-        i8042_read_data(); // consume ACK for the LED state byte
-    }
+/*
+ * lock_key - Toggles a lock on the first make code only, auto-repeat while held is ignored
+ */
+static void lock_key(uint8_t bit, bool pressed) {
+    if (pressed && !(lock_held & bit)) locks ^= bit;
+    lock_held = pressed ? (lock_held | bit) : (lock_held & ~bit);
 }
 
 /*
- * push_event - Adds a key event to the circular buffer (Thread-safe)
+ * keyboard_led_byte - Our lock flags in the order the keyboard wants them (bit 0 Scroll, 1 Num, 2 Caps)
  */
-static void push_event(keycode_t key, bool pressed) {
-    bool flags = spinlock_acquire(&key_events.lock);
+uint8_t keyboard_led_byte(uint8_t l) {
+    return ((l & LOCK_SCROLL) ? 1 : 0) | ((l & LOCK_NUM) ? 2 : 0) | ((l & LOCK_CAPS) ? 4 : 0);
+}
 
-    uint32_t next = (key_events.head + 1) % EVENT_BUFFER_SIZE;
-    if (next != key_events.tail) {
-        key_events.buffer[key_events.head].keycode = key;
-        key_events.buffer[key_events.head].pressed = pressed;
-        key_events.buffer[key_events.head].modifiers = modifiers;
-        key_events.buffer[key_events.head].locks = locks;
-        key_events.head = next;
+static void update_leds(void) {
+    // Gotta love this hardware interface!
+    // we have to send a command to set LED state,
+    // then wait for an ACK, then send the actual LED state
+    i8042_write_data(0xED);
+    if (i8042_read_data() == 0xFA) {
+        i8042_write_data(keyboard_led_byte(locks));
+        i8042_read_data(); // consume ACK for the LED state byte
     }
-
-    spinlock_release(&key_events.lock, flags);
 }
 
 #pragma endregion
@@ -89,67 +77,52 @@ static void push_event(keycode_t key, bool pressed) {
 #pragma region Public API
 
 /*
- * keyboard_init - Initializes the event buffer and controller
+ * keyboard_init - Initializes the controller and syncs the LEDs
  */
 void keyboard_init(void) {
-    kmemset(&key_events, 0, sizeof(key_events));
-    spinlock_init(&key_events.lock, "keyboard_events");
-    
     if (i8042_init()) {
         update_leds();
 
         /*
-            Author's Note: 
-            
+            Author's Note:
+
             Wait for any in flight PS/2 responses to arrive, then drain.
             Without this delay, an unread byte can hold IRQ1 high and
             prevent the IOAPIC from ever seeing an edge transition.
 
             Ask me how I know.
         */
-       
+
         sleep_us(2000);
-        while (inb(0x64) & 0x01) {
-            inb(0x60);
+        while (inb(PS2_STATUS_PORT) & PS2_STATUS_OUTPUT_FULL) {
+            inb(PS2_DATA_PORT);
         }
-        
+
         LOGF("[KBD] Keyboard driver initialized.\n");
     }
 }
 
 /*
- * keyboard_get_event - Pops an event from the buffer if available
+ * keyboard_feed - Runs one scancode byte through the state machine, true when it finished a key event
  */
-bool keyboard_get_event(key_event_t* out_event) {
-    bool flags = spinlock_acquire(&key_events.lock);
-
-    if (key_events.head == key_events.tail) {
-        spinlock_release(&key_events.lock, flags);
-        return false;
-    }
-
-    *out_event = key_events.buffer[key_events.tail];
-    key_events.tail = (key_events.tail + 1) % EVENT_BUFFER_SIZE;
-
-    spinlock_release(&key_events.lock, flags);
-    return true;
-}
-
-/*
- * keyboard_handler - Main IRQ handler logic (State machine)
- */
-cpu_context_t* keyboard_handler(cpu_context_t* ctx) {
+bool keyboard_feed(uint8_t scancode, key_event_t* out) {
 
     // This is hardcoded magic values galore
     // but it works and it's not like we have a choice given the hardware interface, so ¯\_(ツ)_/¯
 
-    if (!(inb(0x64) & 0x01)) return ctx;
+    if (e1_skip) {
+        e1_skip--;
+        return false;
+    }
 
-    uint8_t scancode = inb(0x60);
+    if (scancode == 0xE1) {
+        e1_skip = 5;
+        return false;
+    }
 
     if (scancode == 0xE0) {
         extended = true;
-        return ctx;
+        return false;
     }
 
     bool pressed = !(scancode & 0x80);
@@ -164,9 +137,7 @@ cpu_context_t* keyboard_handler(cpu_context_t* ctx) {
         key = scancode_set1[code];
     }
 
-    if (key == KEY_UNKNOWN) {
-        return ctx;
-    }
+    if (key == KEY_UNKNOWN) return false;
 
     switch (key) {
         case KEY_LEFT_SHIFT: pressed ? (modifiers |= MOD_LSHIFT) : (modifiers &= ~MOD_LSHIFT); break;
@@ -175,16 +146,36 @@ cpu_context_t* keyboard_handler(cpu_context_t* ctx) {
         case KEY_RIGHT_CTRL: pressed ? (modifiers |= MOD_RCTRL) : (modifiers &= ~MOD_RCTRL); break;
         case KEY_LEFT_ALT: pressed ? (modifiers |= MOD_LALT) : (modifiers &= ~MOD_LALT); break;
         case KEY_RIGHT_ALT: pressed ? (modifiers |= MOD_RALT) : (modifiers &= ~MOD_RALT); break;
-        
-        case KEY_CAPSLOCK: if (pressed) { locks ^= LOCK_CAPS; update_leds(); } break;
-        case KEY_NUMLOCK: if (pressed) { locks ^= LOCK_NUM; update_leds(); } break;
-        case KEY_SCROLLLOCK: if (pressed) { locks ^= LOCK_SCROLL; update_leds(); } break;
-        
+
+        case KEY_CAPSLOCK: lock_key(LOCK_CAPS, pressed); break;
+        case KEY_NUMLOCK: lock_key(LOCK_NUM, pressed); break;
+        case KEY_SCROLLLOCK: lock_key(LOCK_SCROLL, pressed); break;
+
         default: break;
     }
 
-    input_handle_key((key_event_t){ .keycode = key, .pressed = pressed, .modifiers = modifiers, .locks = locks });
-    push_event(key, pressed);
+    *out = (key_event_t){ .keycode = key, .pressed = pressed, .modifiers = modifiers, .locks = locks };
+    return true;
+}
+
+/*
+ * keyboard_handler - IRQ 1, reads the byte and hands finished events to the input hub
+ */
+cpu_context_t* keyboard_handler(cpu_context_t* ctx) {
+    uint8_t status = inb(PS2_STATUS_PORT);
+    if (!(status & PS2_STATUS_OUTPUT_FULL)) return ctx;
+
+    uint8_t scancode = inb(PS2_DATA_PORT);
+
+    // A byte from port 2 (the mouse) shares the same buffer, it isn't ours
+    if (status & PS2_STATUS_AUX_OUTPUT) return ctx;
+
+    uint8_t before = locks;
+    key_event_t ev;
+    if (!keyboard_feed(scancode, &ev)) return ctx;
+
+    if (locks != before) update_leds();
+    input_handle_key(ev);
 
     return ctx;
 }

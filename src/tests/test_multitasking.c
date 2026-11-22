@@ -641,6 +641,53 @@ static bool t_sys_abi(void) {
     return true;
 }
 
+/* Bit 63 = probe ran, low byte = what SYS_YIELD returned, next byte = what a bogus SYS_MUNMAP returned */
+userspace_bss static volatile uint64_t ret_res;
+
+userspace void ret_probe(void* arg) {
+    (void)arg;
+    uint64_t y, m;
+    __asm__ volatile("syscall" : "=a"(y) : "a"(SYS_YIELD) : "rcx", "r11", "memory");
+    __asm__ volatile("syscall" : "=a"(m) : "a"(SYS_MUNMAP), "D"(0x1000) : "rcx", "r11", "memory");
+    ret_res = (1ull << 63) | (y & 0xFF) | ((m & 0xFF) << 8);
+    while (1) __asm__ volatile("syscall" : : "a"(SYS_YIELD) : "rcx", "r11", "memory");
+}
+
+extern volatile uint8_t syscall_frame_mod16;
+
+static bool t_sys_ret(void) {
+    process_t* p = process_create("t_ret", NULL);
+    thread_t* t = thread_create(p, "t_ret", ret_probe, NULL, true, 0);
+    TEST_ASSERT(t != NULL);
+
+    uint64_t phys;
+    TEST_ASSERT(vmm_get_physical(p->vmm, (void*)&ret_res, &phys));
+    volatile uint64_t* res = (volatile uint64_t*)PHYSMAP_P2V(phys);
+
+    syscall_frame_mod16 = 0xFF;
+    sched_add(t);
+    uint64_t r = 0;
+    for (int i = 0; i < 100 && !r; i++) {
+        sched_yield();
+        if (!proc_in_list(p)) break;
+        r = *res;
+    }
+    if (proc_in_list(p)) process_destroy(p);
+
+    if (r != ((1ull << 63) | 0xFF00)) LOGF("(res=0x%lx) ", r);
+    TEST_ASSERT(r & (1ull << 63));
+    TEST_ASSERT((r & 0xFF) == 0);           // yield returns 0, not its own number
+    TEST_ASSERT(((r >> 8) & 0xFF) == 0xFF); // munmap of nothing returns -1
+    return true;
+}
+
+static bool t_sys_align(void) {
+    // t_sys_ret just ran syscalls, so the dispatcher recorded its frame. SysV wants it 16 aligned
+    if (syscall_frame_mod16 != 0) LOGF("(mod16=%u) ", syscall_frame_mod16);
+    TEST_ASSERT(syscall_frame_mod16 == 0);
+    return true;
+}
+
 static bool t_sys_fmask(void) {
     // ring 3 must not be able to carry TF or AC into the syscall handler
     uint64_t mask = read_msr(MSR_FMASK);
@@ -708,6 +755,8 @@ void test_multitasking(void) {
     run_test("thread_create_bootstrap",       t_bootstrap);
     run_test("syscall keeps non-ABI regs",    t_sys_abi);
     run_test("syscall masks TF, IF and AC",   t_sys_fmask);
+    run_test("syscall: yield/munmap results", t_sys_ret);
+    run_test("syscall: dispatcher aligned",   t_sys_align);
 
     suite_end(&suite);
 }

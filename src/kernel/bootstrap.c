@@ -199,7 +199,6 @@ bool kernel_bootstrap(void* mb_info, multiboot_parser_t* mb, bool verbose, const
 	// Keyboard and routing
 	keyboard_init();
 	irq_register(INT_FIRST_INTERRUPT + 1, (irq_handler_t)keyboard_handler);
-	ioapic_redirect(1, INT_FIRST_INTERRUPT + 1, lapic_get_id(), 0);
 	ioapic_unmask(1); // we allow the keyboard IRQ to be handled after this point, since the handler is registered and ready to go
 	QEMU_LOG("Initialized Keyboard and routed IRQ 1", TOTAL_DBG);
 	if (verbose) kprintf("[KBD] Keyboard IRQ 1 routed and unmasked.\n");

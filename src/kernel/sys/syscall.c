@@ -21,6 +21,9 @@
 
 extern void syscall_entry(void);
 
+// Frame pointer of the last dispatcher call mod 16, a correctly aligned call leaves 0. Only test builds write it
+volatile uint8_t syscall_frame_mod16 = 0xFF;
+
 void syscall_init(void) {
     uint64_t efer = read_msr(MSR_EFER);
     efer |= EFER_SCE; 
@@ -87,6 +90,9 @@ static bool copy_user(vmm_t* vmm, void* dst, const void* src, size_t n, bool to_
  * syscall_dispatcher - Called from syscall_entry.S with the cpu_context_t from the thread's kernel stack
  */
 void syscall_dispatcher(cpu_context_t* regs) {
+#ifdef TEST_BUILD
+    syscall_frame_mod16 = (uintptr_t)__builtin_frame_address(0) & 15;
+#endif
     thread_t* current = sched_current();
     if (!current) return;
 
@@ -159,18 +165,19 @@ void syscall_dispatcher(cpu_context_t* regs) {
         
         case SYS_MUNMAP: {
             void* addr = (void*)regs->rdi;
-            vmm_free(current->process->vmm, addr);
-            regs->rax = 0;
+            regs->rax = vmm_free(current->process->vmm, addr) == VMM_OK ? 0 : (uint64_t)-1;
             break;
         }
         
         case SYS_YIELD:
             sched_yield();
+            regs->rax = 0;
             break;
 
         case SYS_SLEEP_MS: {
             uint64_t ms = regs->rdi;
             sched_sleep(ms);
+            regs->rax = 0;
             break;
         }
 

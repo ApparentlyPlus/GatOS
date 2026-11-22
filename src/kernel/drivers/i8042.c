@@ -1,8 +1,8 @@
 /*
  * i8042.c - Intel 8042 PS/2 Controller Driver Implementation
  *
- * Standard init sequence: disable devices, flush buffer, set config byte, self-test, check
- * for dual channel, interface tests, enable devices.
+ * Init sequence: disable both ports, flush the buffer, set the config byte, self-test,
+ * then enable port 1 and reset the keyboard. Port 2 (the mouse) stays off.
  *
  * Reference: the OSDev wiki "8042 PS/2 Controller" page and the Linux kernel's
  * i8042 driver (drivers/input/serio/i8042.c, GPL-2.0).
@@ -15,16 +15,17 @@
 #include <kernel/sys/timers.h>
 #include <kernel/debug.h>
 
-#define I8042_TIMEOUT_US 100000 // 100ms timeout for hardware sync
+#define I8042_TIMEOUT_US 100000  // 100ms timeout for hardware sync
+#define I8042_BAT_US 1000000 // a real keyboard takes 500-750ms to finish its self-test after a reset
 
 #pragma region Helper Functions
 
 /*
- * i8042_wait_read - Wait until output buffer is full (data available to read)
+ * wait_status - Poll the status register in 100us steps until (status & mask) == want, or us runs out
  */
-bool i8042_wait_read(void) {
-    for (int i = 0; i < 1000; i++) { // Polling with short sleeps
-        if (inb(PS2_STATUS_PORT) & PS2_STATUS_OUTPUT_FULL) {
+static bool wait_status(uint8_t mask, uint8_t want, uint32_t us) {
+    for (uint32_t i = 0; i < us / 100; i++) {
+        if ((inb(PS2_STATUS_PORT) & mask) == want) {
             return true;
         }
         sleep_us(100);
@@ -33,16 +34,17 @@ bool i8042_wait_read(void) {
 }
 
 /*
+ * i8042_wait_read - Wait until output buffer is full (data available to read)
+ */
+bool i8042_wait_read(void) {
+    return wait_status(PS2_STATUS_OUTPUT_FULL, PS2_STATUS_OUTPUT_FULL, I8042_TIMEOUT_US);
+}
+
+/*
  * i8042_wait_write - Wait until input buffer is empty (ready to receive data/command)
  */
 bool i8042_wait_write(void) {
-    for (int i = 0; i < 1000; i++) {
-        if (!(inb(PS2_STATUS_PORT) & PS2_STATUS_INPUT_FULL)) {
-            return true;
-        }
-        sleep_us(100);
-    }
-    return false;
+    return wait_status(PS2_STATUS_INPUT_FULL, 0, I8042_TIMEOUT_US);
 }
 
 /*
@@ -106,8 +108,8 @@ bool i8042_init(void) {
     
     // Enable Port 1 Interrupts
     // Enable Port 1 Translation (Set 2 -> Set 1)
-    config |= PS2_CFG_PORT1_INT | PS2_CFG_PORT1_TRANS; 
-    config &= ~(PS2_CFG_PORT1_CLOCK | PS2_CFG_PORT2_CLOCK);
+    config |= PS2_CFG_PORT1_INT | PS2_CFG_PORT1_TRANS | PS2_CFG_PORT2_CLOCK;
+    config &= ~(PS2_CFG_PORT1_CLOCK | PS2_CFG_PORT2_INT);
 
     i8042_write_command(PS2_CMD_WRITE_CONFIG);
     i8042_write_data(config);
@@ -120,13 +122,20 @@ bool i8042_init(void) {
         return false;
     }
 
+    // Some controllers reset themselves during the self-test, so write the config again
+    i8042_write_command(PS2_CMD_WRITE_CONFIG);
+    i8042_write_data(config);
+
     // Enable Port 1
     i8042_write_command(PS2_CMD_ENABLE_PORT1);
 
     // Keyboard Reset
     i8042_write_data(0xFF);
     uint8_t ack = i8042_read_data();
-    uint8_t bat = i8042_read_data();
+    uint8_t bat = wait_status(PS2_STATUS_OUTPUT_FULL, PS2_STATUS_OUTPUT_FULL, I8042_BAT_US) ? inb(PS2_DATA_PORT) : 0;
+    if (ack != 0xFA || bat != 0xAA) {
+        LOGF("[PS2] Keyboard reset answered 0x%x 0x%x (want 0xFA 0xAA).\n", ack, bat);
+    }
     
     // Enable Scanning
     i8042_write_data(0xF4);

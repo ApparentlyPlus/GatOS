@@ -72,7 +72,8 @@ typedef struct {
 
 // Public API
 void keyboard_init(void);
-bool keyboard_get_event(key_event_t* out_event);
+bool keyboard_feed(uint8_t scancode, key_event_t* out);
+uint8_t keyboard_led_byte(uint8_t locks);
 cpu_context_t* keyboard_handler(cpu_context_t* ctx); // To be called from ISR
 
 // Layout translation (US QWERTY default)

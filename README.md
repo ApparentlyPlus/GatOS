@@ -434,7 +434,7 @@ You can also use the other functions defined in `debug.h`, as well as `QEMU_DUMP
 
 A *lot* of documentation and writeups are available in the [`docs/`](./docs/) folder. This includes development notes, architecture decisions, learning resources, and basically everything I've figured out (or struggled with) during this journey. Whatever question you have, it's probably answered there.
 
-The writeups are structured as chapters, and currently run to roughly **85,000 words**, officially closer to a book than to release notes:
+The writeups are structured as chapters, and currently run to roughly **100,000 words**, officially closer to a book than to release notes:
 
 | Chapter | Topic |
 | --- | --- |
@@ -449,6 +449,7 @@ The writeups are structured as chapters, and currently run to roughly **85,000 w
 | [C8](./docs/C8_The_Virtual_Memory_Manager.md) | The virtual memory manager |
 | [C9](./docs/C9_GDT_CPU_And_Kernel_Heap.md) | The GDT, the CPU and the kernel heap |
 | [C10](./docs/C10_ACPI_APIC_And_Timers.md) | ACPI, the APIC and timers |
+| [C11](./docs/C11_System_Calls_And_Input.md) | System calls, the PS/2 keyboard and the input hub |
 
 Please note that the documentation is NOT complete as of now. There will be a total of 15 chapters to cover the entirety of GatOS' internals, so this is roughly halfway there.
 

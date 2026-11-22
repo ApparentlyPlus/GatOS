@@ -85,10 +85,11 @@ syscall_entry:
     // For syscall_dispatcher, pass in the ctx
     mov rdi, rsp
 
-    // SysV ABI needs rsp ≡ 8 (mod 16) before calling, so adjust
-    sub rsp, 8
+    // SysV ABI needs rsp ≡ 0 (mod 16) right before the call
+    mov rbx, rsp
+    and rsp, -16
     call syscall_dispatcher
-    add rsp, 8
+    mov rsp, rbx
 
     // Pick the exit while every register is still kernel scratch
     // Guard against the SYSRETQ non canonical RCX thingie
