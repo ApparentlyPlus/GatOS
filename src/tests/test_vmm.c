@@ -852,6 +852,23 @@ static bool t_free_keeps_neighbors(void) {
 }
 #pragma endregion
 
+static bool t_destroy_live(void) {
+    // Destroying the address space that is loaded in cr3 must move the CPU off it first
+    vmm_t* k = vmm_get_current();
+    vmm_t* v = vmm_create(0x400000, 0x80000000);
+    TEST_ASSERT(v != NULL);
+    vmm_switch(v);
+    uint64_t live = 0;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(live));
+    TEST_ASSERT((live & ~0xFFFULL) == v->pt_root);
+
+    vmm_destroy(v);
+    __asm__ volatile("mov %%cr3, %0" : "=r"(live));
+    TEST_ASSERT((live & ~0xFFFULL) == k->pt_root);
+    TEST_ASSERT(vmm_get_current() == k);
+    return true;
+}
+
 #pragma region Runner
 
 static void run_test(const char* name, bool (*fn)(void)) {
@@ -918,6 +935,7 @@ void test_vmm(void) {
     run_test("resize: no leak, regrown zeroed", t_resize_no_leak);
     run_test("alloc: exact size, no round up",  t_exact_alloc);
     run_test("free: neighbors stay mapped",     t_free_keeps_neighbors);
+    run_test("destroy: leaves a live cr3 first",t_destroy_live);
 
     suite_end(&suite);
 }

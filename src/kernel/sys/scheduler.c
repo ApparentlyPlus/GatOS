@@ -24,9 +24,10 @@ static thread_t* cur = NULL;
 static thread_t* rq_head = NULL;
 static thread_t* rq_tail = NULL;
 
-// CPU utilisation counters (incremented in IRQ context, no locking needed)
+// CPU utilisation, in nanoseconds of uptime (updated in IRQ context, no locking needed)
 static volatile uint64_t ticks_total = 0;
 static volatile uint64_t ticks_idle = 0;
+static uint64_t last_switch_ns = 0;
 
 static avl_tree_t sleep_tree;
 static thread_t* dead_head = NULL;
@@ -290,6 +291,15 @@ cpu_context_t* sched_schedule(cpu_context_t* ctx) {
 
     uint64_t now = get_uptime_ms();
 
+    // Charge the time since the last switch to whoever was running
+    uint64_t now_ns = get_uptime_ns();
+    if (last_switch_ns) {
+        uint64_t ran = now_ns - last_switch_ns;
+        ticks_total += ran;
+        if (cur == idle) ticks_idle += ran;
+    }
+    last_switch_ns = now_ns;
+
     if (cur) {
         // Copy the cpu_context_t from wherever ISR.S built it into the embedded field in the thread struct
         // From this point the kstack is no longer referenced by any live pointer, so thread_destroy may free it freely.
@@ -401,13 +411,11 @@ cpu_context_t* sched_schedule(cpu_context_t* ctx) {
     cur = nxt;
     cur->state = T_RUNNING;
 
-    ticks_total++;
-    if (cur == idle) ticks_idle++;
-
     timer_arm_next(cur == idle);
 
     // fpu_nm_handler will lazily restore state on first use
-    set_cr0_ts();
+    if (cur == fpu_owner) __asm__ volatile("clts" ::: "memory");
+    else set_cr0_ts();
 
     if (cur->kstack) {
         uint64_t stack_top = (uint64_t)cur->kstack + KERNEL_STACK_SIZE;

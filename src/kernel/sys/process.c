@@ -151,8 +151,11 @@ process_t* process_create(const char* name, tty_t* existing_tty) {
         proc_hdr_update(proc);
     }
 
+    // The scheduler unlinks dead processes from the timer interrupt, so the list only changes with interrupts off
+    bool iflag = intr_save();
     proc->next = proc_list;
     proc_list = proc;
+    intr_restore(iflag);
 
     LOGF("[PROC] Created process '%s' (PID: %u)\n", proc->name, proc->pid);
     return proc;
@@ -182,8 +185,11 @@ static thread_t* thread_new(process_t* process, const char* name, thread_state_t
  * thread_link - Adds a finished thread to its process
  */
 static void thread_link(thread_t* thread) {
+    // Same as the process list, the scheduler unlinks dead threads from the timer interrupt
+    bool iflag = intr_save();
     thread->next = thread->process->threads;
     thread->process->threads = thread;
+    intr_restore(iflag);
     proc_hdr_update(thread->process);
 }
 
@@ -328,6 +334,7 @@ void process_destroy(process_t* process) {
         vmm_destroy(process->vmm);
     }
 
+    bool iflag = intr_save();
     process_t** prev = &proc_list;
     while (*prev) {
         if (*prev == process) {
@@ -336,6 +343,7 @@ void process_destroy(process_t* process) {
         }
         prev = &(*prev)->next;
     }
+    intr_restore(iflag);
 
     kfree(process);
 }

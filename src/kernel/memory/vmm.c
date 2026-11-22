@@ -685,6 +685,9 @@ void vmm_destroy(vmm_t* vmm_pub) {
         return;
     }
 
+    // Never free page tables the CPU is still using
+    if (current_vmm == &vmm->public) vmm_switch(NULL);
+
     // Acquiring the lock prevents any concurrent alloc from racing teardown
     bool lock_flags = spinlock_acquire(&vmm->lock);
 

@@ -741,27 +741,61 @@ static uint8_t state_color(thread_state_t s) {
 /*
  * fmt_tdetail - Format the state detail string for a thread row
  */
-static void fmt_tdetail(char* out, size_t n, const thread_t* t) {
-    if (t->state == T_SLEEPING) {
-        ksnprintf(out, n, "SLEEPING");
-        return;
+static void fmt_tdetail(char* out, size_t n, thread_state_t state) {
+    ksnprintf(out, n, "%s", state_str(state));
+}
+
+#define SNAP_MAX 96
+
+// One row of the process table, copied out of the scheduler's lists
+typedef struct {
+    bool is_proc;
+    uint32_t id;            // PID for a process row, TID for a thread row
+    char name[MAX_PROCESS_NAME];
+    int nth;                // process rows only
+    size_t res, vt;         // process rows only
+    thread_state_t state;   // thread rows only
+} snap_row_t;
+
+static snap_row_t snap[SNAP_MAX];
+static int snap_n = 0;
+
+/*
+ * snap_procs - Copy the process table with interrupts off
+ */
+static void snap_procs(void) {
+    bool iflag = intr_save();
+    snap_n = 0;
+
+    for (process_t* proc = process_get_all(); proc && snap_n < SNAP_MAX; proc = proc->next) {
+        snap_row_t* r = &snap[snap_n++];
+        r->is_proc = true;
+        r->id = proc->pid;
+        kstrncpy(r->name, proc->name, sizeof(r->name) - 1);
+        r->name[sizeof(r->name) - 1] = 0;
+        r->nth = 0;
+        for (thread_t* t = proc->threads; t; t = t->next) r->nth++;
+        r->res = r->vt = 0;
+        if (proc->vmm) vmm_stats(proc->vmm, &r->vt, &r->res);
+
+        for (thread_t* t = proc->threads; t && snap_n < SNAP_MAX; t = t->next) {
+            snap_row_t* tr = &snap[snap_n++];
+            tr->is_proc = false;
+            tr->id = t->tid;
+            kstrncpy(tr->name, t->name, sizeof(tr->name) - 1);
+            tr->name[sizeof(tr->name) - 1] = 0;
+            tr->state = t->state;
+        }
     }
 
-    ksnprintf(out, n, "%s", state_str(t->state));
+    intr_restore(iflag);
 }
 
 /*
- * proc_rows - Count how many rows the process table will need, one per process plus one per thread
+ * proc_rows - How many rows the process table needs, one per process plus one per thread
  */
 static int proc_rows(void) {
-    int rows = 0;
-
-    for (process_t* proc = process_get_all(); proc; proc = proc->next) {
-        rows++;
-        for (thread_t* t = proc->threads; t; t = t->next) rows++;
-    }
-
-    return rows;
+    return snap_n;
 }
 
 /*
@@ -816,74 +850,64 @@ static void render_procs(console_t* c, const layout_t* L) {
     print_padded(c, "VIRT", L->mem_w);
     con_putc(c, '\n');
 
-    process_t* proc = process_get_all();
-    while (proc) {
+    for (int i = 0; i < snap_n; i++) {
+        const snap_row_t* r = &snap[i];
         if (c->cy >= c->height - 2) break; // out of screen, not out of processes
 
-        int nth = 0;
-        for (thread_t* t = proc->threads; t; t = t->next) nth++;
+        if (r->is_proc) {
+            col = 0;
+            set_col(c, CONSOLE_COLOR_YELLOW, CONSOLE_COLOR_BLACK);
+            print_spaces(c, L->indent); col += L->indent;
+            ksnprintf(tid_buf, sizeof(tid_buf), "%u", r->id);
+            print_padded(c, tid_buf, L->pid_w); col += L->pid_w;
 
-        size_t vt = 0, res = 0;
-        if (proc->vmm) vmm_stats(proc->vmm, &vt, &res);
-
-        col = 0;
-        set_col(c, CONSOLE_COLOR_YELLOW, CONSOLE_COLOR_BLACK);
-        print_spaces(c, L->indent); col += L->indent;
-        ksnprintf(tid_buf, sizeof(tid_buf), "%u", proc->pid);
-        print_padded(c, tid_buf, L->pid_w); col += L->pid_w;
-
-        set_col(c, CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
-        if (L->value_col > col) { print_spaces(c, L->value_col - col); col = L->value_col; }
-        print_padded(c, proc->name, L->name_w); col += L->name_w;
-        if (L->thr_col > col) { print_spaces(c, L->thr_col - col); col = L->thr_col; }
-        ksnprintf(tid_buf, sizeof(tid_buf), "%d", nth);
-        print_padded(c, tid_buf, L->thr_w); col += L->thr_w;
-        if (L->state_col > col) { print_spaces(c, L->state_col - col); col = L->state_col; }
-        print_padded(c, "", L->state_w); col += L->state_w;
-        if (L->rss_col > col) { print_spaces(c, L->rss_col - col); col = L->rss_col; }
-        print_padded(c, fmt_size(mem, sizeof(mem), (uint64_t)res), L->mem_w); col += L->mem_w;
-        if (L->virt_col > col) { print_spaces(c, L->virt_col - col); col = L->virt_col; }
-        print_padded(c, fmt_size(virt_s, sizeof(virt_s), (uint64_t)vt), L->mem_w);
-        con_putc(c, '\n');
-
-        for (thread_t* t = proc->threads; t; t = t->next) {
-            int tid_len;
-
-            if (c->cy >= c->height - 2) break;
-
-            fmt_tdetail(detail, sizeof(detail), t);
-
-            set_col(c, CONSOLE_COLOR_DARK_GRAY, CONSOLE_COLOR_BLACK);
-            print_spaces(c, L->value_col);
-            print_str(c, "\xe2\x94\x94\xe2\x94\x80\xe2\x94\x80 ");
-
-            ksnprintf(tid_buf, sizeof(tid_buf), "%u", t->tid);
-            tid_len = kstrlen(tid_buf);
-            print_str(c, tid_buf);
-            con_putc(c, ' ');
-
-            clip_text(name_buf, sizeof(name_buf), t->name, name_w);
-            set_col(c, CONSOLE_COLOR_DARK_GRAY, CONSOLE_COLOR_BLACK);
-            print_str(c, name_buf);
-
-            print_spaces(c, L->gap);
-
-            for (int i = tid_len + 1; i < tid_w; i++) {
-                con_putc(c, ' ');
-            }
-
-            col = name_col + kstrlen(name_buf);
-            if (L->state_col > col) print_spaces(c, L->state_col - col);
-
-            set_col(c, CONSOLE_COLOR_DARK_GRAY, CONSOLE_COLOR_BLACK);
-            print_str(c, "[");
-            set_col(c, state_color(t->state), CONSOLE_COLOR_BLACK);
-            print_str(c, detail);
-            set_col(c, CONSOLE_COLOR_DARK_GRAY, CONSOLE_COLOR_BLACK);
-            print_str(c, "]\n");
+            set_col(c, CONSOLE_COLOR_WHITE, CONSOLE_COLOR_BLACK);
+            if (L->value_col > col) { print_spaces(c, L->value_col - col); col = L->value_col; }
+            print_padded(c, r->name, L->name_w); col += L->name_w;
+            if (L->thr_col > col) { print_spaces(c, L->thr_col - col); col = L->thr_col; }
+            ksnprintf(tid_buf, sizeof(tid_buf), "%d", r->nth);
+            print_padded(c, tid_buf, L->thr_w); col += L->thr_w;
+            if (L->state_col > col) { print_spaces(c, L->state_col - col); col = L->state_col; }
+            print_padded(c, "", L->state_w); col += L->state_w;
+            if (L->rss_col > col) { print_spaces(c, L->rss_col - col); col = L->rss_col; }
+            print_padded(c, fmt_size(mem, sizeof(mem), (uint64_t)r->res), L->mem_w); col += L->mem_w;
+            if (L->virt_col > col) { print_spaces(c, L->virt_col - col); col = L->virt_col; }
+            print_padded(c, fmt_size(virt_s, sizeof(virt_s), (uint64_t)r->vt), L->mem_w);
+            con_putc(c, '\n');
+            continue;
         }
 
-        proc = proc->next;
+        int tid_len;
+        fmt_tdetail(detail, sizeof(detail), r->state);
+
+        set_col(c, CONSOLE_COLOR_DARK_GRAY, CONSOLE_COLOR_BLACK);
+        print_spaces(c, L->value_col);
+        print_str(c, "\xe2\x94\x94\xe2\x94\x80\xe2\x94\x80 ");
+
+        ksnprintf(tid_buf, sizeof(tid_buf), "%u", r->id);
+        tid_len = kstrlen(tid_buf);
+        print_str(c, tid_buf);
+        con_putc(c, ' ');
+
+        clip_text(name_buf, sizeof(name_buf), r->name, name_w);
+        set_col(c, CONSOLE_COLOR_DARK_GRAY, CONSOLE_COLOR_BLACK);
+        print_str(c, name_buf);
+
+        print_spaces(c, L->gap);
+
+        for (int k = tid_len + 1; k < tid_w; k++) {
+            con_putc(c, ' ');
+        }
+
+        col = name_col + kstrlen(name_buf);
+        if (L->state_col > col) print_spaces(c, L->state_col - col);
+
+        set_col(c, CONSOLE_COLOR_DARK_GRAY, CONSOLE_COLOR_BLACK);
+        print_str(c, "[");
+        set_col(c, state_color(r->state), CONSOLE_COLOR_BLACK);
+        print_str(c, detail);
+        set_col(c, CONSOLE_COLOR_DARK_GRAY, CONSOLE_COLOR_BLACK);
+        print_str(c, "]\n");
     }
 }
 
@@ -915,6 +939,7 @@ static void dash_draw(void) {
     set_col(con, CONSOLE_COLOR_LIGHT_GRAY, CONSOLE_COLOR_BLACK);
 
     layout_t L = mk_layout((int)con->width);
+    snap_procs();
     condense_for_h(&L, (int)con->height);
     cpu_sec_t cpu = mk_cpu(&L);
     mem_sec_t mem = mk_mem(&L);
