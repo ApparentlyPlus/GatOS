@@ -434,7 +434,7 @@ You can also use the other functions defined in `debug.h`, as well as `QEMU_DUMP
 
 A *lot* of documentation and writeups are available in the [`docs/`](./docs/) folder. This includes development notes, architecture decisions, learning resources, and basically everything I've figured out (or struggled with) during this journey. Whatever question you have, it's probably answered there.
 
-The writeups are structured as chapters, and currently run to roughly **143,000 words**, officially closer to a book than to release notes:
+The writeups are structured as chapters, and currently run to roughly **145,000 words**, officially closer to a book than to release notes:
 
 | Chapter | Topic |
 | --- | --- |
@@ -454,7 +454,7 @@ The writeups are structured as chapters, and currently run to roughly **143,000 
 | [C13](./docs/C13_The_Console_And_TTYs.md) | The console, fonts, escape sequences and TTYs |
 | [C14](./docs/C14_Multitasking_And_Scheduling.md) | Processes, threads, context switching and the scheduler |
 | [C15](./docs/C15_Userspace_And_The_C_Library.md) | Userspace programs, ulibc, the math library, power management and the donut |
-| [C16](./docs/C16_Architecture_Pawstack_And_Beyond.md) | Testing, the kernel as an API, Pawstack, GatOS 3.0 and a windowed desktop |
+| [C16](./docs/C16_Architecture_Pawstack_And_Beyond.md) | Testing, the kernel as an API, Pawstack, GatOS 3.0, a windowed desktop, the mouse, GPUs and video |
 
 Please note that the documentation is NOT complete as of now. There will be a total of 15 chapters to cover the entirety of GatOS' internals, so this is roughly halfway there.
 

@@ -238,19 +238,27 @@ If there is one thing I would recommend to anyone building something like this, 
 
 ## Venturing Onward
 
-So what comes next? Four big pieces are missing from GatOS. Each of them already has a foundation in what we built.
+So what comes next? A few big pieces are missing from GatOS. Each of them already has a foundation in what we built, so let's go through them one at a time.
 
-**Filesystems** are the obvious one. They need a disk driver first, and the xHCI chapter already did most of the hard part (finding a device over PCI, mapping its registers and talking to it through rings in memory). AHCI (for SATA disks) and NVMe both work that way.
+### Filesystems
+
+Filesystems are the obvious one. They need a disk driver first, and the xHCI chapter already did most of the hard part (finding a device over PCI, mapping its registers and talking to it through rings in memory). AHCI (for SATA disks) and NVMe both work that way.
 
 On top of a disk driver, we would put a small VFS layer, a common interface every filesystem implements. Then come the filesystems themselves. FAT goes first, since it is simple and every machine can read it, then exFAT, ext4 and maybe NTFS. A filesystem also brings back the loader we skipped in the last chapter. Once programs can live on a disk, GatOS can read an ELF file and build a process from it, the way Linux does.
 
-**Networking** follows the same pattern. A network card is one more PCI device with rings in memory (the virtio network card QEMU emulates is a good first target). Above it sits a protocol stack (Ethernet, ARP, IP, UDP, then TCP) and a socket interface as system calls.
+### Networking
 
-**SMP**, running on more than one core, is closer than it looks. The APIC chapter already brings up the local APIC, which is also how the other cores get woken up. `cpu_local` was built per CPU from the start, every core has its own timer, and every spinlock already disables interrupts while held. The scheduler is what needs real work, with a run queue per core and a way to move threads between them.
+Networking follows the same pattern. A network card is one more PCI device with rings in memory (the virtio network card QEMU emulates is a good first target). Above it sits a protocol stack (Ethernet, ARP, IP, UDP, then TCP) and a socket interface as system calls.
 
-**Graphics** is the big one. It gets a section of its own below.
+### SMP
 
-All four connect to Pawstack the same way. We give a new subsystem a capability gate, so programs that do not use it do not pay for it. Then we add a few new `_env_` functions to the environment file, with a libgata module on top of them (a `File` module, a `Socket` module).
+SMP, running on more than one core, is closer than it looks. The APIC chapter already brings up the local APIC, which is also how the other cores get woken up. `cpu_local` was built per CPU from the start, every core has its own timer, and every spinlock already disables interrupts while held. The scheduler is what needs real work, with a run queue per core and a way to move threads between them.
+
+Graphics is the big one: a windowed desktop, the mouse, a GPU driver and video. Those all depend on each other, so they get the whole GatOS 3.0 section below.
+
+### How They Plug In
+
+Every one of these connects to Pawstack the same way. We give a new subsystem a capability gate, so programs that do not use it do not pay for it. Then we add a few new `_env_` functions to the environment file, with a libgata module on top of them (a `File` module, a `Socket` module).
 
 Appa itself does not change at all. The compiler only ever sees the environment. To a Gata programmer, a whole new part of the kernel shows up as one more `import`.
 
@@ -329,9 +337,73 @@ Apps never learn where their window is, or whether anything covers it. That is t
 
 The stacking order also lets the compositor skip work. A part of a window that is covered by another one never needs to be copied, since it would be painted over right away. So when the donut redraws a frame, the compositor only copies the part of its damaged rectangle that is actually visible.
 
-Moving a window is the most expensive thing a user can do, since it changes two regions of the screen at once: the place the window left, and the place it arrived. The app does not have to redraw anything, though. Its surface stays exactly the same. Only its position changes, so the compositor copies the window to its new spot and repaints the uncovered region from whatever was underneath.
+### Events and the Mouse
 
-On Linux, this is the difference between an old X11 desktop, where moving a window made every app below it repaint, and a modern compositing one, where apps never notice.
+A windowed desktop without a mouse is not much of one. GatOS does not read a mouse at all yet, but both of the places one could come from are already half there.
+
+The PS/2 controller has two ports. Port 1 is the keyboard, and port 2 is the mouse. [`i8042.c`](/src/kernel/drivers/i8042.c) deliberately leaves port 2 switched off, and the keyboard handler throws away any byte that came from it.
+
+Turning it on takes a controller command (`0xA8`), then a command to the mouse itself (`0xF4`, "start sending data", sent with a `0xD4` prefix so the controller forwards it to port 2). Last, IRQ 12 gets routed through the I/O APIC, the same way Chapter 10 routed IRQ 1.
+
+From then on, every movement arrives as a 3 byte packet. Say we move the mouse 10 pixels left and 5 up, while holding the left button:
+
+```
+ byte 0   0x19   0 0 0 1 1 0 0 1
+                 │ │ │ │ │ │ │ └─ left button: down
+                 │ │ │ │ │ │ └─── right button: up
+                 │ │ │ │ │ └───── middle button: up
+                 │ │ │ │ └─────── always 1
+                 │ │ │ └───────── X is negative
+                 │ │ └─────────── Y is positive
+                 └─┴───────────── no overflow
+ byte 1   0xF6   X movement: -10 (with the sign bit from byte 0)
+ byte 2   0x05   Y movement: +5
+```
+
+Notice that PS/2 counts Y upwards, while the screen counts it downwards, so the driver flips it. A USB mouse is even simpler. The xHCI driver already looks for "boot protocol" HID devices, and only accepts keyboards (protocol 1). A boot mouse is protocol 2, and its report is a buttons byte followed by signed X and Y bytes, which the driver could diff the same way `usb_kbd_feed` diffs key reports.
+
+Both drivers end in the same place: an **event**. Today, a key press becomes a `key_event_t` and, a few lines later, a character. In a windowed system, we would stop at the event and make it a little more general:
+
+```c
+typedef struct {
+    uint64_t time_ns;               // from get_uptime_ns, when it happened
+    uint8_t  type;                  // key, motion, button or wheel
+    uint8_t  modifiers;             // Ctrl, Shift, Alt, like today
+    union {
+        struct { uint16_t keycode; bool pressed; } key;
+        struct { int16_t dx, dy; }               motion;
+        struct { uint8_t button; bool pressed; } button;
+        struct { int8_t delta; }                 wheel;
+    };
+} input_event_t;
+```
+
+The kernel puts these into one queue, read by the compositor, much like the TTY's input buffer from Chapter 13 (except it holds events instead of characters). The timestamp matters more than it looks. It lets the compositor tell a double click from two single ones, and it lets an app know how old an event is by the time it arrives.
+
+A mouse can send a lot of events. A USB mouse polled at 1000 Hz sends up to a thousand motion events a second, while the screen only updates 60 times. There is no point drawing the pointer 16 times per frame, so the compositor **coalesces** them: it adds up all the motion that arrived since the last frame, and moves the pointer once.
+
+The pointer itself is just one more window, the smallest and topmost one, drawn last on every frame. Moving it damages two tiny rectangles (where it was, and where it is), a few kilobytes of pixels at most.
+
+### Clicks, Focus and Dragging
+
+When a button goes down, the compositor has to work out which window it landed on. That is called **hit testing**, and the stacking order makes it easy: walk the windows from the top of the stack down, and the first one whose rectangle contains the pointer gets the click.
+
+Before passing it on, the compositor subtracts the window's position, so the app receives coordinates relative to its own top left corner. Apps still never learn where they are on screen.
+
+Clicking also decides **focus**. A common policy is "click to focus": the clicked window moves to the top of the stack and becomes the one that gets keyboard events. Another is "focus follows the mouse". Either way, it is a few lines in the compositor, and the kernel never needs to know which one is in use.
+
+Dragging a window is where this all comes together. Here is what happens when the user grabs a window's title bar and moves it:
+
+1. The button goes down over the title bar. The compositor sees it is a title bar (it drew it), so it does not pass the click to the app. Instead, it starts a **grab**: until the button comes back up, every motion event belongs to the compositor.
+2. Every frame, it adds the coalesced motion to the window's position.
+3. It damages the window's old rectangle and its new one, and redraws only those.
+4. The button comes up, the grab ends, and events go back to normal.
+
+Moving a window changes two regions of the screen at once, the place it left and the place it arrived. Say the donut window (480 by 300) moves 12 pixels to the right in one frame. The damaged area is the union of the two rectangles, 492 by 300, which is about 590 KB of pixels. That is a lot more than a blinking cursor, but still far less than the 4 MB of a full screen.
+
+The app does not redraw anything during all of this. Its surface stays exactly the same. Only its position changes, so the compositor copies the surface to its new spot and repaints the uncovered strip from whatever was underneath. On Linux, this is the difference between an old X11 desktop, where moving a window made every app below it repaint, and a modern compositing one, where apps never notice.
+
+Whether the title bar is drawn by the compositor or by the app is, again, a policy choice. A compositor that draws every title bar looks the same everywhere. One that lets apps draw their own (and only asks them to say "start a move now") lets every app look the way it wants. Both work on top of the same four building blocks.
 
 ### What Gets Rewritten
 
@@ -397,9 +469,57 @@ Memory scales well too. An 800 by 600 window is about 1.9 MB per buffer, but wit
 
 Timing is the last piece. Without a real GPU driver, there is no vertical sync signal to tell us when the screen refreshes. The compositor would pace itself with a timer instead, exactly like the donut does with its 16 ms frames.
 
-Later, a GPU driver (virtio-gpu, which QEMU emulates, is the natural first one) would slot in *behind* the same surface API. The compositor would hand surfaces to the GPU instead of copying them. No app would need to change.
+The next section shows how a GPU driver takes over from that timer.
 
 With SMP, all of this spreads out nicely. The compositor runs on one core while apps draw on the others. Since they only share buffers and short messages, they hardly ever wait for each other. The one thing the scheduler would need is a notion of **priority**, so the compositor gets the CPU the moment input arrives, even when every other core is busy.
+
+### The GPU
+
+Everything so far has the CPU touching every pixel. That is how GatOS works today: GRUB picks a video mode before the kernel even starts (`gfxmode=auto`), hands over a plain block of memory, and the console writes pixels into it one store at a time. There is no way to change the resolution, no signal for when the screen refreshes, and no help from the graphics hardware at all.
+
+A **GPU driver** changes that. The first one would be for **virtio-gpu**, the virtual GPU QEMU emulates. It is a PCI device, and it is driven through rings in memory, much like xHCI. Instead of writing pixels, the driver sends commands. For 2D work, there are only a handful of them:
+
+| Command | What it does |
+|:--------|:-------------|
+| `RESOURCE_CREATE_2D` | Creates an image on the GPU side, with a size and a format |
+| `RESOURCE_ATTACH_BACKING` | Tells the GPU which of our physical pages hold its pixels |
+| `SET_SCANOUT` | Picks which image the screen shows |
+| `TRANSFER_TO_HOST_2D` | Says "this rectangle of the pages changed" |
+| `RESOURCE_FLUSH` | Puts that rectangle on screen |
+
+Look at how well these line up with what we already designed. A resource is a surface. Attaching backing pages means the GPU reads an app's surface straight out of the app's own memory. On our side, there is no copy at all, not even the last one into the framebuffer. A transfer of one rectangle is exactly a damage message. The compositor's job barely changes. It just sends commands where it used to copy pixels.
+
+virtio-gpu also has a separate queue just for the pointer. The compositor uploads the pointer image once, and from then on, moving it is a single `MOVE_CURSOR` command with the new position. The pointer stops costing any pixel writes at all, which is why real desktops use a **hardware cursor** whenever they can.
+
+With a GPU driver, timing gets better too. The driver can tell when the GPU has finished with a frame (through a **fence**, a marker the GPU signals once it gets past a point in the command stream), so the compositor no longer has to guess with a 16 ms timer. And since modes are set by the driver, the resolution can change at runtime, for example when a window is made full screen.
+
+3D is a much bigger step. A real GPU runs programs of its own (shaders), and apps need to send it command buffers full of draw calls.
+
+The kernel's job there is not to understand those commands, but to share the GPU fairly: give each process its own GPU memory, check that a command buffer only touches that memory, and take turns submitting them. Linux splits this into two halves (**KMS** for setting modes and putting images on screen, **DRM** for everything else), and that split is worth copying.
+
+Drivers for real Intel, AMD or NVIDIA GPUs are huge projects on their own, which is exactly why virtio-gpu comes first. The important part is that the compositor and the apps only ever see surfaces, damage and fences. Whether those end up in a framebuffer, in virtio-gpu or in a real GPU is the driver's business.
+
+### Video and Codecs
+
+Playing a video sounds like it needs a lot from the kernel. It needs surprisingly little, though, because most of the work is plain computation.
+
+Video is huge without compression. One 1080p frame, in the format video usually uses (YUV 4:2:0, about 1.5 bytes per pixel), is about 3.1 MB. At 30 frames a second, that is around 93 MB every second. A typical H.264 stream for the same video is about 5 megabits a second, roughly 150 times smaller. A **codec** is the code that turns one into the other: an encoder compresses, and a decoder turns the compressed stream back into frames.
+
+Decoding is just math. It reads bytes, does a lot of integer and SIMD arithmetic, and writes pixels. It needs no hardware and no system calls in its inner loops, so a decoder is a library that runs entirely in ring 3, the same way the math library did in the last chapter.
+
+GatOS already handles the hard part of that. The lazy FPU code from Chapter 14 saves state with `xsave` whenever the CPU supports it, so a decoder using AVX registers in ring 3 keeps them across context switches.
+
+Once a frame is decoded, it still has to become something the screen understands. Video frames are in YUV (one brightness value per pixel, with the color stored at a quarter of the resolution), while the screen wants RGB. Converting means a few multiplications per pixel, about 2 million times per 1080p frame.
+
+SIMD makes that cheap on a CPU. A GPU can make it free, since most GPUs can show a YUV image directly, as an **overlay plane** on top of everything else.
+
+The rest is timing. Every compressed frame carries a **presentation timestamp**, the moment it should appear on screen. A player decodes a few frames ahead into a small queue of surfaces, and shows each one when `SYS_TIME_NS` reaches its timestamp. If decoding falls behind, it skips frames instead of drifting.
+
+With sound (which needs an audio driver first, and Intel HD Audio is one more PCI device with rings in memory), the audio clock becomes the one everything else follows, since people notice a skip in sound much more than a dropped frame.
+
+Many GPUs also have dedicated video engines that decode H.264 or H.265 in hardware. Using one is a GPU driver feature, like any other command. A player would try the hardware path first and fall back to the software decoder.
+
+For Pawstack, this means codecs never go into the kernel at all. The kernel provides memory, time, surfaces and (later) audio. A decoder is a library, written in Gata or ported from C the way fdlibm was. And because the window, the surface and the timing all come from the same building blocks, a video player is just one more window to the compositor.
 
 ## Ambitions
 
