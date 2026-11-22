@@ -49,8 +49,11 @@ typedef struct {
     int u8n;
     uint8_t u8lead;
 
-    // ANSI State
+    // ANSI State (0 = text, 1 = after ESC, 2 = inside ESC[ ... )
     uint8_t ansi_st;
+    uint16_t ansi_p[8];
+    uint8_t ansi_n;
+    bool ansi_priv; // ESC[? sequences
 
     // Backbuffer
     console_char_t* buffer;

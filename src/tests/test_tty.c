@@ -627,6 +627,99 @@ static bool t_cycle(void) {
 }
 #pragma endregion
 
+#pragma region Console
+
+static console_char_t cell(tty_t* t, size_t x, size_t y) {
+    return t->console->buffer[y * t->console->width + x];
+}
+
+static void put(tty_t* t, const char* s) {
+    tty_write(t, s, kstrlen(s));
+}
+
+static bool t_con_sgr(void) {
+    tty_t* t = tty_create();
+    put(t, "\x1b[31;44mX\x1b[0mY\x1b[92;101mZ");
+    TEST_ASSERT(cell(t, 0, 0).codepoint == 'X');
+    TEST_ASSERT(cell(t, 0, 0).fg == CONSOLE_COLOR_RED && cell(t, 0, 0).bg == CONSOLE_COLOR_BLUE);
+    TEST_ASSERT(cell(t, 1, 0).fg == CONSOLE_COLOR_WHITE && cell(t, 1, 0).bg == CONSOLE_COLOR_BLACK);
+    TEST_ASSERT(cell(t, 2, 0).fg == CONSOLE_COLOR_LIGHT_GREEN && cell(t, 2, 0).bg == CONSOLE_COLOR_LIGHT_RED);
+    tty_destroy(t);
+    return true;
+}
+
+static bool t_con_unknown(void) {
+    // Sequences we can't show must vanish whole, none of their bytes may land on screen
+    tty_t* t = tty_create();
+    put(t, "a\x1b[38;5;180mb\x1b[?25lc\x1b[1Cd");
+    TEST_ASSERT(cell(t, 0, 0).codepoint == 'a');
+    TEST_ASSERT(cell(t, 1, 0).codepoint == 'b');
+    TEST_ASSERT(cell(t, 2, 0).codepoint == 'c');
+    TEST_ASSERT(cell(t, 3, 0).codepoint == ' '); // ESC[1C stepped over it
+    TEST_ASSERT(cell(t, 4, 0).codepoint == 'd');
+    TEST_ASSERT(!t->console->on);
+    put(t, "\x1b[?25h");
+    TEST_ASSERT(t->console->on);
+    tty_destroy(t);
+    return true;
+}
+
+static bool t_con_cup(void) {
+    tty_t* t = tty_create();
+    put(t, "hello\x1b[3;5HX");
+    TEST_ASSERT(cell(t, 4, 2).codepoint == 'X');
+    TEST_ASSERT(t->console->cx == 5 && t->console->cy == 2);
+
+    // ESC[1;2H then erase to end of line
+    put(t, "\x1b[1;2H\x1b[K");
+    TEST_ASSERT(cell(t, 0, 0).codepoint == 'h');
+    TEST_ASSERT(cell(t, 1, 0).codepoint == ' ' && cell(t, 4, 0).codepoint == ' ');
+    TEST_ASSERT(cell(t, 4, 2).codepoint == 'X');
+
+    // Moves are clamped to the screen
+    put(t, "\x1b[99A\x1b[999C");
+    TEST_ASSERT(t->console->cy == 0 && t->console->cx == t->console->width - 1);
+    tty_destroy(t);
+    return true;
+}
+
+static bool t_con_ctrl(void) {
+    // A bell has no glyph and must not move the cursor
+    tty_t* t = tty_create();
+    put(t, "a\a\x01" "b");
+    TEST_ASSERT(cell(t, 1, 0).codepoint == 'b');
+    TEST_ASSERT(t->console->cx == 2);
+    tty_destroy(t);
+    return true;
+}
+
+static bool t_con_bs_wrap(void) {
+    // Type one character past the end of a row, then backspace twice. The second one has to wrap back
+    tty_t* t = tty_create();
+    size_t w = t->console->width;
+    for (size_t i = 0; i <= w; i++) tty_input(t, 'x');
+    TEST_ASSERT(t->console->cy == 1 && t->console->cx == 1);
+    tty_input(t, '\b');
+    tty_input(t, '\b');
+    TEST_ASSERT(t->console->cy == 0 && t->console->cx == w - 1);
+    TEST_ASSERT(cell(t, w - 1, 0).codepoint == ' ');
+    TEST_ASSERT(cell(t, w - 2, 0).codepoint == 'x');
+    tty_destroy(t);
+    return true;
+}
+
+static bool t_con_bs_color(void) {
+    // An erased cell takes the current colors, in the backbuffer as well as on screen
+    tty_t* t = tty_create();
+    put(t, "\x1b[41mA\x1b[0m\b");
+    TEST_ASSERT(cell(t, 0, 0).codepoint == ' ');
+    TEST_ASSERT(cell(t, 0, 0).bg == CONSOLE_COLOR_BLACK);
+    tty_destroy(t);
+    return true;
+}
+
+#pragma endregion
+
 #pragma region Runner
 
 static void run_test(const char* name, bool (*fn)(void)) {
@@ -687,6 +780,12 @@ void test_tty(void) {
     run_test("header: single row",            t_hdr_one);
     run_test("switch: no crash",              t_switch);
     run_test("cycle: no crash",               t_cycle);
+    run_test("console: SGR colors",           t_con_sgr);
+    run_test("console: unknown CSI swallowed",t_con_unknown);
+    run_test("console: cursor position",      t_con_cup);
+    run_test("console: control chars hidden",t_con_ctrl);
+    run_test("console: backspace over wrap",  t_con_bs_wrap);
+    run_test("console: backspace colors",     t_con_bs_color);
 
     suite_end(&suite);
 }

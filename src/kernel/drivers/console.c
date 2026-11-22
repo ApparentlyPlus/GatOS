@@ -224,6 +224,17 @@ static void draw_glyph_run(console_t* con, size_t y, size_t x0, size_t count) {
 }
 
 /*
+ * any_dirty - Whether some cell still waits to be drawn
+ */
+static bool any_dirty(console_t* con) {
+    if (!con->dirty) return false;
+    uint64_t* dw = (uint64_t*)con->dirty;
+    size_t words = (con->width * con->height + 63) / 64;
+    for (size_t w = 0; w < words; w++) if (dw[w]) return true;
+    return false;
+}
+
+/*
  * flush_display - Push dirty cells to the framebuffer (assumes no SMP)
  */
 static void flush_display(console_t* con) {
@@ -255,9 +266,9 @@ static void flush_display(console_t* con) {
 
     // Scan each word of the dirty bitmap
     for (size_t w = 0; w < words; w++) {
-        uint64_t bits = dw[w];
+        // Take the word and clear it in one go. An echo from an interrupt may set a bit in it at any moment
+        uint64_t bits = __atomic_exchange_n(&dw[w], 0, __ATOMIC_RELAXED);
         if (!bits) continue;
-        dw[w] = 0;
 
         // Scan each bit in the word, which corresponds to a cell in the backbuffer
         while (bits) {
@@ -347,6 +358,22 @@ static void scroll(console_t* con) {
 }
 
 /*
+ * put_cell - Writes one cell in the current colors, and draws it right away unless rendering is deferred
+ */
+static void put_cell(console_t* con, size_t x, size_t y, uint32_t cp, bool active) {
+    size_t idx = y * con->width + x;
+    console_char_t* cell = &con->buffer[idx];
+
+    // Rewriting a cell with what it already holds is free, so a program that
+    // redraws the whole screen from ESC[H only repaints the cells that changed
+    if (cell->codepoint == cp && cell->fg == con->fg && cell->bg == con->bg) return;
+    *cell = (console_char_t){ cp, con->fg, con->bg };
+    DIRTY_SET(con, idx);
+    if (active && !con->defer_render)
+        draw_glyph(get_glyph(cp), x * fw, y * (fh + PADDING_Y), VGA_PALETTE[con->fg], VGA_PALETTE[con->bg]);
+}
+
+/*
  * emit_cp - Renders a Unicode codepoint or control character to the console
  */
 static void emit_cp(console_t* con, uint32_t cp) {
@@ -356,32 +383,105 @@ static void emit_cp(console_t* con, uint32_t cp) {
     if (cp == '\n') { con->cx = 0; con->cy++; }
     else if (cp == '\r') { con->cx = 0; }
     else if (cp == '\b') {
+        // Backspace erases, and steps back over a wrap so editing a long typed line works
         if (con->cx > 0) con->cx--;
-        size_t idx = con->cy * con->width + con->cx;
-        con->buffer[idx].codepoint = ' ';
-        
-        // If this console is active and we're not deferring rendering
-        // we can immediately erase the character on the framebuffer
-        DIRTY_SET(con, idx);
-        if (active && !con->defer_render) draw_glyph(get_glyph(' '), con->cx * fw, con->cy * (fh + PADDING_Y), VGA_PALETTE[con->fg], VGA_PALETTE[con->bg]);
+        else if (con->cy > con->header_rows) { con->cy--; con->cx = con->width - 1; }
+        put_cell(con, con->cx, con->cy, ' ', active);
     } else if (cp == '\t') {
         con->cx = (con->cx + 4) & ~3;
+    } else if (cp < 0x20 || cp == 0x7F) {
+        // Bell, NUL and friends have nothing to draw (CP437's pictures for them live at U+263A and up)
+        return;
     } else {
         if (con->cx >= con->width) { con->cx = 0; con->cy++; }
         if (con->cy >= con->height) scroll(con);
-        size_t idx = con->cy * con->width + con->cx;
-        console_char_t* cell = &con->buffer[idx];
-
-        // Rewriting a cell with what it already holds is free, so a program that
-        // redraws the whole screen from ESC[H only repaints the cells that changed
-        if (cell->codepoint != cp || cell->fg != con->fg || cell->bg != con->bg) {
-            *cell = (console_char_t){ cp, con->fg, con->bg };
-            DIRTY_SET(con, idx);
-            if (active && !con->defer_render) draw_glyph(get_glyph(cp), con->cx * fw, con->cy * (fh + PADDING_Y), VGA_PALETTE[con->fg], VGA_PALETTE[con->bg]);
-        }
+        put_cell(con, con->cx, con->cy, cp, active);
         con->cx++;
     }
     if (con->cy >= con->height) scroll(con);
+}
+
+/*
+ * erase - Blanks cells [from, to) in the current colors
+ */
+static void erase(console_t* con, size_t from, size_t to, bool active) {
+    for (size_t i = from; i < to; i++) put_cell(con, i % con->width, i / con->width, ' ', active);
+}
+
+/*
+ * sgr - ESC[...m, the color sequences
+ */
+static void sgr(console_t* con) {
+    // ANSI orders its colors black, red, green, yellow, blue, magenta, cyan, white. VGA swaps red and blue
+    static const uint8_t vga[8] = { 0, 4, 2, 6, 1, 5, 3, 7 };
+    if (!con->ansi_n) con->ansi_n = 1; // ESC[m is ESC[0m
+
+    for (size_t i = 0; i < con->ansi_n; i++) {
+        uint16_t v = con->ansi_p[i];
+        if (v == 0) { con->fg = CONSOLE_COLOR_WHITE; con->bg = CONSOLE_COLOR_BLACK; }
+        else if (v == 1) con->fg |= 8; // bold, which a 16 color console can only show as bright
+        else if (v == 22) con->fg &= 7;
+        else if (v >= 30 && v <= 37) con->fg = vga[v - 30];
+        else if (v >= 90 && v <= 97) con->fg = vga[v - 90] | 8;
+        else if (v == 39) con->fg = CONSOLE_COLOR_WHITE;
+        else if (v >= 40 && v <= 47) con->bg = vga[v - 40];
+        else if (v >= 100 && v <= 107) con->bg = vga[v - 100] | 8;
+        else if (v == 49) con->bg = CONSOLE_COLOR_BLACK;
+        else if (v == 38 || v == 48) {
+            // 256 color (5;n) and true color (2;r;g;b) forms, which we can't show. Skip their arguments
+            if (i + 1 < con->ansi_n) i += (con->ansi_p[i + 1] == 5) ? 2 : (con->ansi_p[i + 1] == 2) ? 4 : 0;
+        }
+    }
+}
+
+/*
+ * csi - Runs one complete ESC[ sequence, fin is its final letter
+ */
+static void csi(console_t* con, uint8_t fin) {
+    extern tty_t* volatile active_tty;
+    bool active = (active_tty && active_tty->console == con);
+    uint16_t* p = con->ansi_p;
+    size_t n = con->ansi_n;
+    size_t cnt = (n && p[0]) ? p[0] : 1; // a missing or zero count means 1
+    size_t top = con->header_rows;
+
+    // ESC[?25h and ESC[?25l show and hide the cursor, every other private mode is ignored
+    if (con->ansi_priv) {
+        if (n && p[0] == 25 && (fin == 'h' || fin == 'l')) con->on = (fin == 'h');
+        return;
+    }
+
+    // The cursor can sit one past the last column, waiting to wrap. Erases count from the last column
+    size_t cx = (con->cx < con->width) ? con->cx : con->width - 1;
+    size_t row = con->cy * con->width;
+    uint16_t mode = n ? p[0] : 0;
+
+    switch (fin) {
+        case 'H': case 'f':
+            // Rows count from the top of the scrolling area, so the sticky header stays out of reach
+            con->cy = top + ((n && p[0]) ? p[0] : 1) - 1;
+            con->cx = ((n > 1 && p[1]) ? p[1] : 1) - 1;
+            break;
+        case 'A': con->cy = (con->cy >= top + cnt) ? con->cy - cnt : top; break;
+        case 'B': con->cy += cnt; break;
+        case 'C': con->cx = cx + cnt; break;
+        case 'D': con->cx = (cx >= cnt) ? cx - cnt : 0; break;
+        case 'J':
+            if (mode == 0) erase(con, row + cx, con->width * con->height, active);
+            else if (mode == 1) erase(con, top * con->width, row + cx + 1, active);
+            else erase(con, top * con->width, con->width * con->height, active);
+            return;
+        case 'K':
+            if (mode == 0) erase(con, row + cx, row + con->width, active);
+            else if (mode == 1) erase(con, row, row + cx + 1, active);
+            else erase(con, row, row + con->width, active);
+            return;
+        case 'm': sgr(con); return;
+        default: return;
+    }
+
+    if (con->cy >= con->height) con->cy = con->height - 1;
+    if (con->cx >= con->width) con->cx = con->width - 1;
 }
 
 #pragma region Instance API
@@ -451,33 +551,34 @@ void con_clear(console_t* con, uint8_t background) {
 static void _con_process_byte(console_t* con, uint8_t byte) {
     // This function is lit
     if (con->ansi_st == 1) {
-        if (byte == '[') con->ansi_st = 2;
-        else { con->ansi_st = 0; emit_cp(con, '\x1b'); emit_cp(con, byte); }
-        return;
+        con->ansi_st = 0;
+        if (byte == '[') {
+            con->ansi_st = 2;
+            con->ansi_n = 0;
+            con->ansi_priv = false;
+            kmemset(con->ansi_p, 0, sizeof(con->ansi_p));
+            return;
+        }
     } else if (con->ansi_st == 2) {
-        if (byte == 'H') { con->cx = 0; con->cy = con->header_rows; con->ansi_st = 0; }
-        else if (byte == '2') { con->ansi_st = 3; }
-        else { con->ansi_st = 0; }
-        return;
-    } else if (con->ansi_st == 3) {
-        if (byte == 'J') {
-            con->ansi_st = 0;
-            extern tty_t* volatile active_tty;
-            bool active = (active_tty && active_tty->console == con);
-            for (size_t y = con->header_rows; y < con->height; y++)
-                for (size_t x = 0; x < con->width; x++) {
-                    size_t i = y * con->width + x;
-                    if (con->buffer[i].codepoint != ' ' || con->buffer[i].bg != con->bg) {
-                        con->buffer[i] = (console_char_t){ ' ', con->fg, con->bg };
-                        DIRTY_SET(con, i);
-                        if (active && !con->defer_render)
-                            draw_glyph(get_glyph(' '), x * fw, y * (fh + PADDING_Y), VGA_PALETTE[con->fg], VGA_PALETTE[con->bg]);
-                    }
-                }
-            con->cx = 0; con->cy = con->header_rows;
-        } else { con->ansi_st = 0; }
-        return;
-    } else if (byte == '\x1b') {
+        if (byte >= '0' && byte <= '9') {
+            if (!con->ansi_n) con->ansi_n = 1;
+            uint16_t* v = &con->ansi_p[con->ansi_n - 1];
+            if (*v < 10000) *v = (uint16_t)(*v * 10 + (byte - '0'));
+            return;
+        }
+        if (byte == ';') {
+            if (!con->ansi_n) con->ansi_n = 1; // ESC[;5H has an empty first parameter
+            if (con->ansi_n < 8) con->ansi_p[con->ansi_n++] = 0;
+            return;
+        }
+        if (byte == '?') { con->ansi_priv = true; return; }
+        if (byte >= 0x40 && byte <= 0x7E) { con->ansi_st = 0; csi(con, byte); return; }
+        if (byte >= 0x20 && byte < 0x40) return; // other parameter and intermediate bytes, ignored
+
+        // A control character or a stray byte cuts the sequence short, and is handled as itself
+        con->ansi_st = 0;
+    }
+    if (byte == '\x1b') {
         con->ansi_st = 1;
         return;
     }
@@ -526,6 +627,10 @@ void con_putc(console_t* con, char character) {
     bool active = (active_tty && active_tty->console == con);
     bool draw = active && !con->defer_render;
     if (draw && con->on) render_cursor(con, false);
+
+    // Mid batch the cursor block isn't ours to erase, so make the next flush repaint that cell
+    if (active && !draw && con->on && con->cx < con->width && con->cy < con->height)
+        DIRTY_SET(con, con->cy * con->width + con->cx);
     _con_process_byte(con, (uint8_t)character);
     if (draw && con->on) render_cursor(con, true);
     spinlock_release(&con->lock, flags);
@@ -566,10 +671,16 @@ void con_write_batch(console_t* con, const char* buf, size_t count) {
     // After the batch is done if this console is active 
     // we need to flush the backbuffer to the framebuffer and enable direct rendering
     if (active) {
-        flush_display(con);
-        bool flags = spinlock_acquire(&con->lock);
-        con->defer_render = false;
-        spinlock_release(&con->lock, flags);
+        // A key echoed from an interrupt during the flush only marks its cell, so flush until
+        // nothing is left. Only then is it safe to go back to drawing directly
+        while (true) {
+            flush_display(con);
+            bool flags = spinlock_acquire(&con->lock);
+            bool done = !any_dirty(con) || !active_tty || active_tty->console != con;
+            if (done) con->defer_render = false;
+            spinlock_release(&con->lock, flags);
+            if (done) break;
+        }
     }
 }
 
